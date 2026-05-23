@@ -75,6 +75,25 @@ class Settings(BaseSettings):
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
 
     # =========================
+    # EXECUTION PLAN V1 TUNING
+    # =========================
+    # Минимальный MFE до применения early-failed-setup блока.
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_MID_PCT: float = 0.45
+    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
+
+    # Пороги убытка для принудительного закрытия слабого setup до TP1.
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+
+    # MFE-протекция и частичная фиксация в процентах.
+    PROTECTIVE_MFE_START_PCT: float = 0.45
+    PROTECTIVE_DRAWDOWN_SHARE: float = 0.60
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 1.20
+    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
+
+    # =========================
     # RISK MANAGEMENT
     # =========================
     MAX_DAILY_LOSS_PCT: float = 3

@@ -701,6 +701,93 @@ def analytics_summary():
     finally:
         db.close()
 
+
+@app.get("/analytics/reason-breakdown")
+def analytics_reason_breakdown(limit: int = 500):
+    """
+    Причины закрытия сделок с деньгами/метриками.
+    Нужен для быстрого контроля утечек PnL (например failed_setup_exit).
+    """
+    db = SessionLocal()
+
+    try:
+        limit = min(max(limit, 50), 5000)
+
+        signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        rows = {}
+        total_net = 0.0
+        total_count = len(signals)
+
+        for s in signals:
+            reason = str(s.closed_reason or "unknown")
+            result_pct = float(s.result_pct or 0.0)
+            net = float(s.closed_net_pnl or 0.0)
+            cost = float(s.closed_total_cost or 0.0)
+
+            total_net += net
+
+            if reason not in rows:
+                rows[reason] = {
+                    "reason": reason,
+                    "count": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "sum_result_pct": 0.0,
+                    "sum_net_pnl_usdt": 0.0,
+                    "sum_costs_usdt": 0.0,
+                }
+
+            row = rows[reason]
+            row["count"] += 1
+            row["sum_result_pct"] += result_pct
+            row["sum_net_pnl_usdt"] += net
+            row["sum_costs_usdt"] += cost
+
+            if net > 0:
+                row["wins"] += 1
+            else:
+                row["losses"] += 1
+
+        items = []
+        for reason, row in rows.items():
+            count = row["count"] or 1
+            share = round((row["count"] / total_count) * 100, 2) if total_count else 0.0
+            avg_net = row["sum_net_pnl_usdt"] / count
+            avg_result = row["sum_result_pct"] / count
+            pnl_share = round((row["sum_net_pnl_usdt"] / total_net) * 100, 2) if total_net else 0.0
+
+            items.append({
+                "reason": reason,
+                "count": row["count"],
+                "share_pct": share,
+                "wins": row["wins"],
+                "losses": row["losses"],
+                "avg_result_pct": round(avg_result, 4),
+                "sum_net_pnl_usdt": round(row["sum_net_pnl_usdt"], 6),
+                "avg_net_pnl_usdt": round(avg_net, 6),
+                "sum_costs_usdt": round(row["sum_costs_usdt"], 6),
+                "pnl_share_pct": pnl_share,
+            })
+
+        # худшие по net-pnl причины — в начале.
+        items.sort(key=lambda x: (x["sum_net_pnl_usdt"], -x["count"]))
+
+        return {
+            "status": "ok",
+            "sample_closed_signals": total_count,
+            "total_net_pnl_usdt": round(total_net, 6),
+            "items": items,
+        }
+    finally:
+        db.close()
+
 @app.post("/signals/{signal_id}/close")
 async def close_signal(signal_id: int, payload: CloseSignalRequest):
     db = SessionLocal()
