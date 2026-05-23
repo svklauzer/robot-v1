@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
 
     # =========================
+#<<<<<<< codex/review-project-structure-and-relationships-khd0nc
 #<<<<<<< codex/review-project-structure-and-relationships-qxuypl
+#>>>>>>> main
     # SYMBOL PERFORMANCE GUARD
     # =========================
     SYMBOL_PERF_LOOKBACK: int = 12
@@ -110,6 +112,8 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
     # =========================
+#<<<<<<< codex/review-project-structure-and-relationships-khd0nc
+#>>>>>>> main
 #>>>>>>> main
     # RISK MANAGEMENT
     # =========================
@@ -117,6 +121,7 @@ class Settings(BaseSettings):
     MAX_DRAWDOWN_PCT: float = 15
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
+    MAX_POSITION_MARGIN_PCT: float = 0.35
 
     # =========================
     # FEES / COST ENGINE
