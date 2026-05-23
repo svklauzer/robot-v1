@@ -1,0 +1,240 @@
+from core.config import settings
+from services.signal_broadcaster import SignalBroadcaster
+
+
+class TelegramRouter:
+    def __init__(self):
+        self.sender = SignalBroadcaster()
+
+    async def _send_required(self, chat_id, text: str, label: str):
+        result = await self.sender.send_message(chat_id, text)
+
+        if not result or not result.get("ok"):
+            raise RuntimeError(
+                f"telegram_required_send_failed:{label}:"
+                f"chat_id={chat_id}:error={result.get('error') if result else 'no_result'}"
+            )
+
+        return result
+
+    async def _send_optional(self, chat_id, text: str, label: str):
+        result = await self.sender.send_message(chat_id, text)
+
+        if not result or not result.get("ok"):
+            await self.sender.send_owner_alert(
+                "TELEGRAM OPTIONAL SEND FAILED",
+                (
+                    f"Label: {label}\n"
+                    f"Chat ID: {chat_id}\n"
+                    f"Error: {result.get('error') if result else 'no_result'}"
+                ),
+            )
+
+        return result
+
+    async def publish_new_signal(
+        self,
+        signal: dict,
+        confidence: float,
+        grade: str,
+        signal_id: int | None = None,
+        is_public: bool = True,
+    ):
+        """
+        Маршрутизация нового сигнала.
+
+        ВАЖНО:
+        Если сигнал создаётся как published и потом будет сопровождаться в VIP,
+        то полный VIP SIGNAL должен уйти обязательно.
+        Иначе main.py должен пометить сигнал telegram_failed.
+        """
+
+        if not is_public:
+            await self.sender.send_owner_alert(
+                "SIGNAL NOT PUBLIC",
+                (
+                    f"{signal.get('symbol')} {signal.get('action')} "
+                    f"grade={grade}, confidence={confidence}"
+                ),
+            )
+            return {
+                "ok": True,
+                "route": "owner_only_not_public",
+                "vip_sent": False,
+                "free_sent": False,
+            }
+
+        # C-сигналы не должны попадать клиентам.
+        if grade == "C":
+            await self.sender.send_owner_alert(
+                "GRADE C SIGNAL BLOCKED FROM CLIENTS",
+                (
+                    f"{signal.get('symbol')} {signal.get('action')} "
+                    f"grade={grade}, confidence={confidence}"
+                ),
+            )
+            return {
+                "ok": True,
+                "route": "owner_only_grade_c",
+                "vip_sent": False,
+                "free_sent": False,
+            }
+
+        vip_text = self._format_vip_full_signal(signal, confidence, grade, signal_id)
+
+        # VIP full — обязательный.
+        await self._send_required(
+            settings.TELEGRAM_VIP_SIGNALS_CHAT_ID,
+            vip_text,
+            "vip_full_signal",
+        )
+
+        free_sent = False
+
+        # FREE teaser отправляем для A+ и A.
+        # B сопровождаем только в VIP, чтобы не шуметь в бесплатном канале.
+        if grade in ["A+", "A"]:
+            free_text = self._format_free_teaser(signal, confidence, grade, signal_id)
+
+            await self._send_optional(
+                settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
+                free_text,
+                "free_teaser",
+            )
+
+            free_sent = True
+
+        return {
+            "ok": True,
+            "route": "client_signal",
+            "vip_sent": True,
+            "free_sent": free_sent,
+        }
+
+    async def publish_signal_update(
+        self,
+        symbol: str,
+        text_status: str,
+        extra: str = "",
+        grade: str | None = None,
+    ):
+        """
+        Updates по активным сделкам.
+        VIP получает полное сопровождение.
+        FREE получает важные updates по A+/A.
+        """
+
+        vip_text = self._format_update(symbol, text_status, extra)
+
+        await self._send_required(
+            settings.TELEGRAM_VIP_SIGNALS_CHAT_ID,
+            vip_text,
+            "vip_signal_update",
+        )
+
+        if grade in ["A+", "A"] and (
+            "закрыта" in text_status.lower()
+            or "tp1" in text_status.lower()
+        ):
+            free_text = self._format_free_update(symbol, text_status)
+
+            await self._send_optional(
+                settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
+                free_text,
+                "free_update",
+            )
+
+    async def owner_alert(self, title: str, body: str):
+        await self.sender.send_owner_alert(title, body)
+
+    def _format_vip_full_signal(
+        self,
+        signal: dict,
+        confidence: float,
+        grade: str,
+        signal_id: int | None,
+    ) -> str:
+        side = signal["action"].upper()
+        emoji = "🟢" if side == "LONG" else "🔴"
+        signal_ref = f"#{signal_id}" if signal_id else ""
+
+        return (
+            f"{emoji} VIP SIGNAL {signal_ref}\n"
+            f"{signal['symbol']} {side}\n\n"
+            f"🎯 Вход: {signal['entry_zone'][0]} - {signal['entry_zone'][1]}\n"
+            f"🛑 Стоп: {signal['stop_price']}\n"
+            f"✅ TP1: {signal['tp']['tp1']}\n"
+            f"✅ TP2: {signal['tp']['tp2']}\n\n"
+            f"🏆 Класс сигнала: {grade}\n"
+            f"📊 Уверенность: {round(confidence, 1)}%\n"
+            f"🧠 Логика: {signal['reason']}\n\n"
+            f"⚠️ Не финансовая рекомендация. Соблюдайте риск-менеджмент."
+        )
+
+    def _format_free_teaser(
+        self,
+        signal: dict,
+        confidence: float,
+        grade: str,
+        signal_id: int | None,
+    ) -> str:
+        side = signal["action"].upper()
+        emoji = "🟢" if side == "LONG" else "🔴"
+        signal_ref = f"#{signal_id}" if signal_id else ""
+
+        return (
+            f"{emoji} FREE SIGNAL TEASER {signal_ref}\n"
+            f"{signal['symbol']} {side}\n\n"
+            f"🏆 Класс: {grade}\n"
+            f"📊 Уверенность: {round(confidence, 1)}%\n\n"
+            f"Полные уровни входа, стопа и тейков доступны в VIP.\n"
+            f"VIP: @finmt_vip"
+        )
+
+    async def _send_vip_full_signal(
+        self,
+        signal: dict,
+        confidence: float,
+        grade: str,
+        signal_id: int | None,
+    ):
+        text = self._format_vip_full_signal(signal, confidence, grade, signal_id)
+        return await self._send_required(
+            settings.TELEGRAM_VIP_SIGNALS_CHAT_ID,
+            text,
+            "vip_full_signal",
+        )
+
+    async def _send_free_teaser(
+        self,
+        signal: dict,
+        confidence: float,
+        grade: str,
+        signal_id: int | None,
+    ):
+        text = self._format_free_teaser(signal, confidence, grade, signal_id)
+        return await self._send_optional(
+            settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
+            text,
+            "free_teaser",
+        )
+
+    def _format_update(self, symbol: str, text_status: str, extra: str = "") -> str:
+        text = (
+            f"📌 VIP UPDATE\n"
+            f"{symbol}\n"
+            f"{text_status}\n"
+        )
+
+        if extra:
+            text += f"\n{extra}"
+
+        return text
+
+    def _format_free_update(self, symbol: str, text_status: str) -> str:
+        return (
+            f"📌 FREE UPDATE\n"
+            f"{symbol}\n"
+            f"{text_status}\n\n"
+            f"Полное сопровождение доступно в VIP: @finmt_vip"
+        )
