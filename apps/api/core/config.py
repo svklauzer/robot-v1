@@ -94,6 +94,23 @@ class Settings(BaseSettings):
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
 
     # =========================
+#<<<<<<< codex/review-project-structure-and-relationships-qxuypl
+    # SYMBOL PERFORMANCE GUARD
+    # =========================
+    SYMBOL_PERF_LOOKBACK: int = 12
+    SYMBOL_PERF_MIN_HISTORY: int = 3
+    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
+    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 40.0
+    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
+    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
+    SYMBOL_PERF_COOLDOWN_STOPS: int = 3
+    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
+    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
+    SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
+    SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
+
+    # =========================
+#>>>>>>> main
     # RISK MANAGEMENT
     # =========================
     MAX_DAILY_LOSS_PCT: float = 3
