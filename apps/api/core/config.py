@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
 
     # =========================
+#<<<<<<< codex/review-project-structure-and-relationships-khd0nc
+#<<<<<<< codex/review-project-structure-and-relationships-qxuypl
+#>>>>>>> main
     # SYMBOL PERFORMANCE GUARD
     # =========================
     SYMBOL_PERF_LOOKBACK: int = 12
@@ -109,6 +112,9 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
     # =========================
+#<<<<<<< codex/review-project-structure-and-relationships-khd0nc
+#>>>>>>> main
+#>>>>>>> main
     # RISK MANAGEMENT
     # =========================
     MAX_DAILY_LOSS_PCT: float = 3
