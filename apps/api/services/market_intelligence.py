@@ -367,9 +367,13 @@ class MarketIntelligenceEngine:
         )
 
     def _build_long_levels(self, contexts):
-        m5 = self._tf(contexts, "5m") or self._tf(contexts, "base")
-        m15 = self._tf(contexts, "15m") or m5
-        h1 = self._tf(contexts, "1h") or m15
+        entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
+        signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
+        context_tf = str(getattr(settings, "LEVELS_CONTEXT_TF", "1h"))
+
+        m5 = self._tf(contexts, entry_tf) or self._tf(contexts, "5m") or self._tf(contexts, "base")
+        m15 = self._tf(contexts, signal_tf) or self._tf(contexts, "15m") or m5
+        h1 = self._tf(contexts, context_tf) or self._tf(contexts, "1h") or m15
 
         last = float(self._ctx_value(m5, "last_close", 0))
         atr = float(
@@ -404,7 +408,12 @@ class MarketIntelligenceEngine:
         entry_from = round(last * 0.999, 4)
         entry_to = round(last * 1.001, 4)
 
-        stop_price = round(min(support, last - atr * 1.5), 4)
+        stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
+        min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
+
+        atr_stop = last - atr * stop_atr_mult
+        pct_stop = last * (1 - min_stop_pct)
+        stop_price = round(min(support, atr_stop, pct_stop), 4)
 
         risk = max(last - stop_price, atr)
 
@@ -430,9 +439,13 @@ class MarketIntelligenceEngine:
         }
 
     def _build_short_levels(self, contexts):
-        m5 = self._tf(contexts, "5m") or self._tf(contexts, "base")
-        m15 = self._tf(contexts, "15m") or m5
-        h1 = self._tf(contexts, "1h") or m15
+        entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
+        signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
+        context_tf = str(getattr(settings, "LEVELS_CONTEXT_TF", "1h"))
+
+        m5 = self._tf(contexts, entry_tf) or self._tf(contexts, "5m") or self._tf(contexts, "base")
+        m15 = self._tf(contexts, signal_tf) or self._tf(contexts, "15m") or m5
+        h1 = self._tf(contexts, context_tf) or self._tf(contexts, "1h") or m15
 
         last = float(self._ctx_value(m5, "last_close", 0))
         atr = float(
@@ -467,7 +480,12 @@ class MarketIntelligenceEngine:
         entry_from = round(last * 0.999, 4)
         entry_to = round(last * 1.001, 4)
 
-        stop_price = round(max(resistance, last + atr * 1.5), 4)
+        stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
+        min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
+
+        atr_stop = last + atr * stop_atr_mult
+        pct_stop = last * (1 + min_stop_pct)
+        stop_price = round(max(resistance, atr_stop, pct_stop), 4)
 
         risk = max(stop_price - last, atr)
 

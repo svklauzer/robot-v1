@@ -75,12 +75,56 @@ class Settings(BaseSettings):
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
 
     # =========================
+    # EXECUTION PLAN V1 TUNING
+    # =========================
+    # Минимальный MFE до применения early-failed-setup блока.
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_MID_PCT: float = 0.45
+    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
+
+    # Пороги убытка для принудительного закрытия слабого setup до TP1.
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+
+    # MFE-протекция и частичная фиксация в процентах.
+    PROTECTIVE_MFE_START_PCT: float = 0.45
+    PROTECTIVE_DRAWDOWN_SHARE: float = 0.60
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 1.20
+    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
+
+    # =========================
+    # SYMBOL PERFORMANCE GUARD
+    # =========================
+    SYMBOL_PERF_LOOKBACK: int = 12
+    SYMBOL_PERF_MIN_HISTORY: int = 3
+    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
+    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 40.0
+    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
+    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
+    SYMBOL_PERF_COOLDOWN_STOPS: int = 3
+    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
+    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
+    SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
+    SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
+
+    # =========================
     # RISK MANAGEMENT
     # =========================
     MAX_DAILY_LOSS_PCT: float = 3
     MAX_DRAWDOWN_PCT: float = 15
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
+    MAX_POSITION_MARGIN_PCT: float = 0.35
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+
+    # Таймфрейм и буферы для построения уровней входа/стопа/тейков.
+    LEVELS_ENTRY_TF: str = "5m"
+    LEVELS_SIGNAL_TF: str = "15m"
+    LEVELS_CONTEXT_TF: str = "1h"
+    LEVELS_STOP_ATR_MULT: float = 1.8
+    LEVELS_MIN_STOP_PCT: float = 0.35
 
     # =========================
     # FEES / COST ENGINE
