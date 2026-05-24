@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     RISK_PER_TRADE_PCT: float = 0.5
     MAX_POSITION_MARGIN_PCT: float = 0.35
 
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+
     # =========================
     # FEES / COST ENGINE
     # =========================

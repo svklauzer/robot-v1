@@ -262,6 +262,14 @@ class TradePlanBuilder:
             is_valid = False
             reject_reason = "tp2_net_pnl_not_positive"
 
+        elif tp1_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5)):
+            is_valid = False
+            reject_reason = "tp1_net_pnl_below_min_usdt"
+
+        elif tp2_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0)):
+            is_valid = False
+            reject_reason = "tp2_net_pnl_below_min_usdt"
+
         elif net_rr_tp2 < 1.2:
             is_valid = False
             reject_reason = "net_rr_too_low"

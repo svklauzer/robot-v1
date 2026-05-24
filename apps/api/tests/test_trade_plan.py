@@ -56,3 +56,37 @@ def test_trade_plan_limits_single_position_margin_share():
         settings.MAX_POSITION_MARGIN_PCT = old_cap
         settings.ENABLE_FUTURES = old_fut
         settings.EXECUTION_MARKET = old_market
+
+def test_trade_plan_rejects_low_expected_net_pnl_targets():
+    builder = TradePlanBuilder()
+    builder.htx = DummyHTX()
+    builder.cost_engine = DummyCostEngine()
+
+    old_min_tp1 = settings.MIN_NET_PNL_TP1_USDT
+    old_min_tp2 = settings.MIN_NET_PNL_TP2_USDT
+    old_cap = settings.MAX_POSITION_MARGIN_PCT
+    try:
+        settings.MIN_NET_PNL_TP1_USDT = 5.0
+        settings.MIN_NET_PNL_TP2_USDT = 8.0
+        settings.MAX_POSITION_MARGIN_PCT = 0.35
+
+        plan = builder.build_plan(
+            symbol="BTC/USDT",
+            side="long",
+            entry_price=100.0,
+            stop_price=99.0,
+            tp1=100.8,
+            tp2=101.4,
+            balance_usdt=1000.0,
+            risk_pct=1.0,
+        )
+
+        assert plan.is_valid is False
+        assert plan.reject_reason in {
+            "tp1_net_pnl_below_min_usdt",
+            "tp2_net_pnl_below_min_usdt",
+        }
+    finally:
+        settings.MIN_NET_PNL_TP1_USDT = old_min_tp1
+        settings.MIN_NET_PNL_TP2_USDT = old_min_tp2
+        settings.MAX_POSITION_MARGIN_PCT = old_cap
