@@ -57,7 +57,6 @@ def test_trade_plan_limits_single_position_margin_share():
         settings.ENABLE_FUTURES = old_fut
         settings.EXECUTION_MARKET = old_market
 
-
 def test_trade_plan_rejects_low_expected_net_pnl_targets():
     builder = TradePlanBuilder()
     builder.htx = DummyHTX()
