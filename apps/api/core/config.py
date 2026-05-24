@@ -120,6 +120,16 @@ class Settings(BaseSettings):
     MIN_NET_PNL_TP1_USDT: float = 2.5
     MIN_NET_PNL_TP2_USDT: float = 6.0
 
+    # Таймфрейм и буферы для построения уровней входа/стопа/тейков.
+    LEVELS_ENTRY_TF: str = "5m"
+    LEVELS_SIGNAL_TF: str = "15m"
+    LEVELS_CONTEXT_TF: str = "1h"
+    LEVELS_STOP_ATR_MULT: float = 1.8
+    LEVELS_MIN_STOP_PCT: float = 0.35
+
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+
     # =========================
     # FEES / COST ENGINE
     # =========================
