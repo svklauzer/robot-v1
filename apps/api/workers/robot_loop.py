@@ -184,6 +184,7 @@ class RobotLoop:
                 setup_score=setup_score,
                 effective_confidence=effective_confidence,
                 setup_decision=setup_decision,
+                setup_quality=setup_quality,
             )
 
             if not should_publish:
