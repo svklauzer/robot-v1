@@ -96,8 +96,15 @@ class TradePlanBuilder:
         max_notional = balance_usdt * leverage_value
         qty_by_balance = max_notional / entry_price
 
+        # Дополнительный предохранитель: не даём одной сделке занимать
+        # слишком большую долю капитала/маржи.
+        max_position_margin_pct = float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.35))
+        max_position_margin_usdt = balance_usdt * max(0.01, min(max_position_margin_pct, 1.0))
+        max_position_notional = max_position_margin_usdt * leverage_value
+        qty_by_position_cap = max_position_notional / entry_price
+
         # Берём меньшее, чтобы не открыть позицию больше допустимого размера.
-        qty = min(qty_by_risk, qty_by_balance)
+        qty = min(qty_by_risk, qty_by_balance, qty_by_position_cap)
 
         # Приводим qty к точности биржи.
         qty = float(self.htx.amount_to_precision(symbol, qty))
@@ -254,6 +261,14 @@ class TradePlanBuilder:
         elif tp2_preview.net_pnl <= 0:
             is_valid = False
             reject_reason = "tp2_net_pnl_not_positive"
+
+        elif tp1_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5)):
+            is_valid = False
+            reject_reason = "tp1_net_pnl_below_min_usdt"
+
+        elif tp2_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0)):
+            is_valid = False
+            reject_reason = "tp2_net_pnl_below_min_usdt"
 
         elif net_rr_tp2 < 1.2:
             is_valid = False

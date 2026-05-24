@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
 
+from core.config import settings
 from models.signal import Signal
 
 
@@ -110,13 +111,24 @@ class SymbolPerformanceGuard:
 
         last_closed_reason = closed_signals[0].closed_reason
 
+        min_history = int(getattr(settings, "SYMBOL_PERF_MIN_HISTORY", 3))
+        block_min_history = int(getattr(settings, "SYMBOL_PERF_BLOCK_MIN_HISTORY", 5))
+        block_max_winrate = float(getattr(settings, "SYMBOL_PERF_BLOCK_MAX_WINRATE", 40.0))
+        reduce_max_winrate = float(getattr(settings, "SYMBOL_PERF_REDUCE_MAX_WINRATE", 45.0))
+        cooldown_streak = int(getattr(settings, "SYMBOL_PERF_COOLDOWN_STREAK", 3))
+        cooldown_stops = int(getattr(settings, "SYMBOL_PERF_COOLDOWN_STOPS", 3))
+        small_history_stop_multiplier = float(getattr(settings, "SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER", 0.65))
+        weak_multiplier = float(getattr(settings, "SYMBOL_PERF_WEAK_MULTIPLIER", 0.45))
+        giveback_multiplier = float(getattr(settings, "SYMBOL_PERF_GIVEBACK_MULTIPLIER", 0.60))
+        giveback_trigger = int(getattr(settings, "SYMBOL_PERF_GIVEBACK_TRIGGER", 3))
+
         # Мало истории — не блокируем, но можем слегка уменьшить риск после стопа.
-        if closed_count < 3:
+        if closed_count < min_history:
             if last_closed_reason == "stop_loss":
                 return SymbolPerformanceDecision(
                     allowed=True,
                     reason="small_history_last_stop_reduce_risk",
-                    risk_multiplier=0.65,
+                    risk_multiplier=small_history_stop_multiplier,
                     symbol=symbol,
                     closed_count=closed_count,
                     wins=wins,
@@ -146,7 +158,7 @@ class SymbolPerformanceGuard:
             )
 
         # Жёсткий cooldown: серия стопов.
-        if losing_streak >= 3 and stop_loss_count >= 3:
+        if losing_streak >= cooldown_streak and stop_loss_count >= cooldown_stops:
             return SymbolPerformanceDecision(
                 allowed=False,
                 reason="symbol_cooldown_losing_streak",
@@ -164,7 +176,7 @@ class SymbolPerformanceGuard:
             )
 
         # Символ статистически убыточный.
-        if closed_count >= 5 and total_net_pnl < 0 and winrate < 40:
+        if closed_count >= block_min_history and total_net_pnl < 0 and winrate < block_max_winrate:
             return SymbolPerformanceDecision(
                 allowed=False,
                 reason="symbol_negative_expectancy_blocked",
@@ -182,11 +194,11 @@ class SymbolPerformanceGuard:
             )
 
         # Символ слабый, но не катастрофа — разрешаем с пониженным риском.
-        if total_net_pnl < 0 or winrate < 45:
+        if total_net_pnl < 0 or winrate < reduce_max_winrate:
             return SymbolPerformanceDecision(
                 allowed=True,
                 reason="symbol_weak_reduce_risk",
-                risk_multiplier=0.45,
+                risk_multiplier=weak_multiplier,
                 symbol=symbol,
                 closed_count=closed_count,
                 wins=wins,
@@ -200,11 +212,11 @@ class SymbolPerformanceGuard:
             )
 
         # Много positive_then_negative — значит надо защищать прибыль раньше.
-        if positive_then_negative_count >= 3:
+        if positive_then_negative_count >= giveback_trigger:
             return SymbolPerformanceDecision(
                 allowed=True,
                 reason="symbol_gives_back_profit_reduce_risk",
-                risk_multiplier=0.60,
+                risk_multiplier=giveback_multiplier,
                 symbol=symbol,
                 closed_count=closed_count,
                 wins=wins,
