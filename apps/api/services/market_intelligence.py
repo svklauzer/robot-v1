@@ -1037,12 +1037,21 @@ class MarketIntelligenceEngine:
         )
 
         if learning_mode:
-            if final_score >= 58:
+            learning_min_score = float(getattr(settings, "LEARNING_SETUP_MIN_SCORE", 62.0))
+            learning_min_trend_alignment = float(getattr(settings, "LEARNING_SETUP_MIN_TREND_ALIGNMENT", 45.0))
+            learning_min_volume_confirmation = float(getattr(settings, "LEARNING_SETUP_MIN_VOLUME_CONFIRMATION", 6.0))
+
+            if (
+                final_score >= learning_min_score
+                and trend_alignment >= learning_min_trend_alignment
+                and volume_confirmation >= learning_min_volume_confirmation
+            ):
                 decision = "approve"
                 comment = "learning_setup_approved"
             elif (
                 is_trend_candidate
-                and trend_alignment >= 40
+                and trend_alignment >= max(40.0, learning_min_trend_alignment - 5.0)
+                and volume_confirmation >= max(3.0, learning_min_volume_confirmation - 3.0)
                 and structure_quality >= 14
                 and final_score >= 52
             ):

@@ -9,6 +9,7 @@ mkdir -p "$RUN_DIR"
 
 API_URL="${API_URL:-http://localhost:8000}"
 COMPOSE_BIN="${COMPOSE_BIN:-docker compose}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 cmd_out() {
   local name="$1"; shift
@@ -54,7 +55,21 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
   cmd_out ml_outcomes_wc wc -l "$ROOT_DIR/storage/ml/trade_outcomes.jsonl"
   cmd_out ml_outcomes_tail tail -n 120 "$ROOT_DIR/storage/ml/trade_outcomes.jsonl"
 
+  if [[ -z "$PYTHON_BIN" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+      PYTHON_BIN="python3"
+    elif command -v python >/dev/null 2>&1; then
+      PYTHON_BIN="python"
+    else
+      PYTHON_BIN=""
+    fi
+  fi
+
+  if [[ -n "$PYTHON_BIN" ]]; then
+    if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
+
   python3 - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"
+
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -100,6 +115,11 @@ if closed:
 
 print(json.dumps(res, ensure_ascii=False, indent=2))
 PY
+      echo "{\"status\": \"error\", \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
+    fi
+  else
+    echo "{\"status\": \"error\", \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
+  fi
 fi
 
 # --- Single compact bundle for chat/github ---
