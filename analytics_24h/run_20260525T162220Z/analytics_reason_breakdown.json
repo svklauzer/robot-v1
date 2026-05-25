@@ -1,2 +1,0 @@
-# GET http://localhost:8000/analytics/reason-breakdown
-{"status":"ok","sample_closed_signals":1,"total_net_pnl_usdt":0.163333,"items":[{"reason":"protective_breakeven_profit_guard","count":1,"share_pct":100.0,"wins":1,"losses":0,"avg_result_pct":0.049,"sum_net_pnl_usdt":0.163333,"avg_net_pnl_usdt":0.163333,"sum_costs_usdt":1.503327,"pnl_share_pct":100.0}]}
