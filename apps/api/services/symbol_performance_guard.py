@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
 
+from core.config import settings
 from models.signal import Signal
 
 
@@ -19,6 +20,7 @@ class SymbolPerformanceDecision:
     winrate: float
     total_net_pnl: float
     stop_loss_count: int
+    failed_setup_count: int
     positive_then_negative_count: int
     last_closed_reason: str | None
     losing_streak: int
@@ -65,6 +67,7 @@ class SymbolPerformanceGuard:
                 winrate=0.0,
                 total_net_pnl=0.0,
                 stop_loss_count=0,
+                failed_setup_count=0,
                 positive_then_negative_count=0,
                 last_closed_reason=None,
                 losing_streak=0,
@@ -76,6 +79,7 @@ class SymbolPerformanceGuard:
         losses = 0
         total_net_pnl = 0.0
         stop_loss_count = 0
+        failed_setup_count = 0
         positive_then_negative_count = 0
         losing_streak = 0
 
@@ -95,6 +99,8 @@ class SymbolPerformanceGuard:
 
             if signal.closed_reason == "stop_loss":
                 stop_loss_count += 1
+            if signal.closed_reason == "failed_setup_exit":
+                failed_setup_count += 1
 
             lifecycle = {}
             try:
@@ -110,13 +116,25 @@ class SymbolPerformanceGuard:
 
         last_closed_reason = closed_signals[0].closed_reason
 
+        min_history = int(getattr(settings, "SYMBOL_PERF_MIN_HISTORY", 3))
+        block_min_history = int(getattr(settings, "SYMBOL_PERF_BLOCK_MIN_HISTORY", 5))
+        block_max_winrate = float(getattr(settings, "SYMBOL_PERF_BLOCK_MAX_WINRATE", 40.0))
+        reduce_max_winrate = float(getattr(settings, "SYMBOL_PERF_REDUCE_MAX_WINRATE", 45.0))
+        cooldown_streak = int(getattr(settings, "SYMBOL_PERF_COOLDOWN_STREAK", 3))
+        cooldown_stops = int(getattr(settings, "SYMBOL_PERF_COOLDOWN_STOPS", 3))
+        cooldown_failed_setups = int(getattr(settings, "SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 4))
+        small_history_stop_multiplier = float(getattr(settings, "SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER", 0.65))
+        weak_multiplier = float(getattr(settings, "SYMBOL_PERF_WEAK_MULTIPLIER", 0.45))
+        giveback_multiplier = float(getattr(settings, "SYMBOL_PERF_GIVEBACK_MULTIPLIER", 0.60))
+        giveback_trigger = int(getattr(settings, "SYMBOL_PERF_GIVEBACK_TRIGGER", 3))
+
         # Мало истории — не блокируем, но можем слегка уменьшить риск после стопа.
-        if closed_count < 3:
+        if closed_count < min_history:
             if last_closed_reason == "stop_loss":
                 return SymbolPerformanceDecision(
                     allowed=True,
                     reason="small_history_last_stop_reduce_risk",
-                    risk_multiplier=0.65,
+                    risk_multiplier=small_history_stop_multiplier,
                     symbol=symbol,
                     closed_count=closed_count,
                     wins=wins,
@@ -124,6 +142,7 @@ class SymbolPerformanceGuard:
                     winrate=winrate,
                     total_net_pnl=total_net_pnl,
                     stop_loss_count=stop_loss_count,
+                    failed_setup_count=failed_setup_count,
                     positive_then_negative_count=positive_then_negative_count,
                     last_closed_reason=last_closed_reason,
                     losing_streak=losing_streak,
@@ -140,13 +159,14 @@ class SymbolPerformanceGuard:
                 winrate=winrate,
                 total_net_pnl=total_net_pnl,
                 stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
                 positive_then_negative_count=positive_then_negative_count,
                 last_closed_reason=last_closed_reason,
                 losing_streak=losing_streak,
             )
 
         # Жёсткий cooldown: серия стопов.
-        if losing_streak >= 3 and stop_loss_count >= 3:
+        if losing_streak >= cooldown_streak and stop_loss_count >= cooldown_stops:
             return SymbolPerformanceDecision(
                 allowed=False,
                 reason="symbol_cooldown_losing_streak",
@@ -158,13 +178,35 @@ class SymbolPerformanceGuard:
                 winrate=winrate,
                 total_net_pnl=total_net_pnl,
                 stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
+                positive_then_negative_count=positive_then_negative_count,
+                last_closed_reason=last_closed_reason,
+                losing_streak=losing_streak,
+            )
+
+
+        # Отдельный cooldown, если символ часто закрывается как failed_setup_exit.
+        # Это типичный ранний индикатор, что входы/таймфрейм/структура для монеты сейчас плохие.
+        if losing_streak >= cooldown_streak and failed_setup_count >= cooldown_failed_setups:
+            return SymbolPerformanceDecision(
+                allowed=False,
+                reason="symbol_cooldown_failed_setup_streak",
+                risk_multiplier=0.0,
+                symbol=symbol,
+                closed_count=closed_count,
+                wins=wins,
+                losses=losses,
+                winrate=winrate,
+                total_net_pnl=total_net_pnl,
+                stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
                 positive_then_negative_count=positive_then_negative_count,
                 last_closed_reason=last_closed_reason,
                 losing_streak=losing_streak,
             )
 
         # Символ статистически убыточный.
-        if closed_count >= 5 and total_net_pnl < 0 and winrate < 40:
+        if closed_count >= block_min_history and total_net_pnl < 0 and winrate < block_max_winrate:
             return SymbolPerformanceDecision(
                 allowed=False,
                 reason="symbol_negative_expectancy_blocked",
@@ -176,17 +218,18 @@ class SymbolPerformanceGuard:
                 winrate=winrate,
                 total_net_pnl=total_net_pnl,
                 stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
                 positive_then_negative_count=positive_then_negative_count,
                 last_closed_reason=last_closed_reason,
                 losing_streak=losing_streak,
             )
 
         # Символ слабый, но не катастрофа — разрешаем с пониженным риском.
-        if total_net_pnl < 0 or winrate < 45:
+        if total_net_pnl < 0 or winrate < reduce_max_winrate:
             return SymbolPerformanceDecision(
                 allowed=True,
                 reason="symbol_weak_reduce_risk",
-                risk_multiplier=0.45,
+                risk_multiplier=weak_multiplier,
                 symbol=symbol,
                 closed_count=closed_count,
                 wins=wins,
@@ -194,17 +237,18 @@ class SymbolPerformanceGuard:
                 winrate=winrate,
                 total_net_pnl=total_net_pnl,
                 stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
                 positive_then_negative_count=positive_then_negative_count,
                 last_closed_reason=last_closed_reason,
                 losing_streak=losing_streak,
             )
 
         # Много positive_then_negative — значит надо защищать прибыль раньше.
-        if positive_then_negative_count >= 3:
+        if positive_then_negative_count >= giveback_trigger:
             return SymbolPerformanceDecision(
                 allowed=True,
                 reason="symbol_gives_back_profit_reduce_risk",
-                risk_multiplier=0.60,
+                risk_multiplier=giveback_multiplier,
                 symbol=symbol,
                 closed_count=closed_count,
                 wins=wins,
@@ -212,6 +256,7 @@ class SymbolPerformanceGuard:
                 winrate=winrate,
                 total_net_pnl=total_net_pnl,
                 stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
                 positive_then_negative_count=positive_then_negative_count,
                 last_closed_reason=last_closed_reason,
                 losing_streak=losing_streak,
@@ -228,6 +273,7 @@ class SymbolPerformanceGuard:
             winrate=winrate,
             total_net_pnl=total_net_pnl,
             stop_loss_count=stop_loss_count,
+            failed_setup_count=failed_setup_count,
             positive_then_negative_count=positive_then_negative_count,
             last_closed_reason=last_closed_reason,
             losing_streak=losing_streak,
@@ -245,6 +291,7 @@ class SymbolPerformanceGuard:
             "winrate": decision.winrate,
             "total_net_pnl": decision.total_net_pnl,
             "stop_loss_count": decision.stop_loss_count,
+            "failed_setup_count": decision.failed_setup_count,
             "positive_then_negative_count": decision.positive_then_negative_count,
             "last_closed_reason": decision.last_closed_reason,
             "losing_streak": decision.losing_streak,
