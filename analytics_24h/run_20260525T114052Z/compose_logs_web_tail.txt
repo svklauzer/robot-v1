@@ -1,0 +1,26 @@
+# CMD: bash -lc docker compose logs --since=8h web | tail -n 600
+web-1  | 
+web-1  | > robot-owner-ui@1.0.0 dev
+web-1  | > next dev -H 0.0.0.0 -p 3000
+web-1  | 
+web-1  |   ▲ Next.js 14.2.5
+web-1  |   - Local:        http://localhost:3000
+web-1  |   - Network:      http://0.0.0.0:3000
+web-1  | 
+web-1  |  ✓ Starting...
+web-1  | Attention: Next.js now collects completely anonymous telemetry regarding usage.
+web-1  | This information is used to shape Next.js' roadmap and prioritize features.
+web-1  | You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+web-1  | https://nextjs.org/telemetry
+web-1  | 
+web-1  | 
+web-1  |    We detected TypeScript in your project and reconfigured your tsconfig.json file for you. Strict-mode is set to false by default.
+web-1  |    The following suggested values were added to your tsconfig.json. These values can be changed to fit your project's needs:
+web-1  | 
+web-1  |    	- include was updated to add '.next/types/**/*.ts'
+web-1  | 
+web-1  |  ✓ Ready in 6.8s
+web-1  |  ○ Compiling /health ...
+web-1  |  ✓ Compiled /health in 5s (528 modules)
+web-1  |  ○ Compiling /intelligence ...
+web-1  |  ✓ Compiled /intelligence in 784ms (524 modules)
