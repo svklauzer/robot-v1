@@ -61,6 +61,7 @@ class SignalQualityService:
         setup_score: float | None = None,
         effective_confidence: float | None = None,
         setup_decision: str | None = None,
+        setup_quality: dict | None = None,
     ) -> bool:
         trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
 
@@ -72,6 +73,21 @@ class SignalQualityService:
 
         setup_score = float(setup_score)
         effective_confidence = float(effective_confidence)
+        setup_quality = setup_quality or {}
+
+        weak_volume_count = int(setup_quality.get("weak_volume_count") or 0)
+        trend_alignment = float(setup_quality.get("trend_alignment") or 0.0)
+        entry_timing = float(setup_quality.get("entry_timing") or 0.0)
+        volume_confirmation = float(setup_quality.get("volume_confirmation") or 0.0)
+
+        # Execution Plan V1 hard filters:
+        # слишком слабый объём + слабый тренд = не публикуем даже в paper.
+        if weak_volume_count >= 4 and volume_confirmation <= 3:
+            return False
+        if trend_alignment < 35:
+            return False
+        if entry_timing < 12:
+            return False
 
         # DEV/PAPER: разрешаем больше сделок, чтобы система собирала статистику.
         if trading_mode in ["paper_signal", "paper_trade"]:
@@ -79,12 +95,13 @@ class SignalQualityService:
                 return setup_score >= 55 and effective_confidence >= 55
 
             if grade == "B":
-                return setup_score >= 50 and effective_confidence >= 50
+                return setup_score >= 58 and effective_confidence >= 56
 
-            # C тоже разрешаем в dev, но только если setup реально approve.
-            # Это не "боевой VIP-сигнал", это обучающая бумажная сделка.
+            # Execution Plan V1:
+            # в paper-режиме отключаем C-класс, чтобы не загрязнять статистику
+            # заведомо слабыми сценариями.
             if grade == "C":
-                return setup_score >= 45 and effective_confidence >= 45
+                return False
 
             return False
 
