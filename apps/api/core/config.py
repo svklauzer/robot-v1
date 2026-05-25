@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
+
     # =========================
     # RISK MANAGEMENT
     # =========================
@@ -170,6 +171,8 @@ class Settings(BaseSettings):
     # Минимальная защищаемая прибыль для exit-политики, чтобы не фиксировать микро-движения.
     MIN_PROTECTIVE_EXIT_PCT: float = 0.20
     MIN_POST_TP1_EXIT_PCT: float = 0.35
+    MIN_PROTECTIVE_NET_USDT: float = 0.25
+    MIN_PROTECTIVE_R_MULT: float = 0.05
 
     # =========================
     # FEES / COST ENGINE
