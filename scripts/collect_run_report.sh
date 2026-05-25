@@ -67,6 +67,9 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
 
   if [[ -n "$PYTHON_BIN" ]]; then
     if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
+
+  python3 - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"
+
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
