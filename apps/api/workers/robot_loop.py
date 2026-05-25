@@ -17,6 +17,8 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
+from services.symbol_performance_guard import SymbolPerformanceGuard
+from services.production_entry_gate import ProductionEntryGate
 
 from models.signal import Signal
 from models.position import Position
@@ -34,6 +36,8 @@ class RobotLoop:
         self.intelligence = MarketIntelligenceEngine()
         self.trade_plan_builder = TradePlanBuilder()
         self.exposure_guard = ExposureGuard()
+        self.symbol_performance_guard = SymbolPerformanceGuard()
+        self.production_gate = ProductionEntryGate()
 
         self.execution = ExecutionEngine()
         self.broadcast = SignalBroadcaster()
@@ -270,6 +274,114 @@ class RobotLoop:
                 )
                 db.flush()
                 continue
+
+            performance = self.symbol_performance_guard.analyze(
+                db=db,
+                bot_id=bot.id,
+                symbol=symbol,
+                lookback=int(getattr(settings, "SYMBOL_PERF_LOOKBACK", 12)),
+            )
+
+            if not performance.allowed:
+                await self.broadcast.send_owner_alert(
+                    "INTELLIGENCE PERFORMANCE BLOCKED",
+                    (
+                        f"{symbol} {result.action}\n"
+                        f"Reason: {performance.reason}\n"
+                        f"Closed: {performance.closed_count}\n"
+                        f"Winrate: {performance.winrate}%\n"
+                        f"Total net PnL: {performance.total_net_pnl} USDT\n"
+                        f"Losing streak: {performance.losing_streak}\n"
+                        f"Failed setup count: {performance.failed_setup_count}\n"
+                        f"Positive→negative: {performance.positive_then_negative_count}"
+                    ),
+                )
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="blocked",
+                        decision=performance.reason,
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "blocked",
+                            "decision": performance.reason,
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "performance_guard": performance.to_payload(),
+                        },
+                    )
+                )
+                db.flush()
+                continue
+
+            production_decision = self.production_gate.check(
+                grade=grade,
+                setup_score=setup_score,
+                effective_confidence=effective_confidence,
+                net_rr_tp1=plan.net_rr_tp1,
+                net_rr_tp2=plan.net_rr_tp2,
+                priority_score=100.0,
+            )
+
+            if not production_decision.allowed:
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="rejected",
+                        decision=production_decision.reason,
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "rejected",
+                            "decision": production_decision.reason,
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "plan": {
+                                "qty": plan.qty,
+                                "required_margin": plan.required_margin,
+                                "net_pnl_tp1": plan.net_pnl_tp1,
+                                "net_pnl_tp2": plan.net_pnl_tp2,
+                                "net_pnl_stop": plan.net_pnl_stop,
+                                "net_rr_tp1": plan.net_rr_tp1,
+                                "net_rr_tp2": plan.net_rr_tp2,
+                            },
+                            "production_gate": production_decision.payload,
+                        },
+                    )
+                )
+                db.flush()
+                continue
+
+            adjusted_qty = float(plan.qty) * float(performance.risk_multiplier or 1.0)
+            if adjusted_qty <= 0:
+                continue
+
+            plan.qty = round(adjusted_qty, 6)
+            plan.required_margin = round(float(plan.required_margin) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_tp1 = round(float(plan.net_pnl_tp1) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_tp2 = round(float(plan.net_pnl_tp2) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_stop = round(float(plan.net_pnl_stop) * float(performance.risk_multiplier or 1.0), 6)
 
             exposure_result = self.exposure_guard.check_before_publish(
                 db=db,
