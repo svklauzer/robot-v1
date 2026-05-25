@@ -164,12 +164,13 @@ class ExitPolicyService:
             symbol=symbol,
             market_type=market_type,
         )
+        min_protective_exit_pct = float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.20))
 
         # 1. Жёсткая NET-защита:
         # сделка дала >= 0.45%, но возвращается к зоне, где после комиссий уже опасно.
         # Выходим не по +0.05%, а по net_safe_pct.
         if mfe >= float(settings.PROTECTIVE_MFE_START_PCT) and current_pct <= net_safe_pct:
-            exit_pct = min(net_safe_pct, max(mfe * 0.35, net_safe_pct))
+            exit_pct = max(net_safe_pct, min_protective_exit_pct)
             exit_price = self._price_from_result_pct(side, entry_price, exit_pct)
 
             return ExitDecision(
@@ -184,7 +185,7 @@ class ExitPolicyService:
 
         # 2. Сделка дала >= 0.8%, но отдала больше 60% достигнутой прибыли.
         if mfe >= 0.8 and drawdown_from_mfe >= mfe * float(settings.PROTECTIVE_DRAWDOWN_SHARE):
-            protected_pct = max(mfe * 0.30, net_safe_pct)
+            protected_pct = max(mfe * 0.30, net_safe_pct, min_protective_exit_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
@@ -204,7 +205,7 @@ class ExitPolicyService:
             mfe >= float(settings.ADAPTIVE_TRAIL_MFE_START_PCT)
             and drawdown_from_mfe >= float(settings.ADAPTIVE_TRAIL_DRAWDOWN_PCT)
         ):
-            protected_pct = max(mfe * 0.40, net_safe_pct)
+            protected_pct = max(mfe * 0.40, net_safe_pct, min_protective_exit_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
@@ -255,6 +256,7 @@ class ExitPolicyService:
             symbol=symbol,
             market_type=market_type,
         )
+        min_post_tp1_exit_pct = float(getattr(settings, "MIN_POST_TP1_EXIT_PCT", 0.35))
 
         # 1. Если почти дошли до TP2 — фиксируем TP2 по уровню,
         # не даём следующему тику украсть результат.
@@ -269,7 +271,7 @@ class ExitPolicyService:
         # 2. После TP1 защищаем минимум 40% от лучшей прибыли,
         # но не ниже net_safe_pct.
         if mfe >= 1.0 and drawdown_from_mfe >= mfe * 0.45:
-            protected_pct = max(mfe * 0.40, net_safe_pct)
+            protected_pct = max(mfe * 0.40, net_safe_pct, min_post_tp1_exit_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
@@ -287,7 +289,7 @@ class ExitPolicyService:
         # 3. Если была хорошая прибыль >= 2%, но рынок отдал 35%,
         # фиксируем больше, потому что был сильный импульс.
         if mfe >= 2.0 and drawdown_from_mfe >= mfe * 0.35:
-            protected_pct = max(mfe * 0.55, net_safe_pct)
+            protected_pct = max(mfe * 0.55, net_safe_pct, min_post_tp1_exit_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
