@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
     PLAN_REJECT_ALERT_THROTTLE_MINUTES: int = 30
 
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+    MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
+
+
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
