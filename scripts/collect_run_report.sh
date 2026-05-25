@@ -124,11 +124,12 @@ PY
   else
     if command -v jq >/dev/null 2>&1; then
       jq -s '
+        . as $rows |
         map(select(type=="object" and .status=="closed")) as $closed |
         {
           status: "degraded",
           fallback_used: true,
-          total_rows: length,
+          total_rows: ($rows|length),
           closed_rows: ($closed|length),
           wins: ($closed|map(select((.closed_net_pnl // 0) > 0))|length),
           losses: ($closed|map(select((.closed_net_pnl // 0) <= 0))|length)
@@ -154,6 +155,7 @@ fi
 } > "$RUN_DIR/_report_compact.txt"
 
 cp "$RUN_DIR/_report_compact.txt" "$OUT_DIR/latest_report_compact.txt"
+echo "$RUN_DIR" > "$OUT_DIR/latest_run_dir.txt"
 
 echo "Saved report to: $RUN_DIR"
 echo "Compact file:    $RUN_DIR/_report_compact.txt"
