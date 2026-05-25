@@ -72,7 +72,6 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
   if [[ -n "$PYTHON_BIN" ]]; then
     if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
     if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
-
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -122,6 +121,24 @@ if closed:
 
 print(json.dumps(res, ensure_ascii=False, indent=2))
 PY
+      echo "{\"status\": \"degraded\", \"fallback_used\": false, \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
+    fi
+  else
+    if command -v jq >/dev/null 2>&1; then
+      jq -s '
+        map(select(type=="object" and .status=="closed")) as $closed |
+        {
+          status: "degraded",
+          fallback_used: true,
+          total_rows: length,
+          closed_rows: ($closed|length),
+          wins: ($closed|map(select((.closed_net_pnl // 0) > 0))|length),
+          losses: ($closed|map(select((.closed_net_pnl // 0) <= 0))|length)
+        }' "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" > "$RUN_DIR/ml_outcomes_summary.json" 2>/dev/null || \
+      echo "{\"status\":\"degraded\",\"fallback_used\":true,\"reason\":\"jq_fallback_failed\"}" > "$RUN_DIR/ml_outcomes_summary.json"
+    else
+      echo "{\"status\": \"degraded\", \"fallback_used\": false, \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
+    fi
       echo "{\"status\": \"error\", \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
     fi
   else

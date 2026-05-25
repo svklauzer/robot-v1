@@ -50,6 +50,13 @@ class ExitPolicyService:
 
         return max(mfe_pct - current_pct, 0.0)
 
+    def _estimated_net_usdt(self, result_pct: float, position_notional_usdt: float | None) -> float | None:
+        if position_notional_usdt is None or position_notional_usdt <= 0:
+            return None
+        gross = position_notional_usdt * (result_pct / 100.0)
+        fees = position_notional_usdt * float(settings.SPOT_TAKER_FEE) * 2
+        return gross - fees
+
     def _fee_rate(self, symbol: str | None, market_type: str | None = None) -> tuple[float, str]:
         market_type_value = market_type or settings.MARKET_TYPE
 
@@ -105,6 +112,7 @@ class ExitPolicyService:
         max_profit_price: float | None = None,
         symbol: str | None = None,
         market_type: str | None = None,
+        position_notional_usdt: float | None = None,
     ) -> ExitDecision:
         """
         Защита до TP1.
@@ -171,6 +179,9 @@ class ExitPolicyService:
         # Выходим не по +0.05%, а по net_safe_pct.
         if mfe >= float(settings.PROTECTIVE_MFE_START_PCT) and current_pct <= net_safe_pct:
             exit_pct = max(net_safe_pct, min_protective_exit_pct)
+            est_net = self._estimated_net_usdt(exit_pct, position_notional_usdt)
+            if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
+                return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, exit_pct)
 
             return ExitDecision(
@@ -186,6 +197,10 @@ class ExitPolicyService:
         # 2. Сделка дала >= 0.8%, но отдала больше 60% достигнутой прибыли.
         if mfe >= 0.8 and drawdown_from_mfe >= mfe * float(settings.PROTECTIVE_DRAWDOWN_SHARE):
             protected_pct = max(mfe * 0.30, net_safe_pct, min_protective_exit_pct)
+            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+            if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
+                return ExitDecision(exit=False)
+
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
@@ -206,6 +221,9 @@ class ExitPolicyService:
             and drawdown_from_mfe >= float(settings.ADAPTIVE_TRAIL_DRAWDOWN_PCT)
         ):
             protected_pct = max(mfe * 0.40, net_safe_pct, min_protective_exit_pct)
+            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+            if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
+                return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
