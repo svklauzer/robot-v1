@@ -93,17 +93,17 @@ class ReportService:
         return settings.TELEGRAM_VIP_SIGNALS_CHAT_ID
 
     def _owner_report_text(self, stats: dict) -> str:
-        return {
-            "hours": hours,
-            "total_signals": len(signals),
-            "closed_signals": len(closed),
-            "wins": len(wins),
-            "losses": len(losses),
-            "winrate": round(winrate, 2),
-            "total_result_pct": round(total_result, 2),
-            "best": self._signal_to_dict(best),
-            "worst": self._signal_to_dict(worst),
-        }
+        return (
+            f"📈 OWNER отчёт Finmt за {stats['hours']}ч\n\n"
+            f"Всего сигналов: {stats['total_signals']}\n"
+            f"Закрыто: {stats['closed_signals']}\n"
+            f"Победы: {stats['wins']}\n"
+            f"Убытки: {stats['losses']}\n"
+            f"Winrate: {stats['winrate']}%\n"
+            f"Суммарный результат: {stats['total_result_pct']}%\n\n"
+            f"Лучшая сделка: {self._signal_short(stats['best'])}\n"
+            f"Худшая сделка: {self._signal_short(stats['worst'])}"
+        )
 
     def _free_report_text(self, stats: dict) -> str:
         return (
