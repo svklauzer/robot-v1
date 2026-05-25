@@ -1,0 +1,5 @@
+# CMD: git status --short --branch
+## main...origin/main
+ M .env
+ M docker-compose.yml
+?? analytics_24h/run_20260525T162220Z/
