@@ -184,6 +184,7 @@ class RobotLoop:
                 setup_score=setup_score,
                 effective_confidence=effective_confidence,
                 setup_decision=setup_decision,
+                setup_quality=setup_quality,
             )
 
             if not should_publish:
@@ -214,24 +215,60 @@ class RobotLoop:
             )
 
             if not plan.is_valid:
-                await self.broadcast.send_owner_alert(
-                    "INTELLIGENCE TRADE PLAN REJECTED",
-                    (
-                        f"{symbol} {result.action}\n"
-                        f"Reason: {plan.reject_reason}\n"
-                        f"Regime: {result.regime}\n"
-                        f"Confidence: {result.confidence_hint}\n"
-                        f"Entry: {entry_price}\n"
-                        f"Stop: {stop}\n"
-                        f"TP1: {tp1}\n"
-                        f"TP2: {tp2}\n"
-                        f"Net TP1: {plan.net_pnl_tp1} USDT\n"
-                        f"Net TP2: {plan.net_pnl_tp2} USDT\n"
-                        f"Net Stop: {plan.net_pnl_stop} USDT\n"
-                        f"RR TP2: {plan.net_rr_tp2}\n"
-                        f"Scores: {result.scores}"
+                if self._should_send_plan_reject_alert(db, symbol, str(plan.reject_reason or "unknown")):
+                    await self.broadcast.send_owner_alert(
+                        "INTELLIGENCE TRADE PLAN REJECTED",
+                        (
+                            f"{symbol} {result.action}\n"
+                            f"Reason: {plan.reject_reason}\n"
+                            f"Regime: {result.regime}\n"
+                            f"Confidence: {result.confidence_hint}\n"
+                            f"Entry: {entry_price}\n"
+                            f"Stop: {stop}\n"
+                            f"TP1: {tp1}\n"
+                            f"TP2: {tp2}\n"
+                            f"Net TP1: {plan.net_pnl_tp1} USDT\n"
+                            f"Net TP2: {plan.net_pnl_tp2} USDT\n"
+                            f"Net Stop: {plan.net_pnl_stop} USDT\n"
+                            f"RR TP2: {plan.net_rr_tp2}\n"
+                            f"Scores: {result.scores}"
+                        )
+                    )
+
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="rejected",
+                        decision=str(plan.reject_reason or "trade_plan_invalid"),
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "rejected",
+                            "decision": str(plan.reject_reason or "trade_plan_invalid"),
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "plan": {
+                                "net_pnl_tp1": plan.net_pnl_tp1,
+                                "net_pnl_tp2": plan.net_pnl_tp2,
+                                "net_pnl_stop": plan.net_pnl_stop,
+                                "net_rr_tp2": plan.net_rr_tp2,
+                                "required_margin": plan.required_margin,
+                                "reject_reason": plan.reject_reason,
+                            },
+                        },
                     )
                 )
+                db.flush()
                 continue
 
             exposure_result = self.exposure_guard.check_before_publish(
@@ -373,6 +410,23 @@ class RobotLoop:
                 IntelligenceEvent.symbol == symbol,
                 IntelligenceEvent.status == "blocked",
                 IntelligenceEvent.decision == "robot_short_candidate_alert_sent",
+                IntelligenceEvent.created_at >= since,
+            )
+            .first()
+        )
+
+        return recent is None
+
+    def _should_send_plan_reject_alert(self, db: Session, symbol: str, reject_reason: str) -> bool:
+        minutes = int(getattr(settings, "PLAN_REJECT_ALERT_THROTTLE_MINUTES", 30))
+        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+        recent = (
+            db.query(IntelligenceEvent)
+            .filter(
+                IntelligenceEvent.symbol == symbol,
+                IntelligenceEvent.status == "rejected",
+                IntelligenceEvent.decision == reject_reason,
                 IntelligenceEvent.created_at >= since,
             )
             .first()
