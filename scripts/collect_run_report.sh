@@ -71,7 +71,6 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
 
   if [[ -n "$PYTHON_BIN" ]]; then
     if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
-    if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -79,7 +78,6 @@ from pathlib import Path
 import os
 root = Path(os.environ.get("ROOT_DIR", "."))
 p = root / "storage/ml/trade_outcomes.jsonl"
-p = Path("storage/ml/trade_outcomes.jsonl")
 
 rows = []
 for line in p.read_text(encoding="utf-8").splitlines():
@@ -139,10 +137,6 @@ PY
     else
       echo "{\"status\": \"degraded\", \"fallback_used\": false, \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
     fi
-      echo "{\"status\": \"error\", \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
-    fi
-  else
-    echo "{\"status\": \"error\", \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
   fi
 fi
 
