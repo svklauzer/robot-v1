@@ -145,6 +145,26 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
 
+
+    # =========================
+    # PRODUCTION ENTRY GATE
+    # =========================
+    PROD_GATE_A_PLUS_MIN_SETUP: float = 82.0
+    PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 74.0
+    PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
+    PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45
+
+    PROD_GATE_A_MIN_SETUP: float = 76.0
+    PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
+    PROD_GATE_A_MIN_RR_TP1: float = 0.90
+    PROD_GATE_A_MIN_RR_TP2: float = 1.35
+
+    PROD_GATE_B_MIN_SETUP: float = 70.0
+    PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
+    PROD_GATE_B_MIN_RR_TP1: float = 0.80
+    PROD_GATE_B_MIN_RR_TP2: float = 1.25
+    PROD_GATE_B_MIN_PRIORITY: float = 85.0
+
     # =========================
     # RISK MANAGEMENT
     # =========================
