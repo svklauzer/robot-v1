@@ -200,6 +200,7 @@ class ExitPolicyService:
             est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
             if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
                 return ExitDecision(exit=False)
+
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
 
             return ExitDecision(
