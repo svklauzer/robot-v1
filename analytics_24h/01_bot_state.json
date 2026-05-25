@@ -1,1 +1,0 @@
-{"bot":{"id":1,"name":"Main Robot","status":"running","mode":"paper","config":{"symbols":["BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT","DOGE/USDT","ADA/USDT","LINK/USDT","AVAX/USDT","LTC/USDT","DOT/USDT","TRX/USDT","TON/USDT"],"risk_profile":"balanced","telegram_signals":true,"news_filter":true}},"signals_count":110,"open_positions":4,"orders_count":192}

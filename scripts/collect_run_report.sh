@@ -10,6 +10,7 @@ mkdir -p "$RUN_DIR"
 API_URL="${API_URL:-http://localhost:8000}"
 COMPOSE_BIN="${COMPOSE_BIN:-docker compose}"
 PYTHON_BIN="${PYTHON_BIN:-}"
+
 PYTHON_BIN_ARGS=()
 
 cmd_out() {
@@ -64,6 +65,7 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
     elif command -v py >/dev/null 2>&1; then
       PYTHON_BIN="py"
       PYTHON_BIN_ARGS=("-3")
+
     else
       PYTHON_BIN=""
     fi
@@ -71,6 +73,8 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
 
   if [[ -n "$PYTHON_BIN" ]]; then
     if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
+
+    if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -78,6 +82,7 @@ from pathlib import Path
 import os
 root = Path(os.environ.get("ROOT_DIR", "."))
 p = root / "storage/ml/trade_outcomes.jsonl"
+p = Path("storage/ml/trade_outcomes.jsonl")
 rows = []
 for line in p.read_text(encoding="utf-8").splitlines():
     line=line.strip()
