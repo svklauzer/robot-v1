@@ -1,0 +1,1 @@
+# CMD: bash -lc docker compose logs --since=8h web | tail -n 600
