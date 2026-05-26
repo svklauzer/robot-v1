@@ -2286,6 +2286,7 @@ def intelligence_scan_readonly():
                     setup_score=setup_score,
                     effective_confidence=item["effective_confidence"],
                     setup_decision=result.setup_decision,
+                    setup_quality=result.setup_quality,
                 ):
                     item["status"] = "rejected"
                     item["decision"] = "quality_grade_too_low"
@@ -2636,6 +2637,7 @@ async def intelligence_scan_run():
                     setup_score=setup_score,
                     effective_confidence=effective_confidence,
                     setup_decision=result.setup_decision,
+                    setup_quality=result.setup_quality,
                 ):
                     item["status"] = "rejected"
                     item["decision"] = "quality_grade_too_low"

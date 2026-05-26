@@ -1,4 +1,3 @@
-import ccxt
 import random
 import pandas as pd
 from services.htx_client import HTXClient
@@ -9,7 +8,6 @@ from core.config import settings
 class MarketDataService:
     def __init__(self):
         self.client = HTXClient()
-        self.exchange = None
 
     def snapshot(self, symbol: str) -> dict:
         try:
@@ -84,9 +82,7 @@ class MarketDataService:
 
     def ohlcv(self, symbol: str, timeframe: str = "5m", limit: int = 200):
         try:
-            exchange = self._get_exchange()
-
-            data = exchange.fetch_ohlcv(
+            data = self.client.fetch_ohlcv(
                 symbol,
                 timeframe=timeframe,
                 limit=limit,
@@ -127,18 +123,3 @@ class MarketDataService:
             "timeframes": result,
         }   
 
-
-    def _get_exchange(self):
-        if self.exchange is not None:
-            return self.exchange
-
-        self.exchange = ccxt.htx({
-            "apiKey": settings.HTX_API_KEY,
-            "secret": settings.HTX_API_SECRET,
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": settings.HTX_MARKET_TYPE,
-            },
-        })
-
-        return self.exchange     
