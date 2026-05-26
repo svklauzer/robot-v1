@@ -1,0 +1,2 @@
+# GET http://localhost:8000/signals?limit=200
+curl: (7) Failed to connect to localhost port 8000 after 2018 ms: Could not connect to server
