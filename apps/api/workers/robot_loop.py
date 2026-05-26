@@ -17,6 +17,9 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
+from services.symbol_performance_guard import SymbolPerformanceGuard
+from services.production_entry_gate import ProductionEntryGate
+from services.anti_drain_guard import AntiDrainConfig, should_open_signal
 
 from models.signal import Signal
 from models.position import Position
@@ -34,6 +37,8 @@ class RobotLoop:
         self.intelligence = MarketIntelligenceEngine()
         self.trade_plan_builder = TradePlanBuilder()
         self.exposure_guard = ExposureGuard()
+        self.symbol_performance_guard = SymbolPerformanceGuard()
+        self.production_gate = ProductionEntryGate()
 
         self.execution = ExecutionEngine()
         self.broadcast = SignalBroadcaster()
@@ -271,6 +276,114 @@ class RobotLoop:
                 db.flush()
                 continue
 
+            performance = self.symbol_performance_guard.analyze(
+                db=db,
+                bot_id=bot.id,
+                symbol=symbol,
+                lookback=int(getattr(settings, "SYMBOL_PERF_LOOKBACK", 12)),
+            )
+
+            if not performance.allowed:
+                await self.broadcast.send_owner_alert(
+                    "INTELLIGENCE PERFORMANCE BLOCKED",
+                    (
+                        f"{symbol} {result.action}\n"
+                        f"Reason: {performance.reason}\n"
+                        f"Closed: {performance.closed_count}\n"
+                        f"Winrate: {performance.winrate}%\n"
+                        f"Total net PnL: {performance.total_net_pnl} USDT\n"
+                        f"Losing streak: {performance.losing_streak}\n"
+                        f"Failed setup count: {performance.failed_setup_count}\n"
+                        f"Positive→negative: {performance.positive_then_negative_count}"
+                    ),
+                )
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="blocked",
+                        decision=performance.reason,
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "blocked",
+                            "decision": performance.reason,
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "performance_guard": performance.to_payload(),
+                        },
+                    )
+                )
+                db.flush()
+                continue
+
+            production_decision = self.production_gate.check(
+                grade=grade,
+                setup_score=setup_score,
+                effective_confidence=effective_confidence,
+                net_rr_tp1=plan.net_rr_tp1,
+                net_rr_tp2=plan.net_rr_tp2,
+                priority_score=100.0,
+            )
+
+            if not production_decision.allowed:
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="rejected",
+                        decision=production_decision.reason,
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "rejected",
+                            "decision": production_decision.reason,
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "plan": {
+                                "qty": plan.qty,
+                                "required_margin": plan.required_margin,
+                                "net_pnl_tp1": plan.net_pnl_tp1,
+                                "net_pnl_tp2": plan.net_pnl_tp2,
+                                "net_pnl_stop": plan.net_pnl_stop,
+                                "net_rr_tp1": plan.net_rr_tp1,
+                                "net_rr_tp2": plan.net_rr_tp2,
+                            },
+                            "production_gate": production_decision.payload,
+                        },
+                    )
+                )
+                db.flush()
+                continue
+
+            adjusted_qty = float(plan.qty) * float(performance.risk_multiplier or 1.0)
+            if adjusted_qty <= 0:
+                continue
+
+            plan.qty = round(adjusted_qty, 6)
+            plan.required_margin = round(float(plan.required_margin) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_tp1 = round(float(plan.net_pnl_tp1) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_tp2 = round(float(plan.net_pnl_tp2) * float(performance.risk_multiplier or 1.0), 6)
+            plan.net_pnl_stop = round(float(plan.net_pnl_stop) * float(performance.risk_multiplier or 1.0), 6)
+
             exposure_result = self.exposure_guard.check_before_publish(
                 db=db,
                 bot_id=bot.id,
@@ -281,6 +394,59 @@ class RobotLoop:
                 max_active_signals=int(getattr(settings, "MAX_ACTIVE_SIGNALS", 2)),
                 max_active_per_symbol=int(getattr(settings, "MAX_ACTIVE_SIGNALS_PER_SYMBOL", 1)),
             )
+
+            if bool(getattr(settings, "ANTI_DRAIN_ENABLED", True)):
+                anti_cfg = AntiDrainConfig(
+                    min_confidence=float(getattr(settings, "ANTI_DRAIN_MIN_CONFIDENCE", 75.0)),
+                    min_net_rr_tp1=float(getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 1.10)),
+                    min_net_rr_tp2=float(getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 1.70)),
+                    min_expected_edge_after_costs_usdt=float(getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.50)),
+                    max_position_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 5.0)),
+                    max_used_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_USED_MARGIN_PCT", 12.0)),
+                    max_open_positions=int(getattr(settings, "ANTI_DRAIN_MAX_OPEN_POSITIONS", 1)),
+                    max_active_signals_per_symbol=int(getattr(settings, "ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL", 1)),
+                    max_daily_loss_pct=float(getattr(settings, "ANTI_DRAIN_MAX_DAILY_LOSS_PCT", 1.5)),
+                    max_drawdown_pct=float(getattr(settings, "ANTI_DRAIN_MAX_DRAWDOWN_PCT", 6.0)),
+                )
+                anti_allowed, anti_reason = should_open_signal(
+                    {
+                        "symbol": symbol,
+                        "side": result.action,
+                        "grade": grade,
+                        "confidence": effective_confidence,
+                        "rationale": str(result.reason or ""),
+                        "required_margin": plan.required_margin,
+                        "net_rr_tp1": plan.net_rr_tp1,
+                        "net_rr_tp2": plan.net_rr_tp2,
+                        "net_pnl_tp1": plan.net_pnl_tp1,
+                        "net_pnl_stop": plan.net_pnl_stop,
+                    },
+                    {
+                        "equity_usdt": float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt)),
+                        "used_margin_usdt": float(exposure_result.used_margin or 0),
+                        "daily_pnl_usdt": -abs(float(daily_loss_pct or 0)) * float(balance_usdt) / 100.0,
+                        "drawdown_pct": float(drawdown_pct or 0),
+                        "open_positions_count": len(open_positions),
+                        "active_signals_by_symbol": {symbol: int(exposure_result.active_symbol_signals_count or 0)},
+                    },
+                    anti_cfg,
+                )
+                if not anti_allowed:
+                    db.add(
+                        IntelligenceEvent(
+                            symbol=symbol,
+                            status="blocked",
+                            decision=anti_reason,
+                            action=result.action,
+                            regime=result.regime,
+                            radar_state=result.radar_state,
+                            confidence_hint=result.confidence_hint,
+                            setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                            payload_json={"symbol": symbol, "status": "blocked", "decision": anti_reason, "anti_drain": True},
+                        )
+                    )
+                    db.flush()
+                    continue
 
             if not exposure_result.allowed:
                 await self.broadcast.send_owner_alert(
