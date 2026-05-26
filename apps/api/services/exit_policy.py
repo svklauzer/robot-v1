@@ -113,6 +113,7 @@ class ExitPolicyService:
         symbol: str | None = None,
         market_type: str | None = None,
         position_notional_usdt: float | None = None,
+        signal_age_sec: float | None = None,
     ) -> ExitDecision:
         """
         Защита до TP1.
@@ -129,7 +130,9 @@ class ExitPolicyService:
 
         # Failed setup guard before TP1:
         # 1) Если позиция почти не развилась и пошла против нас — закрываем рано.
-        if mfe_pct is not None:
+        min_age_sec = float(getattr(settings, "FAILED_SETUP_MIN_AGE_SEC", 180))
+        age_ok = signal_age_sec is None or float(signal_age_sec) >= min_age_sec
+        if mfe_pct is not None and age_ok:
             mfe_value = float(mfe_pct)
 
             if (
