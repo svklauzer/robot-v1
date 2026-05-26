@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
     FAILED_SETUP_LOSS_MID_PCT: float = -0.45
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+    FAILED_SETUP_MIN_AGE_SEC: int = 180
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.45
@@ -127,6 +128,7 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
     FAILED_SETUP_LOSS_MID_PCT: float = -0.45
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+    FAILED_SETUP_MIN_AGE_SEC: int = 180
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.45
@@ -150,7 +152,21 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
 
-
+    # =========================
+    # ANTI-DRAIN ENTRY GUARD
+    # =========================
+    ANTI_DRAIN_ENABLED: bool = True
+    ANTI_DRAIN_MIN_CONFIDENCE: float = 75.0
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 1.10
+    ANTI_DRAIN_MIN_NET_RR_TP2: float = 1.70
+    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.50
+    ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 5.0
+    ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 12.0
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 1
+    ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 1.5
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 6.0
+    
     # =========================
     # PRODUCTION ENTRY GATE
     # =========================
