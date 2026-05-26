@@ -443,6 +443,42 @@ class Settings(BaseSettings):
     PROD_GATE_B_MIN_RR_TP2: float = 1.25
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
 
+
+
+    # =========================
+    # ANTI-DRAIN ENTRY GUARD
+    # =========================
+    ANTI_DRAIN_ENABLED: bool = True
+    ANTI_DRAIN_MIN_CONFIDENCE: float = 58.0
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.95
+    ANTI_DRAIN_MIN_NET_RR_TP2: float = 1.35
+    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.80
+    ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
+    ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 30.0
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
+    ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 3.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 12.0
+
+    # =========================
+    # PRODUCTION ENTRY GATE
+    # =========================
+    PROD_GATE_A_PLUS_MIN_SETUP: float = 82.0
+    PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 74.0
+    PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
+    PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45
+
+    PROD_GATE_A_MIN_SETUP: float = 76.0
+    PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
+    PROD_GATE_A_MIN_RR_TP1: float = 0.90
+    PROD_GATE_A_MIN_RR_TP2: float = 1.35
+
+    PROD_GATE_B_MIN_SETUP: float = 70.0
+    PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
+    PROD_GATE_B_MIN_RR_TP1: float = 0.80
+    PROD_GATE_B_MIN_RR_TP2: float = 1.25
+    PROD_GATE_B_MIN_PRIORITY: float = 85.0
+
     # =========================
     # RISK MANAGEMENT
     # =========================
