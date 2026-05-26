@@ -80,13 +80,18 @@ class SignalQualityService:
         entry_timing = float(setup_quality.get("entry_timing") or 0.0)
         volume_confirmation = float(setup_quality.get("volume_confirmation") or 0.0)
 
-        # Execution Plan V1 hard filters:
-        # слишком слабый объём + слабый тренд = не публикуем даже в paper.
-        if weak_volume_count >= 4 and volume_confirmation <= 3:
+        weak_volume_max_count = int(getattr(settings, "PUBLISH_WEAK_VOLUME_MAX_COUNT", 4))
+        weak_volume_min_confirmation = float(getattr(settings, "PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION", 3.0))
+        min_trend_alignment = float(getattr(settings, "PUBLISH_MIN_TREND_ALIGNMENT", 30.0))
+        min_entry_timing = float(getattr(settings, "PUBLISH_MIN_ENTRY_TIMING", 12.0))
+
+        # Execution gates for publish path (configurable).
+        # Слабый объём + низкое подтверждение = не публикуем даже в paper.
+        if weak_volume_count >= weak_volume_max_count and volume_confirmation <= weak_volume_min_confirmation:
             return False
-        if trend_alignment < 35:
+        if trend_alignment < min_trend_alignment:
             return False
-        if entry_timing < 12:
+        if entry_timing < min_entry_timing:
             return False
 
         # DEV/PAPER: разрешаем больше сделок, чтобы система собирала статистику.

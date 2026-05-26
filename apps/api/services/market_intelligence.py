@@ -1050,10 +1050,10 @@ class MarketIntelligenceEngine:
                 comment = "learning_setup_approved"
             elif (
                 is_trend_candidate
-                and trend_alignment >= max(40.0, learning_min_trend_alignment - 5.0)
-                and volume_confirmation >= max(3.0, learning_min_volume_confirmation - 3.0)
-                and structure_quality >= 14
-                and final_score >= 52
+                and trend_alignment >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT", 30.0))
+                and volume_confirmation >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION", 2.0))
+                and structure_quality >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY", 10.5))
+                and final_score >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE", 50.0))
             ):
                 decision = "approve"
                 comment = "learning_trend_continuation_approved"

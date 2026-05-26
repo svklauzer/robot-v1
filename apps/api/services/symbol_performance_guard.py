@@ -25,6 +25,24 @@ class SymbolPerformanceDecision:
     last_closed_reason: str | None
     losing_streak: int
 
+    def to_payload(self) -> dict:
+        return {
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "risk_multiplier": self.risk_multiplier,
+            "symbol": self.symbol,
+            "closed_count": self.closed_count,
+            "wins": self.wins,
+            "losses": self.losses,
+            "winrate": self.winrate,
+            "total_net_pnl": self.total_net_pnl,
+            "stop_loss_count": self.stop_loss_count,
+            "failed_setup_count": self.failed_setup_count,
+            "positive_then_negative_count": self.positive_then_negative_count,
+            "last_closed_reason": self.last_closed_reason,
+            "losing_streak": self.losing_streak,
+        }
+
 
 class SymbolPerformanceGuard:
     """
