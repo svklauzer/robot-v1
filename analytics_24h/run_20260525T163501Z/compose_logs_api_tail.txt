@@ -1,0 +1,9 @@
+# CMD: bash -lc docker compose logs --since=8h api | tail -n 2000
+api-1  | INFO:     Started server process [1]
+api-1  | INFO:     Waiting for application startup.
+api-1  | INFO:     Application startup complete.
+api-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+api-1  | INFO:     172.18.0.1:58728 - "GET /positions HTTP/1.1" 200 OK
+api-1  | INFO:     172.18.0.1:58760 - "GET /intelligence/events?limit=10 HTTP/1.1" 200 OK
+api-1  | INFO:     172.18.0.1:58744 - "GET /signals?limit=10&offset=0 HTTP/1.1" 200 OK
+api-1  | INFO:     172.18.0.1:58726 - "GET /analytics/summary HTTP/1.1" 200 OK

@@ -152,8 +152,6 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
 
-
-
     # =========================
     # ANTI-DRAIN ENTRY GUARD
     # =========================
@@ -168,7 +166,7 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 1.5
     ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 6.0
-
+    
     # =========================
     # PRODUCTION ENTRY GATE
     # =========================
