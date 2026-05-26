@@ -262,17 +262,26 @@ class TradePlanBuilder:
             is_valid = False
             reject_reason = "tp2_net_pnl_not_positive"
 
-        elif tp1_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5)):
-            is_valid = False
-            reject_reason = "tp1_net_pnl_below_min_usdt"
+        else:
+            base_min_tp1 = float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5))
+            base_min_tp2 = float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0))
+            relax_margin_pct = max(float(getattr(settings, "MIN_NET_PNL_RELAX_MARGIN_PCT", 0.01)), 0.0)
+            relaxed_min_tp1 = required_margin * relax_margin_pct
+            relaxed_min_tp2 = relaxed_min_tp1 * 1.5
+            min_tp1_threshold = min(base_min_tp1, relaxed_min_tp1) if relax_margin_pct > 0 else base_min_tp1
+            min_tp2_threshold = min(base_min_tp2, relaxed_min_tp2) if relax_margin_pct > 0 else base_min_tp2
 
-        elif tp2_preview.net_pnl < float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0)):
-            is_valid = False
-            reject_reason = "tp2_net_pnl_below_min_usdt"
+            if tp1_preview.net_pnl < min_tp1_threshold:
+                is_valid = False
+                reject_reason = "tp1_net_pnl_below_min_usdt"
 
-        elif net_rr_tp2 < 1.2:
-            is_valid = False
-            reject_reason = "net_rr_too_low"
+            elif tp2_preview.net_pnl < min_tp2_threshold:
+                is_valid = False
+                reject_reason = "tp2_net_pnl_below_min_usdt"
+
+            elif net_rr_tp2 < 1.2:
+                is_valid = False
+                reject_reason = "net_rr_too_low"
 
         return TradePlan(
             symbol=symbol,

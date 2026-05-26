@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
     PLAN_REJECT_ALERT_THROTTLE_MINUTES: int = 30
 
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+    MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
+
+
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
@@ -84,9 +89,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.45
@@ -119,9 +125,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.45
@@ -144,6 +151,42 @@ class Settings(BaseSettings):
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
 
+
+
+
+    # =========================
+    # ANTI-DRAIN ENTRY GUARD
+    # =========================
+    ANTI_DRAIN_ENABLED: bool = True
+    ANTI_DRAIN_MIN_CONFIDENCE: float = 58.0
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.95
+    ANTI_DRAIN_MIN_NET_RR_TP2: float = 1.35
+    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.80
+    ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
+    ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 30.0
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
+    ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 3.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 12.0
+
+    # =========================
+    # PRODUCTION ENTRY GATE
+    # =========================
+    PROD_GATE_A_PLUS_MIN_SETUP: float = 82.0
+    PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 74.0
+    PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
+    PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45
+
+    PROD_GATE_A_MIN_SETUP: float = 76.0
+    PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
+    PROD_GATE_A_MIN_RR_TP1: float = 0.90
+    PROD_GATE_A_MIN_RR_TP2: float = 1.35
+
+    PROD_GATE_B_MIN_SETUP: float = 70.0
+    PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
+    PROD_GATE_B_MIN_RR_TP1: float = 0.80
+    PROD_GATE_B_MIN_RR_TP2: float = 1.25
+    PROD_GATE_B_MIN_PRIORITY: float = 85.0
 
     # =========================
     # RISK MANAGEMENT
