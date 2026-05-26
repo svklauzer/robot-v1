@@ -2441,6 +2441,7 @@ async def intelligence_scan_run():
         memory = IntelligenceMemory()
         performance_guard = SymbolPerformanceGuard()
         production_gate = ProductionEntryGate()
+        reentry_guard = ReEntryCooldownGuard()
         priority = CandidatePriorityService()
         publish_queue = []
         published_count = 0
