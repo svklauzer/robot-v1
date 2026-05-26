@@ -1,0 +1,2 @@
+# GET http://localhost:8000/signals?limit=200
+{"total":0,"limit":200,"offset":0,"items":[]}

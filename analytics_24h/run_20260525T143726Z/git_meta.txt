@@ -1,0 +1,2 @@
+# CMD: git rev-parse --short HEAD
+d86024e
