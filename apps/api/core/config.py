@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_SETUP: float = 82.0
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 74.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
+    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.84
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45
 
     PROD_GATE_A_MIN_SETUP: float = 76.0

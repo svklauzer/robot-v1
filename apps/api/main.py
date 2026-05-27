@@ -3145,9 +3145,11 @@ async def intelligence_scan_run():
 
         rr_tp1_rejected_a = []
         for r in results:
-            if str(r.get("status")) != "wait":
+            status = str(r.get("status") or "")
+            if status not in {"wait", "rejected", "blocked"}:
                 continue
-            if str(r.get("decision")) != "a_rr_tp1_too_low":
+            decision = str(r.get("decision") or "")
+            if decision not in {"a_rr_tp1_too_low", "a_plus_rr_tp1_too_low"}:
                 continue
             gate = r.get("production_gate") or {}
             grade = str(gate.get("grade") or r.get("grade") or "")
