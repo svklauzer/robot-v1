@@ -91,18 +91,18 @@ class TelegramRouter:
 
         free_sent = False
 
-        # FREE teaser отправляем для A+ и A.
-        # B сопровождаем только в VIP, чтобы не шуметь в бесплатном канале.
-        if grade in ["A+", "A"]:
-            free_text = self._format_free_teaser(signal, confidence, grade, signal_id)
+        # FREE teaser отправляем для любого публичного сигнала.
+        # Это синхронизирует FREE и VIP по факту появления нового сигнала
+        # (даже если полный сетап остаётся только в VIP).
+        free_text = self._format_free_teaser(signal, confidence, grade, signal_id)
 
-            await self._send_optional(
-                settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
-                free_text,
-                "free_teaser",
-            )
+        await self._send_optional(
+            settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
+            free_text,
+            "free_teaser",
+        )
 
-            free_sent = True
+        free_sent = True
 
         return {
             "ok": True,
