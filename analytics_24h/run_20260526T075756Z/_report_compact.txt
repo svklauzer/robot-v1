@@ -1,0 +1,20 @@
+RUN_DIR=/c/Users/svk/robot-v1/analytics_24h/run_20260526T075756Z
+UTC_TS=20260526T075756Z
+
+=== git_meta.txt ===
+# CMD: git rev-parse --short HEAD
+45582b6
+=== git_branch.txt ===
+# CMD: git branch --show-current
+main
+=== compose_ps.txt ===
+# CMD: docker compose ps
+NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS
+=== analytics_summary.json ===
+# GET http://localhost:8000/analytics/summary
+curl: (7) Failed to connect to localhost port 8000 after 2015 ms: Could not connect to server
+=== analytics_reason_breakdown.json ===
+# GET http://localhost:8000/analytics/reason-breakdown
+curl: (7) Failed to connect to localhost port 8000 after 2020 ms: Could not connect to server
+=== ml_outcomes_summary.json ===
+{"status": "degraded", "fallback_used": false, "reason": "ml_summary_python_failed", "python_bin": "python3"}
