@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
 
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 6.0
+    MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
+
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
@@ -89,6 +93,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
     FAILED_SETUP_LOSS_MID_PCT: float = -0.45
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
@@ -110,7 +118,6 @@ class Settings(BaseSettings):
     SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -172,13 +179,16 @@ class Settings(BaseSettings):
     LEARNING_SETUP_MIN_SCORE: float = 62.0
     LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 45.0
     LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 6.0
+
     ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = False
     MIN_TREND_CONTINUATION_SCORE: float = 58.0
     MIN_TREND_STRUCTURE_SCORE: float = 14.0
-    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 35.0
+
+    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 30.0
     LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
-    LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
+    LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 10.5
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
+ 
     # Paper/publish soft gates for already approved learning setups.
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
