@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     MIN_NET_PNL_TP2_USDT: float = 5.5
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
+
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
@@ -145,7 +146,6 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90
     PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.78
-
     PROD_GATE_A_MIN_RR_TP2: float = 1.35
 
     PROD_GATE_B_MIN_SETUP: float = 70.0
