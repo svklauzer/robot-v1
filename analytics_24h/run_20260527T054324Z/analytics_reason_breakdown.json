@@ -1,0 +1,2 @@
+# GET http://localhost:8000/analytics/reason-breakdown
+{"status":"ok","sample_closed_signals":27,"total_net_pnl_usdt":-20.786119,"items":[{"reason":"failed_setup_exit","count":20,"share_pct":74.07,"wins":0,"losses":20,"avg_result_pct":-0.8052,"sum_net_pnl_usdt":-21.559304,"avg_net_pnl_usdt":-1.077965,"sum_costs_usdt":12.045434,"pnl_share_pct":103.72},{"reason":"protective_breakeven_profit_guard","count":7,"share_pct":25.93,"wins":7,"losses":0,"avg_result_pct":0.0504,"sum_net_pnl_usdt":0.773185,"avg_net_pnl_usdt":0.110455,"sum_costs_usdt":6.931535,"pnl_share_pct":-3.72}]}
