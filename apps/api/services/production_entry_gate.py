@@ -57,6 +57,14 @@ class ProductionEntryGate:
             "priority_score": priority,
         }
 
+        # Defensive defaults to avoid any accidental unbound local usage
+        # if thresholds are later logged/refactored.
+        min_setup = None
+        min_confidence = None
+        min_rr1 = None
+        min_rr2 = None
+        min_priority = None
+
         if grade_value == "C":
             return ProductionGateDecision(
                 allowed=False,

@@ -144,7 +144,6 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_SETUP: float = 76.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90
-
     PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.78
 
     PROD_GATE_A_MIN_RR_TP2: float = 1.35
@@ -184,23 +183,6 @@ class Settings(BaseSettings):
     LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
-    # Paper/publish soft gates for already approved learning setups.
-    # Keep configurable to avoid deadlock when the market produces
-    # valid candidates with trend_alignment ~= 30.
-    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 3
-    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 5.0
-    PUBLISH_MIN_TREND_ALIGNMENT: float = 30.0
-    PUBLISH_MIN_ENTRY_TIMING: float = 12.0
-
-    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = False
-    MIN_TREND_CONTINUATION_SCORE: float = 58.0
-    MIN_TREND_STRUCTURE_SCORE: float = 14.0
-
-    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 30.0
-    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
-    LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 10.5
-    LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
- 
     # Paper/publish soft gates for already approved learning setups.
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
