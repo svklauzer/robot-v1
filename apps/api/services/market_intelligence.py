@@ -998,16 +998,16 @@ class MarketIntelligenceEngine:
         # В learning/dev слабый объём не должен убивать сделку полностью.
         if learning_mode:
             if weak_volume_count >= 5:
-                penalty += 7
+                penalty += 18
             elif weak_volume_count == 4:
-                penalty += 5
+                penalty += 12
             elif weak_volume_count == 3:
-                penalty += 3
+                penalty += 7
         else:
             if weak_volume_count >= 3:
-                penalty += 15
+                penalty += 20
             elif weak_volume_count == 2:
-                penalty += 8
+                penalty += 12
 
         structure_quality = min(scores.get("structure", 0), 100) * 0.25
         volatility_quality = min(scores.get("volatility", 0), 100) * 0.15
@@ -1049,15 +1049,12 @@ class MarketIntelligenceEngine:
                 decision = "approve"
                 comment = "learning_setup_approved"
             elif (
-                is_trend_candidate
-                and trend_alignment >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT", 30.0))
-                and volume_confirmation >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION", 2.0))
-                and structure_quality >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY", 10.5))
-                and trend_alignment >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT", 35.0))
-                and volume_confirmation >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION", 2.0))
-                and structure_quality >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY", 12.0))
-                and final_score >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE", 50.0))
-            ):
+              is_trend_candidate
+              and trend_alignment >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT", 35.0))
+              and volume_confirmation >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION", 2.0))
+              and structure_quality >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY", 12.0))
+              and final_score >= float(getattr(settings, "LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE", 50.0))
+            ):            
                 decision = "approve"
                 comment = "learning_trend_continuation_approved"
             elif final_score >= 45:
@@ -1076,6 +1073,11 @@ class MarketIntelligenceEngine:
             else:
                 decision = "reject"
                 comment = "setup_quality_too_low"
+
+        if not bool(getattr(settings, "ALLOW_WEAK_VOLUME_TREND_ENTRIES", False)):
+            if weak_volume_count >= 4 and normal_volume_count == 0 and strong_volume_count == 0 and decision == "approve":
+                decision = "wait"
+                comment = "weak_volume_block_applied"
 
         return {
             "trend_alignment": round(trend_alignment, 2),

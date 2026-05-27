@@ -20,7 +20,7 @@ from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
-from services.anti_drain_guard import AntiDrainConfig, should_open_signal
+
 from models.signal import Signal
 from models.position import Position
 from models.intelligence_event import IntelligenceEvent
