@@ -1,22 +1,106 @@
-RUN_DIR=/c/Users/svk/robot-v1/analytics_24h/run_20260527T054324Z
-UTC_TS=20260527T054324Z
+RUN_DIR=/workspace/robot-v1/analytics_24h/run_20260525T125510Z
+UTC_TS=20260525T125510Z
 
 === git_meta.txt ===
 # CMD: git rev-parse --short HEAD
-8ca1202
+203f976
 === git_branch.txt ===
 # CMD: git branch --show-current
-main
+work
 === compose_ps.txt ===
 # CMD: docker compose ps
-NAME               IMAGE          COMMAND                  SERVICE   CREATED             STATUS             PORTS
-robot-v1-api-1     robot-v1-api   "uvicorn main:app --…"   api       About an hour ago   Up About an hour   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
-robot-v1-db-1      postgres:16    "docker-entrypoint.s…"   db        About an hour ago   Up About an hour   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
-robot-v1-redis-1   redis:7        "docker-entrypoint.s…"   redis     About an hour ago   Up About an hour   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
-robot-v1-web-1     robot-v1-web   "docker-entrypoint.s…"   web       About an hour ago   Up About an hour   0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+./scripts/collect_run_report.sh: line 19: docker: command not found
 === analytics_summary.json ===
 # GET http://localhost:8000/analytics/summary
-{"total_signals":27,"active_signals":0,"closed_signals":27,"expired_signals":0,"rejected_signals":0,"wins":7,"losses":20,"winrate":25.93,"total_result_pct":-15.7513,"total_net_pnl_usdt":-20.786119,"avg_net_pnl_usdt":-0.769856,"total_costs_usdt":18.976969,"exposure":{"used_margin":0.0,"max_allowed_margin":760.0,"free_margin":760.0,"active_signals_count":0}}=== analytics_reason_breakdown.json ===
+curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
+=== analytics_reason_breakdown.json ===
 # GET http://localhost:8000/analytics/reason-breakdown
-{"status":"ok","sample_closed_signals":27,"total_net_pnl_usdt":-20.786119,"items":[{"reason":"failed_setup_exit","count":20,"share_pct":74.07,"wins":0,"losses":20,"avg_result_pct":-0.8052,"sum_net_pnl_usdt":-21.559304,"avg_net_pnl_usdt":-1.077965,"sum_costs_usdt":12.045434,"pnl_share_pct":103.72},{"reason":"protective_breakeven_profit_guard","count":7,"share_pct":25.93,"wins":7,"losses":0,"avg_result_pct":0.0504,"sum_net_pnl_usdt":0.773185,"avg_net_pnl_usdt":0.110455,"sum_costs_usdt":6.931535,"pnl_share_pct":-3.72}]}=== ml_outcomes_summary.json ===
-{"status": "degraded", "fallback_used": false, "reason": "ml_summary_python_failed", "python_bin": "python3"}
+curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
+=== ml_outcomes_summary.json ===
+{
+  "total_rows": 90,
+  "closed_rows": 90,
+  "net_pnl_sum": -96.208143,
+  "winrate_pct": 45.56,
+  "wins": 41,
+  "losses": 49,
+  "closed_reason_top": [
+    [
+      "failed_setup_exit",
+      47
+    ],
+    [
+      "protective_breakeven_profit_guard",
+      37
+    ],
+    [
+      "adaptive_trailing_stop",
+      3
+    ],
+    [
+      "stop_loss",
+      2
+    ],
+    [
+      "tp2_reached",
+      1
+    ]
+  ],
+  "symbol_pnl": [
+    {
+      "symbol": "SOL/USDT",
+      "count": 9,
+      "net_pnl": -17.681298
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "count": 8,
+      "net_pnl": -14.035086
+    },
+    {
+      "symbol": "ETH/USDT",
+      "count": 5,
+      "net_pnl": -10.686827
+    },
+    {
+      "symbol": "XRP/USDT",
+      "count": 7,
+      "net_pnl": -10.46274
+    },
+    {
+      "symbol": "TON/USDT",
+      "count": 23,
+      "net_pnl": -9.55633
+    },
+    {
+      "symbol": "LINK/USDT",
+      "count": 12,
+      "net_pnl": -9.491556
+    },
+    {
+      "symbol": "DOT/USDT",
+      "count": 14,
+      "net_pnl": -8.615151
+    },
+    {
+      "symbol": "BTC/USDT",
+      "count": 8,
+      "net_pnl": -8.12691
+    },
+    {
+      "symbol": "DOGE/USDT",
+      "count": 2,
+      "net_pnl": -2.942533
+    },
+    {
+      "symbol": "ADA/USDT",
+      "count": 1,
+      "net_pnl": -2.690775
+    },
+    {
+      "symbol": "LTC/USDT",
+      "count": 1,
+      "net_pnl": -1.918937
+    }
+  ]
+}

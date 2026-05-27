@@ -90,8 +90,12 @@ class ProductionEntryGate:
         if grade_value == "A":
             min_setup = float(getattr(settings, "PROD_GATE_A_MIN_SETUP", 76.0))
             min_confidence = float(getattr(settings, "PROD_GATE_A_MIN_CONFIDENCE", 70.0))
-            min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
-            min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
+            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
+            if trading_mode in ["paper_signal", "paper_trade"]:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.78))
+            else:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
+                min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "a_setup_too_weak", payload)
