@@ -38,6 +38,18 @@ class SignalLifecycleManager:
         # self.outcome_logger = TradeOutcomeLogger()
         self.freshness = SignalFreshnessService()
 
+    def _signal_age_sec(self, lifecycle: dict | None) -> float | None:
+        if not isinstance(lifecycle, dict):
+            return None
+        first_seen_at = lifecycle.get("first_seen_at")
+        if not first_seen_at:
+            return None
+        try:
+            ts = datetime.fromisoformat(str(first_seen_at).replace("Z", "+00:00"))
+            return max((datetime.now(timezone.utc) - ts).total_seconds(), 0.0)
+        except Exception:
+            return None
+
     def _get_open_position_for_signal(self, db, signal: Signal):
         return (
             db.query(Position)
@@ -475,6 +487,7 @@ class SignalLifecycleManager:
                 max_profit_price=lifecycle.get("max_profit_price"),
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
+                signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
             if exit_decision.exit:
@@ -550,6 +563,7 @@ class SignalLifecycleManager:
                 lifecycle=lifecycle,
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
+                signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
             if exit_decision.exit:
@@ -1238,6 +1252,7 @@ class SignalLifecycleManager:
                 max_profit_price=lifecycle.get("max_profit_price"),
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
+                signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
             if exit_decision.exit:
@@ -1313,6 +1328,7 @@ class SignalLifecycleManager:
                 lifecycle=lifecycle,
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
+                signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
             if exit_decision.exit:
