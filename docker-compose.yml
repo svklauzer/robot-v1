@@ -26,7 +26,7 @@ services:
       - "8000:8000"
     volumes:
       - ./storage/ml:/app/storage/ml
-
+      - ./analytics_24h:/app/analytics_24h
   web:
     build: ./apps/web
     env_file:

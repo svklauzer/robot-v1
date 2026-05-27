@@ -1,0 +1,2 @@
+# CMD: git rev-parse --short HEAD
+8ca1202

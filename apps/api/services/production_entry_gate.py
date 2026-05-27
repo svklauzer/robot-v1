@@ -87,7 +87,7 @@ class ProductionEntryGate:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER", 0.84))
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1", 0.95))
-            min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
+                min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "a_plus_setup_too_weak", payload)
@@ -107,7 +107,7 @@ class ProductionEntryGate:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.78))
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
-            min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
+                min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "a_setup_too_weak", payload)
