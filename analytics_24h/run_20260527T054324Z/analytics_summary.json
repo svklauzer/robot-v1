@@ -1,0 +1,2 @@
+# GET http://localhost:8000/analytics/summary
+{"total_signals":27,"active_signals":0,"closed_signals":27,"expired_signals":0,"rejected_signals":0,"wins":7,"losses":20,"winrate":25.93,"total_result_pct":-15.7513,"total_net_pnl_usdt":-20.786119,"avg_net_pnl_usdt":-0.769856,"total_costs_usdt":18.976969,"exposure":{"used_margin":0.0,"max_allowed_margin":760.0,"free_margin":760.0,"active_signals_count":0}}
