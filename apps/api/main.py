@@ -2286,6 +2286,7 @@ def intelligence_scan_readonly():
                     setup_score=setup_score,
                     effective_confidence=item["effective_confidence"],
                     setup_decision=result.setup_decision,
+                    setup_quality=result.setup_quality,
                 ):
                     item["status"] = "rejected"
                     item["decision"] = "quality_grade_too_low"
@@ -2439,6 +2440,8 @@ async def intelligence_scan_run():
         quality = SignalQualityService()
         memory = IntelligenceMemory()
         performance_guard = SymbolPerformanceGuard()
+        production_gate = ProductionEntryGate()
+        reentry_guard = ReEntryCooldownGuard()
         priority = CandidatePriorityService()
         publish_queue = []
         published_count = 0
@@ -2636,6 +2639,7 @@ async def intelligence_scan_run():
                     setup_score=setup_score,
                     effective_confidence=effective_confidence,
                     setup_decision=result.setup_decision,
+                    setup_quality=result.setup_quality,
                 ):
                     item["status"] = "rejected"
                     item["decision"] = "quality_grade_too_low"
@@ -3133,6 +3137,35 @@ async def intelligence_scan_run():
 
             published_count += 1
 
+        # Diagnostics: why candidates are not published in this scan.
+        decision_counts = {}
+        for r in results:
+            d = str(r.get("decision") or "unknown")
+            decision_counts[d] = decision_counts.get(d, 0) + 1
+
+        rr_tp1_rejected_a = []
+        for r in results:
+            if str(r.get("status")) != "wait":
+                continue
+            if str(r.get("decision")) != "a_rr_tp1_too_low":
+                continue
+            gate = r.get("production_gate") or {}
+            grade = str(gate.get("grade") or r.get("grade") or "")
+            if grade in ["A", "A+"]:
+                try:
+                    rr_tp1_rejected_a.append(float(gate.get("net_rr_tp1")))
+                except Exception:
+                    pass
+
+        rr_tp1_rejected_a.sort()
+        median_rr_tp1_rejected_a = None
+        if rr_tp1_rejected_a:
+            n = len(rr_tp1_rejected_a)
+            if n % 2 == 1:
+                median_rr_tp1_rejected_a = rr_tp1_rejected_a[n // 2]
+            else:
+                median_rr_tp1_rejected_a = round((rr_tp1_rejected_a[n // 2 - 1] + rr_tp1_rejected_a[n // 2]) / 2.0, 6)
+
         ranked_summary = [
             {
                 "symbol": item.get("symbol"),
@@ -3168,6 +3201,11 @@ async def intelligence_scan_run():
             "published": published,
             "ranked": ranked_summary,
             "results": results,
+            "diagnostics": {
+                "decision_counts": decision_counts,
+                "median_rr_tp1_rejected_a_a_plus": median_rr_tp1_rejected_a,
+                "rejected_a_a_plus_rr_tp1_samples": rr_tp1_rejected_a,
+            },
         }
 
     finally:
@@ -3510,3 +3548,36 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
 def ml_outcomes_summary():
     service = MLOutcomeStatsService()
     return service.summary()   
+
+
+@app.get("/analytics/grade-c-audit")
+def analytics_grade_c_audit(date_from: str | None = None):
+    """Count new Grade C trades/signals after a date."""
+    db = SessionLocal()
+    try:
+        q = db.query(Signal)
+        if date_from:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(str(date_from).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            q = q.filter(Signal.created_at >= dt)
+
+        total = q.count()
+        grade_c = q.filter(Signal.grade == "C").count()
+        opened_like = q.filter(Signal.status.in_(["published", "opened", "tp1", "breakeven", "closed"]))
+        opened_total = opened_like.count()
+        opened_c = opened_like.filter(Signal.grade == "C").count()
+
+        return {
+            "status": "ok",
+            "date_from": date_from,
+            "total_signals": total,
+            "grade_c_signals": grade_c,
+            "grade_c_share_pct": round((grade_c / total * 100), 2) if total else 0.0,
+            "opened_family_total": opened_total,
+            "opened_family_grade_c": opened_c,
+            "opened_family_grade_c_share_pct": round((opened_c / opened_total * 100), 2) if opened_total else 0.0,
+        }
+    finally:
+        db.close()
