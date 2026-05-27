@@ -79,7 +79,6 @@ class Settings(BaseSettings):
     MIN_NET_PNL_TP2_USDT: float = 6.0
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
-
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
@@ -93,42 +92,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_MID_PCT: float = -0.80
     FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
     FAILED_SETUP_MIN_AGE_SEC: int = 600
-
-    # MFE-протекция и частичная фиксация в процентах.
-    PROTECTIVE_MFE_START_PCT: float = 0.45
-    PROTECTIVE_DRAWDOWN_SHARE: float = 0.60
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 1.20
-    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.55
-
-    # =========================
-    # SYMBOL PERFORMANCE GUARD
-    # =========================
-    SYMBOL_PERF_LOOKBACK: int = 12
-    SYMBOL_PERF_MIN_HISTORY: int = 3
-    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
-    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 40.0
-    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
-    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
-    SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
-    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
-    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
-    SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
-    SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
-
-    # =========================
-    # EXECUTION PLAN V1 TUNING
-    # =========================
-    # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
-    FAILED_SETUP_MFE_MID_PCT: float = 0.45
-    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
-
-    # Пороги убытка для принудительного закрытия слабого setup до TP1.
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
-    FAILED_SETUP_MIN_AGE_SEC: int = 600
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
+    FAILED_SETUP_MIN_AGE_SEC: int = 180
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.45
@@ -150,9 +117,6 @@ class Settings(BaseSettings):
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
-
-
-
 
     # =========================
     # ANTI-DRAIN ENTRY GUARD
@@ -214,6 +178,11 @@ class Settings(BaseSettings):
     LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 10.5
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
+    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 35.0
+    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
+    LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
+    LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
+
     # Paper/publish soft gates for already approved learning setups.
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
