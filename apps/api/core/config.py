@@ -79,7 +79,6 @@ class Settings(BaseSettings):
     MIN_NET_PNL_TP2_USDT: float = 5.5
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
-
     # =========================
     # EXECUTION PLAN V1 TUNING
     # =========================
@@ -89,6 +88,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
     FAILED_SETUP_LOSS_MID_PCT: float = -0.45
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
@@ -110,7 +113,6 @@ class Settings(BaseSettings):
     SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -143,6 +145,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90
     PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.78
+
     PROD_GATE_A_MIN_RR_TP2: float = 1.35
 
     PROD_GATE_B_MIN_SETUP: float = 70.0
