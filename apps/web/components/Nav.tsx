@@ -11,7 +11,8 @@ const items = [
   { href: "/health", label: "Health" },
   { href: "/intelligence", label: "Intelligence" },
   { href: "/analytics", label: "Analytics" },
-  { href: "/positions", label: "Positions" }
+  { href: "/positions", label: "Positions" },
+  { href: "/payments", label: "Payments" }
 ];
 
 export default function Nav() {
