@@ -163,6 +163,8 @@ class Settings(BaseSettings):
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
     MAX_POSITION_MARGIN_PCT: float = 0.35
+    MIN_NET_PNL_TP1_USDT: float = 2.5
+    MIN_NET_PNL_TP2_USDT: float = 5.5
 
     # Таймфрейм и буферы для построения уровней входа/стопа/тейков.
     LEVELS_ENTRY_TF: str = "5m"

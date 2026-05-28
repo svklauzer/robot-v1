@@ -3149,13 +3149,21 @@ async def intelligence_scan_run():
             if status not in {"wait", "rejected", "blocked"}:
                 continue
             decision = str(r.get("decision") or "")
-            if decision not in {"a_rr_tp1_too_low", "a_plus_rr_tp1_too_low"}:
+            if decision not in {
+                "a_rr_tp1_too_low",
+                "a_plus_rr_tp1_too_low",
+                "quality_grade_too_low",
+            }:
                 continue
             gate = r.get("production_gate") or {}
             grade = str(gate.get("grade") or r.get("grade") or "")
             if grade in ["A", "A+"]:
                 try:
-                    rr_tp1_rejected_a.append(float(gate.get("net_rr_tp1")))
+                    rr_candidate = gate.get("net_rr_tp1")
+                    if rr_candidate is None:
+                        rr_candidate = (r.get("plan") or {}).get("net_rr_tp1")
+                    if rr_candidate is not None:
+                        rr_tp1_rejected_a.append(float(rr_candidate))
                 except Exception:
                     pass
 
