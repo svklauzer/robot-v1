@@ -448,12 +448,22 @@ class SignalLifecycleManager:
                         f"\nRR TP2: {signal_plan.get('net_rr_tp2')}"
                     )
 
-                await self.router.publish_signal_update(
-                    symbol=signal.symbol,
-                    text_status=f"📥 Позиция активирована | Signal #{signal.id}",
-                    extra=extra,
-                    grade=signal.grade,
-                )
+                # Idempotency guard: avoid repeated "position activated" updates
+                # when lifecycle processing is retried/concurrent.
+                signal.plan_json = signal.plan_json or {}
+                lifecycle_state = signal.plan_json.get("lifecycle") or {}
+                entry_notified = bool(lifecycle_state.get("entry_notified"))
+
+                if not entry_notified:
+                    await self.router.publish_signal_update(
+                        symbol=signal.symbol,
+                        text_status=f"📥 Позиция активирована | Signal #{signal.id}",
+                        extra=extra,
+                        grade=signal.grade,
+                    )
+                    lifecycle_state["entry_notified"] = True
+                    signal.plan_json["lifecycle"] = lifecycle_state
+                    flag_modified(signal, "plan_json")
 
                 db.flush()
 
@@ -906,22 +916,6 @@ class SignalLifecycleManager:
                 },
             )
 
-        if ml_log_result.get("status") not in ["logged", "skipped"]:
-            self.decisions.record(
-                db,
-                symbol=signal.symbol,
-                status="warning",
-                decision="ml_trade_log_failed",
-                action=signal.side,
-                payload={
-                    "signal_id": signal.id,
-                    "symbol": signal.symbol,
-                    "side": signal.side,
-                    "error": ml_log_result.get("error"),
-                    "ml_log_result": ml_log_result,
-                },
-            )
-
         emoji = "✅" if result_pct >= 0 else "🛑"
 
         extra = f"Результат: {result_pct}%\nПричина: {reason}"
@@ -1190,12 +1184,20 @@ class SignalLifecycleManager:
                         f"\nRR TP2: {signal_plan.get('net_rr_tp2')}"
                     )
 
-                await self.router.publish_signal_update(
-                    symbol=signal.symbol,
-                    text_status=f"📥 Позиция активирована | Signal #{signal.id}",
-                    extra=extra,
-                    grade=signal.grade,
-                )
+                signal.plan_json = signal.plan_json or {}
+                lifecycle_state = signal.plan_json.get("lifecycle") or {}
+                entry_notified = bool(lifecycle_state.get("entry_notified"))
+
+                if not entry_notified:
+                    await self.router.publish_signal_update(
+                        symbol=signal.symbol,
+                        text_status=f"📥 Позиция активирована | Signal #{signal.id}",
+                        extra=extra,
+                        grade=signal.grade,
+                    )
+                    lifecycle_state["entry_notified"] = True
+                    signal.plan_json["lifecycle"] = lifecycle_state
+                    flag_modified(signal, "plan_json")
 
                 db.flush()
 
