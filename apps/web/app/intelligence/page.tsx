@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import { RefreshCw } from "lucide-react";
 
@@ -129,9 +129,7 @@ export default function IntelligencePage() {
   }, [results, importantEvents]);
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <Nav />
+    <AppShell>
 
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -226,8 +224,7 @@ export default function IntelligencePage() {
             )}
           </div>
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
 
