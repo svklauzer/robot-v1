@@ -1,22 +1,59 @@
-RUN_DIR=/workspace/robot-v1/analytics_24h/run_20260528T124709Z
-UTC_TS=20260528T124709Z
+# Robot run report (LLM compact)
 
-=== git_meta.txt ===
-# CMD: git rev-parse --short HEAD
-c2ae323
-=== git_branch.txt ===
-# CMD: git branch --show-current
-work
-=== compose_ps.txt ===
+- run_dir: /workspace/robot-v1/analytics_24h/run_20260528T124709Z
+- utc_ts: 20260528T124709Z
+
+## files
+_report_compact.txt
+_report_for_chat.md
+analytics_reason_breakdown.json
+analytics_signal_quality.json
+analytics_summary.json
+bot_state.json
+compose_logs_api_tail.txt
+compose_logs_web_tail.txt
+compose_ps.txt
+git_branch.txt
+git_meta.txt
+git_status.txt
+health.json
+intelligence_events.json
+loop_state.json
+ml_outcomes_summary.json
+ml_outcomes_tail.txt
+ml_outcomes_wc.txt
+positions_latest.json
+signals_latest.json
+utc_time.txt
+
+### git_status.txt
+# CMD: git status --short --branch
+## work
+ M scripts/collect_run_report.sh
+?? analytics_24h/run_20260528T124709Z/
+?? apps/web/node_modules/
+
+### compose_ps.txt
 # CMD: docker compose ps
 ./scripts/collect_run_report.sh: line 19: docker: command not found
-=== analytics_summary.json ===
+
+### health.json
+# GET http://localhost:8000/health
+curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
+
+### analytics_summary.json
 # GET http://localhost:8000/analytics/summary
 curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
-=== analytics_reason_breakdown.json ===
+
+### analytics_reason_breakdown.json
 # GET http://localhost:8000/analytics/reason-breakdown
 curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
-=== ml_outcomes_summary.json ===
+
+### analytics_signal_quality.json
+# GET http://localhost:8000/analytics/signal-quality
+curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
+
+### ml_outcomes_summary.json
 {
   "total_rows": 90,
   "closed_rows": 90,
@@ -104,3 +141,12 @@ curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect 
     }
   ]
 }
+
+### compose_logs_api_tail.txt
+# CMD: bash -lc docker compose logs --since=8h api | tail -n 2000
+bash: command not found: docker
+
+### compose_logs_web_tail.txt
+# CMD: bash -lc docker compose logs --since=8h web | tail -n 600
+bash: command not found: docker
+

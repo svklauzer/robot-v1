@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 
 class MLTradeLogger:
     def __init__(self, path: str = "/app/storage/ml/trade_outcomes.jsonl"):
-        self.path = Path(path)
+        p = Path(path)
+        if p.is_absolute() and not p.parent.exists():
+            # Fallback for non-container/local runs where /app is not mounted.
+            p = Path("storage/ml/trade_outcomes.jsonl")
+        self.path = p
 
     def _already_logged(self, signal_id: int) -> bool:
         if not self.path.exists():
