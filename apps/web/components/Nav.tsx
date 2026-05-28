@@ -6,7 +6,9 @@ const items = [
   { href: "/signals", label: "Signals" },
   { href: "/reports", label: "Reports" },
   { href: "/health", label: "Health" },
-  { href: "/intelligence", label: "Intelligence" }
+  { href: "/intelligence", label: "Intelligence" },
+  { href: "/analytics", label: "Analytics" },
+  { href: "/positions", label: "Positions" }
 ];
 
 export default function Nav() {
