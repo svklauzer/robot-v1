@@ -24,6 +24,7 @@ from models.order import Order
 from models.position import Position
 from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
+from models.telegram_delivery import TelegramDelivery
 
 from workers.robot_loop import RobotLoop
 from services.signal_broadcaster import SignalBroadcaster
@@ -35,6 +36,7 @@ from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
 from services.report_service import ReportService
 from services.subscription_watchdog import SubscriptionWatchdog
+from services.telegram_delivery_log import TelegramDeliveryLog
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -127,7 +129,13 @@ class UpdateSubscriberStatusRequest(BaseModel):
 
 class ExposureDebugRequest(BaseModel):
     symbol: str = "BTC/USDT"
-    required_margin: float = 333.0    
+    required_margin: float = 333.0
+
+
+class TelegramWebhookRequest(BaseModel):
+    update_id: int | None = None
+    message: dict | None = None
+    callback_query: dict | None = None
 
 async def background_robot_loop():
     global robot_loop_enabled
@@ -1389,6 +1397,8 @@ def system_health():
         active_subscribers = db.query(Subscriber).filter(Subscriber.status == "active").count()
         expired_subscribers = db.query(Subscriber).filter(Subscriber.status == "expired").count()
         blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
+        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        production_blockers = settings.production_blockers()
 
         market_status = {}
 
@@ -1445,8 +1455,158 @@ def system_health():
                 "expired": expired_subscribers,
                 "blocked": blocked_subscribers,
             },
+            "telegram_delivery": telegram_delivery,
+            "production_readiness": {
+                "ready": len(production_blockers) == 0,
+                "blockers": production_blockers,
+                "live_enabled": settings.is_live_enabled,
+            },
         }
 
+    finally:
+        db.close()
+
+@app.get("/system/readiness")
+def system_readiness():
+    db = SessionLocal()
+
+    try:
+        analytics = analytics_summary()
+        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        blockers = list(settings.production_blockers())
+
+        if analytics.get("total_net_pnl_usdt", 0) < 0:
+            blockers.append("rolling net PnL is negative")
+        if analytics.get("closed_signals", 0) < 200 and settings.is_live_enabled:
+            blockers.append("live mode requires at least 200 closed validation signals")
+        if telegram_delivery.get("failed", 0) > 0:
+            blockers.append("telegram delivery has failures in the last 24h")
+
+        return {
+            "status": "ready" if not blockers else "blocked",
+            "ready": not blockers,
+            "blockers": blockers,
+            "analytics": analytics,
+            "telegram_delivery": telegram_delivery,
+            "required_gates": {
+                "closed_validation_signals": 200,
+                "failed_setup_exit_share_max_pct": 35.0,
+                "positive_then_negative_max_pct": 25.0,
+                "telegram_delivery_sla_min_pct": 99.0,
+            },
+        }
+
+    finally:
+        db.close()
+
+
+def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> str:
+    command = command.lower().strip()
+
+    if command in ["/start", "/menu"]:
+        return (
+            "🤖 Finmt Robot\n\n"
+            "Меню:\n"
+            "/plans — тарифы VIP\n"
+            "/pay — как оплатить доступ\n"
+            "/status — статус подписки\n"
+            "/help — FAQ и риски\n"
+            "/support — поддержка"
+        )
+
+    if command == "/plans":
+        return (
+            "💎 VIP планы\n\n"
+            "VIP 30 дней — полный сигнал, уровни, сопровождение и отчёты.\n"
+            "VIP 90 дней — тот же доступ с долгим периодом.\n\n"
+            "Нажмите /pay для инструкции по оплате."
+        )
+
+    if command == "/pay":
+        invite = settings.VIP_INVITE_LINK or "будет выдана после подтверждения оплаты"
+        return (
+            "💳 Оплата VIP\n\n"
+            "Автоматический checkout будет подключён следующим этапом. "
+            "Для тестирования/ручной оплаты отправьте owner подтверждение оплаты.\n"
+            f"VIP invite: {invite}"
+        )
+
+    if command == "/status":
+        if not subscriber:
+            return "Статус: подписка не найдена. Нажмите /plans или /pay."
+        return (
+            "📌 Статус подписки\n\n"
+            f"Plan: {subscriber.plan}\n"
+            f"Status: {subscriber.status}\n"
+            f"Expires: {subscriber.expires_at}"
+        )
+
+    if command == "/help":
+        return (
+            "ℹ️ FAQ и риски\n\n"
+            "Сигналы не являются финансовой рекомендацией. "
+            "Используйте риск-менеджмент и не торгуйте средствами, которые не готовы потерять. "
+            "Перед live-режимом система проходит paper/live-shadow gates."
+        )
+
+    if command == "/support":
+        return "Поддержка: напишите owner/admin канала с вашим Telegram ID."
+
+    return "Неизвестная команда. Нажмите /menu."
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(payload: TelegramWebhookRequest):
+    message = payload.message or {}
+    callback = payload.callback_query or {}
+
+    if callback:
+        message = callback.get("message") or {}
+        text = callback.get("data") or "/menu"
+        user = callback.get("from") or {}
+    else:
+        text = str(message.get("text") or "/menu")
+        user = message.get("from") or {}
+
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id") or user.get("id")
+    telegram_user_id = str(user.get("id") or chat_id or "")
+
+    db = SessionLocal()
+    try:
+        subscriber = None
+        if telegram_user_id:
+            subscriber = (
+                db.query(Subscriber)
+                .filter(Subscriber.telegram_user_id == telegram_user_id)
+                .first()
+            )
+
+        response_text = _telegram_menu_text(text.split()[0], subscriber=subscriber)
+
+        if chat_id:
+            await SignalBroadcaster().send_message(
+                chat_id=chat_id,
+                text=response_text,
+                message_type="bot_menu",
+            )
+
+        return {
+            "status": "ok",
+            "command": text.split()[0] if text else "/menu",
+            "telegram_user_id": telegram_user_id,
+            "subscriber_found": subscriber is not None,
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
