@@ -25,6 +25,7 @@ from models.position import Position
 from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
 from models.telegram_delivery import TelegramDelivery
+from models.payment import BillingPlan, Payment
 
 from workers.robot_loop import RobotLoop
 from services.signal_broadcaster import SignalBroadcaster
@@ -37,6 +38,7 @@ from services.telegram_router import TelegramRouter
 from services.report_service import ReportService
 from services.subscription_watchdog import SubscriptionWatchdog
 from services.telegram_delivery_log import TelegramDeliveryLog
+from services.billing_service import BillingService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -137,6 +139,20 @@ class TelegramWebhookRequest(BaseModel):
     message: dict | None = None
     callback_query: dict | None = None
 
+
+class CreateCheckoutRequest(BaseModel):
+    telegram_user_id: str
+    plan_code: str = "vip_30"
+    username: str | None = None
+    full_name: str | None = None
+    provider: str = "manual"
+    notes: str | None = None
+
+
+class ManualConfirmPaymentRequest(BaseModel):
+    provider_event_id: str | None = None
+    raw_payload: str | None = None
+
 async def background_robot_loop():
     global robot_loop_enabled
 
@@ -178,6 +194,7 @@ async def lifespan(app: FastAPI):
 
     Base.metadata.create_all(bind=engine)
     bootstrap_owner_and_bot()
+    bootstrap_billing_plans()
 
     robot_loop_enabled = True
     robot_task = asyncio.create_task(background_robot_loop())
@@ -208,6 +225,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def bootstrap_billing_plans():
+    db: Session = SessionLocal()
+
+    try:
+        BillingService().ensure_default_plans(db)
+        db.commit()
+    finally:
+        db.close()
+
 
 def bootstrap_owner_and_bot():
     db: Session = SessionLocal()
@@ -1398,6 +1425,7 @@ def system_health():
         expired_subscribers = db.query(Subscriber).filter(Subscriber.status == "expired").count()
         blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        payments_summary = BillingService().summary(db)
         production_blockers = settings.production_blockers()
 
         market_status = {}
@@ -1456,6 +1484,7 @@ def system_health():
                 "blocked": blocked_subscribers,
             },
             "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
             "production_readiness": {
                 "ready": len(production_blockers) == 0,
                 "blockers": production_blockers,
@@ -1466,6 +1495,104 @@ def system_health():
     finally:
         db.close()
 
+@app.get("/payments/plans")
+def list_payment_plans():
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        plans = service.list_plans(db)
+        db.commit()
+        return [service.serialize_plan(plan) for plan in plans]
+    finally:
+        db.close()
+
+
+@app.post("/payments/checkout")
+def create_payment_checkout(payload: CreateCheckoutRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment = service.create_checkout(
+            db=db,
+            telegram_user_id=payload.telegram_user_id,
+            plan_code=payload.plan_code,
+            username=payload.username,
+            full_name=payload.full_name,
+            provider=payload.provider,
+            notes=payload.notes,
+        )
+        db.commit()
+        db.refresh(payment)
+        return {"status": "ok", "payment": service.serialize_payment(payment)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments")
+def list_payments(limit: int = 100, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(Payment)
+        if status:
+            query = query.filter(Payment.status == status)
+        payments = query.order_by(Payment.id.desc()).limit(limit).all()
+        service = BillingService()
+        return {
+            "summary": service.summary(db),
+            "items": [service.serialize_payment(payment) for payment in payments],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/payments/{payment_id}/manual-confirm")
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment, subscriber, activated = service.confirm_payment(
+            db=db,
+            payment_id=payment_id,
+            provider_event_id=payload.provider_event_id if payload else None,
+            raw_payload=payload.raw_payload if payload else None,
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/summary")
+def payments_summary():
+    db = SessionLocal()
+    try:
+        return BillingService().summary(db)
+    finally:
+        db.close()
+
 @app.get("/system/readiness")
 def system_readiness():
     db = SessionLocal()
@@ -1473,6 +1600,7 @@ def system_readiness():
     try:
         analytics = analytics_summary()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        payments_summary = BillingService().summary(db)
         blockers = list(settings.production_blockers())
 
         if analytics.get("total_net_pnl_usdt", 0) < 0:
@@ -1488,6 +1616,7 @@ def system_readiness():
             "blockers": blockers,
             "analytics": analytics,
             "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
             "required_gates": {
                 "closed_validation_signals": 200,
                 "failed_setup_exit_share_max_pct": 35.0,
@@ -1523,12 +1652,10 @@ def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> s
         )
 
     if command == "/pay":
-        invite = settings.VIP_INVITE_LINK or "будет выдана после подтверждения оплаты"
         return (
             "💳 Оплата VIP\n\n"
-            "Автоматический checkout будет подключён следующим этапом. "
-            "Для тестирования/ручной оплаты отправьте owner подтверждение оплаты.\n"
-            f"VIP invite: {invite}"
+            "Напишите /pay vip_30 или /pay vip_90, чтобы создать pending checkout. "
+            "Owner сможет подтвердить оплату в разделе Payments."
         )
 
     if command == "/status":
@@ -1582,7 +1709,36 @@ async def telegram_webhook(payload: TelegramWebhookRequest):
                 .first()
             )
 
-        response_text = _telegram_menu_text(text.split()[0], subscriber=subscriber)
+        command_parts = text.split()
+        command = command_parts[0] if command_parts else "/menu"
+
+        if command == "/pay" and telegram_user_id:
+            plan_code = command_parts[1] if len(command_parts) > 1 else "vip_30"
+            try:
+                payment = BillingService().create_checkout(
+                    db=db,
+                    telegram_user_id=telegram_user_id,
+                    plan_code=plan_code,
+                    username=user.get("username"),
+                    full_name=" ".join(
+                        part for part in [user.get("first_name"), user.get("last_name")] if part
+                    ) or None,
+                    provider="manual",
+                    notes="telegram_menu_checkout",
+                )
+                db.commit()
+                response_text = (
+                    "💳 Checkout создан\n\n"
+                    f"Payment ID: #{payment.id}\n"
+                    f"Plan: {payment.plan_code}\n"
+                    f"Amount: {payment.amount} {payment.currency}\n"
+                    "После оплаты owner подтвердит платеж, и VIP будет активирован автоматически."
+                )
+            except Exception as e:
+                db.rollback()
+                response_text = f"Не удалось создать checkout: {type(e).__name__}: {e}"
+        else:
+            response_text = _telegram_menu_text(command, subscriber=subscriber)
 
         if chat_id:
             await SignalBroadcaster().send_message(
@@ -1593,7 +1749,7 @@ async def telegram_webhook(payload: TelegramWebhookRequest):
 
         return {
             "status": "ok",
-            "command": text.split()[0] if text else "/menu",
+            "command": command,
             "telegram_user_id": telegram_user_id,
             "subscriber_found": subscriber is not None,
         }
