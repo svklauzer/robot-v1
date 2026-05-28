@@ -20,7 +20,13 @@ class ProductionEntryGate:
     - setup должен быть достаточно сильным;
     - confidence должен быть достаточным;
     - B-сигналы должны быть сильно лучше по RR.
+
+    Режимы торговли (TRADING_MODE):
+    - paper_signal / paper_trade  → используются _PAPER пороги (мягче, для накопления ML)
+    - live / live_signal          → используются боевые пороги (строже)
     """
+
+    IS_PAPER_MODES = {"paper_signal", "paper_trade"}
 
     def _safe_float(self, value, default: float = 0.0) -> float:
         try:
@@ -29,6 +35,10 @@ class ProductionEntryGate:
             return float(value)
         except Exception:
             return default
+
+    def _is_paper(self) -> bool:
+        trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
+        return trading_mode in self.IS_PAPER_MODES
 
     def check(
         self,
@@ -57,13 +67,14 @@ class ProductionEntryGate:
             "priority_score": priority,
         }
 
-        # Defensive numeric defaults to avoid any accidental None comparisons
-        # if thresholds are later logged/refactored.
+        # Defensive numeric defaults
         min_setup = 0.0
         min_confidence = 0.0
         min_rr1 = 0.0
         min_rr2 = 0.0
         min_priority = 0.0
+
+        is_paper = self._is_paper()
 
         if grade_value == "C":
             return ProductionGateDecision(
@@ -79,12 +90,16 @@ class ProductionEntryGate:
                 payload=payload,
             )
 
+        # ── Grade A+ ────────────────────────────────────────────────────────────
         if grade_value == "A+":
             min_setup = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_SETUP", 82.0))
             min_confidence = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_CONFIDENCE", 74.0))
-            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-            if trading_mode in ["paper_signal", "paper_trade"]:
+
+            if is_paper:
+                # БАГ ИСПРАВЛЕН: в оригинале min_rr2 оставался 0.0 в paper-ветке
+                # и проверка rr2 < 0.0 никогда не срабатывала
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER", 0.84))
+                min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER", 1.30))
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1", 0.95))
                 min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
@@ -99,14 +114,17 @@ class ProductionEntryGate:
                 return ProductionGateDecision(False, "a_plus_rr_tp2_too_low", payload)
             return ProductionGateDecision(True, "a_plus_passed", payload)
 
+        # ── Grade A ─────────────────────────────────────────────────────────────
         if grade_value == "A":
             min_setup = float(getattr(settings, "PROD_GATE_A_MIN_SETUP", 76.0))
             min_confidence = float(getattr(settings, "PROD_GATE_A_MIN_CONFIDENCE", 70.0))
-            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-            if trading_mode in ["paper_signal", "paper_trade"]:
+
+            if is_paper:
+                # БАГ ИСПРАВЛЕН: та же проблема — min_rr2 был 0.0
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.78))
+                min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2_PAPER", 1.20))
             else:
-                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.90))
                 min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
 
             if setup < min_setup:
@@ -119,12 +137,18 @@ class ProductionEntryGate:
                 return ProductionGateDecision(False, "a_rr_tp2_too_low", payload)
             return ProductionGateDecision(True, "a_passed", payload)
 
+        # ── Grade B ─────────────────────────────────────────────────────────────
         if grade_value == "B":
             min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 70.0))
             min_confidence = float(getattr(settings, "PROD_GATE_B_MIN_CONFIDENCE", 60.0))
-            min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.8))
-            min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.25))
             min_priority = float(getattr(settings, "PROD_GATE_B_MIN_PRIORITY", 85.0))
+
+            if is_paper:
+                min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1_PAPER", 0.75))
+                min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2_PAPER", 1.15))
+            else:
+                min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.85))
+                min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.30))
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "b_setup_too_weak", payload)

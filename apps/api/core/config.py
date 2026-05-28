@@ -89,10 +89,6 @@ class Settings(BaseSettings):
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.55
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.80
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.10
-    FAILED_SETUP_MIN_AGE_SEC: int = 600
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
     FAILED_SETUP_LOSS_MID_PCT: float = -0.45
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
@@ -141,18 +137,22 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 74.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
     PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.84
+    PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.30
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45
 
     PROD_GATE_A_MIN_SETUP: float = 76.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90
     PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.78
+    PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.20
     PROD_GATE_A_MIN_RR_TP2: float = 1.35
 
     PROD_GATE_B_MIN_SETUP: float = 70.0
     PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
     PROD_GATE_B_MIN_RR_TP1: float = 0.85
+    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.75
     PROD_GATE_B_MIN_RR_TP2: float = 1.30
+    PROD_GATE_B_MIN_RR_TP2_PAPER: float = 1.15
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
 
     # =========================
@@ -163,8 +163,6 @@ class Settings(BaseSettings):
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
     MAX_POSITION_MARGIN_PCT: float = 0.35
-    MIN_NET_PNL_TP1_USDT: float = 2.5
-    MIN_NET_PNL_TP2_USDT: float = 5.5
 
     # Таймфрейм и буферы для построения уровней входа/стопа/тейков.
     LEVELS_ENTRY_TF: str = "5m"
