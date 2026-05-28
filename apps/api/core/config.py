@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_SOFT_PCT: float = -0.25
     FAILED_SETUP_MFE_MID_PCT: float = 0.45
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
@@ -188,7 +188,7 @@ class Settings(BaseSettings):
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
     PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 3
-    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 5.0
+    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 3.0
     PUBLISH_MIN_TREND_ALIGNMENT: float = 30.0
     PUBLISH_MIN_ENTRY_TIMING: float = 12.0
 
