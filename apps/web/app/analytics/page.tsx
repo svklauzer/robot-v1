@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
+import Nav from "../../components/Nav";
 import { apiGet } from "../../lib/api";
 import { Activity, AlertTriangle, BarChart3, RefreshCw, ShieldCheck } from "lucide-react";
 
