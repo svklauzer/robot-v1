@@ -1,22 +1,3 @@
-RUN_DIR=/workspace/robot-v1/analytics_24h/run_20260528T124709Z
-UTC_TS=20260528T124709Z
-
-=== git_meta.txt ===
-# CMD: git rev-parse --short HEAD
-c2ae323
-=== git_branch.txt ===
-# CMD: git branch --show-current
-work
-=== compose_ps.txt ===
-# CMD: docker compose ps
-./scripts/collect_run_report.sh: line 19: docker: command not found
-=== analytics_summary.json ===
-# GET http://localhost:8000/analytics/summary
-curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
-=== analytics_reason_breakdown.json ===
-# GET http://localhost:8000/analytics/reason-breakdown
-curl: (7) Failed to connect to localhost port 8000 after 0 ms: Couldn't connect to server
-=== ml_outcomes_summary.json ===
 {
   "total_rows": 90,
   "closed_rows": 90,

@@ -82,6 +82,16 @@ class HTXClient:
 
     def price_to_precision(self, symbol: str, price: float) -> float:
         try:
+            price = float(price)
+        except Exception:
+            price = 0.0
+
+        # Avoid noisy exchange precision errors on zero/negative/invalid prices.
+        # Callers may temporarily pass placeholder values during intermediate calculations.
+        if price <= 0:
+            return price
+
+        try:
             self.load_markets()
             return float(self.exchange.price_to_precision(symbol, price))
         except Exception as e:
@@ -89,6 +99,14 @@ class HTXClient:
             return float(price)
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
+        try:
+            amount = float(amount)
+        except Exception:
+            amount = 0.0
+
+        if amount <= 0:
+            return amount
+
         try:
             self.load_markets()
             return float(self.exchange.amount_to_precision(symbol, amount))

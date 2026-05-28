@@ -20,6 +20,28 @@ cmd_out() {
   } >"$RUN_DIR/${name}.txt" 2>&1 || true
 }
 
+append_limited() {
+  local out_file="$1"
+  local title="$2"
+  local src_file="$3"
+  local max_lines="${4:-120}"
+  {
+    echo "### $title"
+    if [[ -f "$src_file" ]]; then
+      sed -n "1,${max_lines}p" "$src_file"
+      local total_lines
+      total_lines="$(wc -l < "$src_file" 2>/dev/null || echo 0)"
+      if [[ "${total_lines:-0}" -gt "$max_lines" ]]; then
+        echo
+        echo "... truncated: showing first $max_lines of $total_lines lines from $(basename "$src_file")"
+      fi
+    else
+      echo "(missing: $src_file)"
+    fi
+    echo
+  } >> "$out_file"
+}
+
 curl_json() {
   local name="$1"; shift
   local url="$1"
@@ -71,7 +93,6 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
 
   if [[ -n "$PYTHON_BIN" ]]; then
     if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
-    if ! "$PYTHON_BIN" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -79,7 +100,6 @@ from pathlib import Path
 import os
 root = Path(os.environ.get("ROOT_DIR", "."))
 p = root / "storage/ml/trade_outcomes.jsonl"
-p = Path("storage/ml/trade_outcomes.jsonl")
 
 rows = []
 for line in p.read_text(encoding="utf-8").splitlines():
@@ -126,11 +146,12 @@ PY
   else
     if command -v jq >/dev/null 2>&1; then
       jq -s '
+        . as $rows |
         map(select(type=="object" and .status=="closed")) as $closed |
         {
           status: "degraded",
           fallback_used: true,
-          total_rows: length,
+          total_rows: ($rows|length),
           closed_rows: ($closed|length),
           wins: ($closed|map(select((.closed_net_pnl // 0) > 0))|length),
           losses: ($closed|map(select((.closed_net_pnl // 0) <= 0))|length)
@@ -139,10 +160,6 @@ PY
     else
       echo "{\"status\": \"degraded\", \"fallback_used\": false, \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
     fi
-      echo "{\"status\": \"error\", \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
-    fi
-  else
-    echo "{\"status\": \"error\", \"reason\": \"python_not_found\", \"hint\": \"Set PYTHON_BIN=python or install python3\"}" > "$RUN_DIR/ml_outcomes_summary.json"
   fi
 fi
 
@@ -160,7 +177,35 @@ fi
 } > "$RUN_DIR/_report_compact.txt"
 
 cp "$RUN_DIR/_report_compact.txt" "$OUT_DIR/latest_report_compact.txt"
+echo "$RUN_DIR" > "$OUT_DIR/latest_run_dir.txt"
+
+# --- LLM-friendly report (bounded size for chat limits) ---
+CHAT_REPORT="$RUN_DIR/_report_for_chat.md"
+{
+  echo "# Robot run report (LLM compact)"
+  echo
+  echo "- run_dir: $RUN_DIR"
+  echo "- utc_ts: $TS"
+  echo
+  echo "## files"
+  find "$RUN_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+  echo
+} > "$CHAT_REPORT"
+
+append_limited "$CHAT_REPORT" "git_status.txt" "$RUN_DIR/git_status.txt" 80
+append_limited "$CHAT_REPORT" "compose_ps.txt" "$RUN_DIR/compose_ps.txt" 120
+append_limited "$CHAT_REPORT" "health.json" "$RUN_DIR/health.json" 120
+append_limited "$CHAT_REPORT" "analytics_summary.json" "$RUN_DIR/analytics_summary.json" 200
+append_limited "$CHAT_REPORT" "analytics_reason_breakdown.json" "$RUN_DIR/analytics_reason_breakdown.json" 200
+append_limited "$CHAT_REPORT" "analytics_signal_quality.json" "$RUN_DIR/analytics_signal_quality.json" 200
+append_limited "$CHAT_REPORT" "ml_outcomes_summary.json" "$RUN_DIR/ml_outcomes_summary.json" 220
+append_limited "$CHAT_REPORT" "compose_logs_api_tail.txt" "$RUN_DIR/compose_logs_api_tail.txt" 220
+append_limited "$CHAT_REPORT" "compose_logs_web_tail.txt" "$RUN_DIR/compose_logs_web_tail.txt" 160
+
+cp "$CHAT_REPORT" "$OUT_DIR/latest_report_for_chat.md"
 
 echo "Saved report to: $RUN_DIR"
 echo "Compact file:    $RUN_DIR/_report_compact.txt"
 echo "Latest compact:  $OUT_DIR/latest_report_compact.txt"
+echo "Chat report:     $RUN_DIR/_report_for_chat.md"
+echo "Latest chat:     $OUT_DIR/latest_report_for_chat.md"

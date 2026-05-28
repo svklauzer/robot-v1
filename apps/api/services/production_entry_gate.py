@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from core.config import settings
+
 
 @dataclass
 class ProductionGateDecision:
@@ -55,6 +57,14 @@ class ProductionEntryGate:
             "priority_score": priority,
         }
 
+        # Defensive numeric defaults to avoid any accidental None comparisons
+        # if thresholds are later logged/refactored.
+        min_setup = 0.0
+        min_confidence = 0.0
+        min_rr1 = 0.0
+        min_rr2 = 0.0
+        min_priority = 0.0
+
         if grade_value == "C":
             return ProductionGateDecision(
                 allowed=False,
@@ -70,51 +80,62 @@ class ProductionEntryGate:
             )
 
         if grade_value == "A+":
-            if setup < 85:
+            min_setup = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_SETUP", 82.0))
+            min_confidence = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_CONFIDENCE", 74.0))
+            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
+            if trading_mode in ["paper_signal", "paper_trade"]:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER", 0.84))
+            else:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1", 0.95))
+            min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
+
+            if setup < min_setup:
                 return ProductionGateDecision(False, "a_plus_setup_too_weak", payload)
-
-            if confidence < 78:
+            if confidence < min_confidence:
                 return ProductionGateDecision(False, "a_plus_confidence_too_low", payload)
-
-            if rr1 < 1.0:
+            if rr1 < min_rr1:
                 return ProductionGateDecision(False, "a_plus_rr_tp1_too_low", payload)
-
-            if rr2 < 1.6:
+            if rr2 < min_rr2:
                 return ProductionGateDecision(False, "a_plus_rr_tp2_too_low", payload)
-
             return ProductionGateDecision(True, "a_plus_passed", payload)
 
         if grade_value == "A":
-            if setup < 80:
+            min_setup = float(getattr(settings, "PROD_GATE_A_MIN_SETUP", 76.0))
+            min_confidence = float(getattr(settings, "PROD_GATE_A_MIN_CONFIDENCE", 70.0))
+            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
+            if trading_mode in ["paper_signal", "paper_trade"]:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.78))
+            else:
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
+            min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
+
+            if setup < min_setup:
                 return ProductionGateDecision(False, "a_setup_too_weak", payload)
-
-            if confidence < 74:
+            if confidence < min_confidence:
                 return ProductionGateDecision(False, "a_confidence_too_low", payload)
-
-            if rr1 < 0.95:
+            if rr1 < min_rr1:
                 return ProductionGateDecision(False, "a_rr_tp1_too_low", payload)
-
-            if rr2 < 1.5:
+            if rr2 < min_rr2:
                 return ProductionGateDecision(False, "a_rr_tp2_too_low", payload)
-
             return ProductionGateDecision(True, "a_passed", payload)
 
         if grade_value == "B":
-            if setup < 82:
+            min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 70.0))
+            min_confidence = float(getattr(settings, "PROD_GATE_B_MIN_CONFIDENCE", 60.0))
+            min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.8))
+            min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.25))
+            min_priority = float(getattr(settings, "PROD_GATE_B_MIN_PRIORITY", 85.0))
+
+            if setup < min_setup:
                 return ProductionGateDecision(False, "b_setup_too_weak", payload)
-
-            if confidence < 68:
+            if confidence < min_confidence:
                 return ProductionGateDecision(False, "b_confidence_too_low", payload)
-
-            if rr1 < 1.05:
+            if rr1 < min_rr1:
                 return ProductionGateDecision(False, "b_rr_tp1_too_low", payload)
-
-            if rr2 < 1.8:
+            if rr2 < min_rr2:
                 return ProductionGateDecision(False, "b_rr_tp2_too_low", payload)
-
-            if priority < 95:
+            if priority < min_priority:
                 return ProductionGateDecision(False, "b_priority_too_low", payload)
-
             return ProductionGateDecision(True, "b_passed", payload)
 
         return ProductionGateDecision(
