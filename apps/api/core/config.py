@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_SOFT_PCT: float = -0.25
     FAILED_SETUP_MFE_MID_PCT: float = 0.45
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
@@ -110,7 +110,6 @@ class Settings(BaseSettings):
     SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -188,8 +187,8 @@ class Settings(BaseSettings):
     # Paper/publish soft gates for already approved learning setups.
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
-    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 3
-    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 5.0
+    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 4
+    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 3.0
     PUBLISH_MIN_TREND_ALIGNMENT: float = 30.0
     PUBLISH_MIN_ENTRY_TIMING: float = 12.0
 
