@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const items = [
   { href: "/", label: "Dashboard" },
@@ -9,21 +12,33 @@ const items = [
   { href: "/analytics", label: "Analytics" },
   { href: "/reports", label: "Reports" },
   { href: "/health", label: "Health" },
-  { href: "/intelligence", label: "Intelligence" }
+  { href: "/intelligence", label: "Intelligence" },
 ];
 
 export default function Nav() {
+  const pathname = usePathname();
+
   return (
-    <nav className="mb-6 flex flex-wrap gap-3 rounded-2xl border border-emerald-900 bg-black/30 p-3">
-      {items.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          className="rounded-xl px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-900"
-        >
-          {item.label}
-        </Link>
-      ))}
+    <nav className="sticky top-4 z-20 rounded-3xl border border-emerald-800/70 bg-slate-950/80 p-2 shadow-2xl shadow-emerald-950/30 backdrop-blur">
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => {
+          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={
+                active
+                  ? "rounded-2xl bg-emerald-400 px-4 py-2 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-900/30"
+                  : "rounded-2xl px-4 py-2 text-sm font-semibold text-emerald-100/75 transition hover:bg-emerald-900/60 hover:text-emerald-50"
+              }
+            >
+              {item.label}
+            </Link>
+          );
+        })}
+      </div>
     </nav>
   );
 }

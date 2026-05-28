@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
 import { CreditCard, RefreshCw, CheckCircle2 } from "lucide-react";
 
@@ -66,10 +66,7 @@ export default function PaymentsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#020617] text-emerald-50">
-      <Nav />
-
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-8">
+    <AppShell>
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="flex items-center gap-3 text-3xl font-bold text-emerald-300">
@@ -147,8 +144,7 @@ export default function PaymentsPage() {
             {payments.length === 0 && <div className="p-8 text-center text-emerald-100/50">Платежей пока нет.</div>}
           </div>
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import { RefreshCw, WalletCards } from "lucide-react";
 
@@ -24,10 +24,7 @@ export default function PositionsPage() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[#020617] text-emerald-50">
-      <Nav />
-
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-8">
+    <AppShell>
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="flex items-center gap-3 text-3xl font-bold text-emerald-300">
@@ -86,7 +83,6 @@ export default function PositionsPage() {
             </div>
           )}
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
