@@ -9,10 +9,7 @@ const items = [
   { href: "/analytics", label: "Analytics" },
   { href: "/reports", label: "Reports" },
   { href: "/health", label: "Health" },
-  { href: "/intelligence", label: "Intelligence" },
-  { href: "/analytics", label: "Analytics" },
-  { href: "/positions", label: "Positions" },
-  { href: "/payments", label: "Payments" }
+  { href: "/intelligence", label: "Intelligence" }
 ];
 
 export default function Nav() {
