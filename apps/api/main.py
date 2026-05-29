@@ -5,7 +5,7 @@ from core.decision_codes import (
     DECISION_MAX_ACTIVE_SIGNALS_REACHED,
     DECISION_REQUIRED_MARGIN_EXCEEDS_FREE_MARGIN,
 )
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 
 from core.db import Base, engine, SessionLocal
 from core.config import settings
-from core.security import hash_password
+from core.security import hash_password, require_owner_action
 
 from models.user import User
 from models.bot import Bot
@@ -24,6 +24,10 @@ from models.order import Order
 from models.position import Position
 from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
+from models.telegram_delivery import TelegramDelivery
+from models.telegram_profile import TelegramProfile
+from models.audit_event import AuditEvent
+from models.payment import BillingPlan, Payment, PaymentEvent
 
 from workers.robot_loop import RobotLoop
 from services.signal_broadcaster import SignalBroadcaster
@@ -35,6 +39,9 @@ from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
 from services.report_service import ReportService
 from services.subscription_watchdog import SubscriptionWatchdog
+from services.telegram_delivery_log import TelegramDeliveryLog, ensure_telegram_delivery_schema
+from services.telegram_delivery_worker import TelegramDeliveryWorker
+from services.billing_service import BillingService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -46,6 +53,10 @@ from services.candidate_priority import CandidatePriorityService
 from services.reentry_cooldown import ReEntryCooldownGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.signal_replacement import SignalReplacementPolicy
+from services.candidate_funnel import CandidateFunnelService
+from services.outcome_diagnostics import OutcomeDiagnosticsService
+from services.telegram_bot_menu import TelegramBotMenuService
+from services.audit_log import AuditLogService
 
 from pydantic import BaseModel
 
@@ -57,6 +68,9 @@ robot_loop_enabled = True
 
 subscription_task = None
 subscription_loop_enabled = True
+
+telegram_delivery_task = None
+telegram_delivery_loop_enabled = True
 
 
 async def background_subscription_loop():
@@ -80,6 +94,33 @@ async def background_subscription_loop():
             db.close()
 
         await asyncio.sleep(60 * 60 * 6)
+
+
+async def background_telegram_delivery_loop():
+    global telegram_delivery_loop_enabled
+
+    await asyncio.sleep(15)
+    worker = TelegramDeliveryWorker()
+
+    while telegram_delivery_loop_enabled:
+        db = SessionLocal()
+
+        try:
+            result = await worker.process_once(db, limit=25)
+            db.commit()
+
+            if result.get("processed", 0) > 0:
+                print(f"[TELEGRAM DELIVERY RETRY] {result}")
+
+        except Exception as e:
+            db.rollback()
+            print(f"[TELEGRAM DELIVERY LOOP ERROR] {type(e).__name__}: {e}")
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(30)
+
 
 class CloseSignalRequest(BaseModel):
     result_pct: float
@@ -127,7 +168,35 @@ class UpdateSubscriberStatusRequest(BaseModel):
 
 class ExposureDebugRequest(BaseModel):
     symbol: str = "BTC/USDT"
-    required_margin: float = 333.0    
+    required_margin: float = 333.0
+
+
+class TelegramWebhookRequest(BaseModel):
+    update_id: int | None = None
+    message: dict | None = None
+    callback_query: dict | None = None
+
+
+class CreateCheckoutRequest(BaseModel):
+    telegram_user_id: str
+    plan_code: str = "vip_30"
+    username: str | None = None
+    full_name: str | None = None
+    provider: str = "manual"
+    notes: str | None = None
+
+
+class ManualConfirmPaymentRequest(BaseModel):
+    provider_event_id: str | None = None
+    raw_payload: str | None = None
+
+
+class PaymentEventRequest(BaseModel):
+    payment_id: int
+    provider: str = "manual"
+    provider_event_id: str
+    status: str = "paid"
+    raw_payload: str | None = None
 
 async def background_robot_loop():
     global robot_loop_enabled
@@ -166,16 +235,21 @@ async def background_robot_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled
 
     Base.metadata.create_all(bind=engine)
+    ensure_telegram_delivery_schema()
     bootstrap_owner_and_bot()
+    bootstrap_billing_plans()
 
     robot_loop_enabled = True
     robot_task = asyncio.create_task(background_robot_loop())
 
     subscription_loop_enabled = True
     subscription_task = asyncio.create_task(background_subscription_loop())
+
+    telegram_delivery_loop_enabled = True
+    telegram_delivery_task = asyncio.create_task(background_telegram_delivery_loop())
 
     yield
 
@@ -186,6 +260,10 @@ async def lifespan(app: FastAPI):
     subscription_loop_enabled = False
     if subscription_task:
         subscription_task.cancel()
+
+    telegram_delivery_loop_enabled = False
+    if telegram_delivery_task:
+        telegram_delivery_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
@@ -200,6 +278,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def bootstrap_billing_plans():
+    db: Session = SessionLocal()
+
+    try:
+        BillingService().ensure_default_plans(db)
+        db.commit()
+    finally:
+        db.close()
+
 
 def bootstrap_owner_and_bot():
     db: Session = SessionLocal()
@@ -298,13 +386,14 @@ def bot_state():
         db.close()
 
 
-@app.post("/bot/start")
+@app.post("/bot/start", dependencies=[Depends(require_owner_action)])
 def start_bot():
     db = SessionLocal()
 
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         bot.status = "running"
+        AuditLogService().record(db, action="bot_start", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
         return {"status": "running"}
 
@@ -312,13 +401,14 @@ def start_bot():
         db.close()
 
 
-@app.post("/bot/stop")
+@app.post("/bot/stop", dependencies=[Depends(require_owner_action)])
 def stop_bot():
     db = SessionLocal()
 
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         bot.status = "stopped"
+        AuditLogService().record(db, action="bot_stop", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
         return {"status": "stopped"}
 
@@ -442,7 +532,7 @@ def list_orders():
         db.close()
 
 
-@app.post("/robot/run-once")
+@app.post("/robot/run-once", dependencies=[Depends(require_owner_action)])
 async def run_robot_once():
     db = SessionLocal()
 
@@ -487,10 +577,15 @@ def robot_loop_state():
             "task_created": subscription_task is not None,
             "task_done": subscription_task.done() if subscription_task else None,
         },
+        "telegram_delivery_loop": {
+            "enabled": telegram_delivery_loop_enabled,
+            "task_created": telegram_delivery_task is not None,
+            "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
+        },
     }
 
 
-@app.post("/telegram/test-owner")
+@app.post("/telegram/test-owner", dependencies=[Depends(require_owner_action)])
 async def telegram_test_owner():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_owner_alert(
@@ -499,7 +594,7 @@ async def telegram_test_owner():
     )
     return {"status": "sent"}
 
-@app.get("/robot/debug-signals")
+@app.get("/robot/debug-signals", dependencies=[Depends(require_owner_action)])
 def debug_signals():
     db = SessionLocal()
 
@@ -540,7 +635,7 @@ def debug_signals():
     finally:
         db.close()
 
-@app.post("/robot/force-paper-signal")
+@app.post("/robot/force-paper-signal", dependencies=[Depends(require_owner_action)])
 async def force_paper_signal():
     db = SessionLocal()
 
@@ -621,6 +716,8 @@ def analytics_summary():
 
         expired = db.query(Signal).filter(Signal.status == "expired").count()
         rejected = db.query(Signal).filter(Signal.status == "rejected").count()
+        telegram_failed = db.query(Signal).filter(Signal.status == "telegram_failed").count()
+        queued = db.query(Signal).filter(Signal.status == "queued").count()
 
         wins = 0
         losses = 0
@@ -680,6 +777,8 @@ def analytics_summary():
             "closed_signals": closed_count,
             "expired_signals": expired,
             "rejected_signals": rejected,
+            "telegram_failed_signals": telegram_failed,
+            "queued_signals": queued,
 
             "wins": wins,
             "losses": losses,
@@ -788,6 +887,17 @@ def analytics_reason_breakdown(limit: int = 500):
     finally:
         db.close()
 
+@app.get("/analytics/outcome-root-cause")
+def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int = 500):
+    """Root-cause report for repeated losing exit reasons (roadmap Phase 1)."""
+    db = SessionLocal()
+
+    try:
+        return OutcomeDiagnosticsService().root_cause(db, reason=reason, limit=limit)
+    finally:
+        db.close()
+
+
 @app.post("/signals/{signal_id}/close")
 async def close_signal(signal_id: int, payload: CloseSignalRequest):
     db = SessionLocal()
@@ -826,7 +936,7 @@ async def close_signal(signal_id: int, payload: CloseSignalRequest):
     finally:
         db.close()
 
-@app.post("/robot/force-live-near-signal")
+@app.post("/robot/force-live-near-signal", dependencies=[Depends(require_owner_action)])
 async def force_live_near_signal():
     db = SessionLocal()
 
@@ -927,7 +1037,7 @@ def queued_to_published():
     finally:
         db.close()
 
-@app.post("/robot/run-lifecycle-once")
+@app.post("/robot/run-lifecycle-once", dependencies=[Depends(require_owner_action)])
 async def run_lifecycle_once():
     db = SessionLocal()
 
@@ -948,7 +1058,7 @@ async def run_lifecycle_once():
     finally:
         db.close()
 
-@app.post("/robot/force-scalp-signal")
+@app.post("/robot/force-scalp-signal", dependencies=[Depends(require_owner_action)])
 async def force_scalp_signal():
     db = SessionLocal()
 
@@ -1105,7 +1215,7 @@ async def force_scalp_signal():
     finally:
         db.close()
 
-@app.post("/robot/test-lifecycle-price")
+@app.post("/robot/test-lifecycle-price", dependencies=[Depends(require_owner_action)])
 async def test_lifecycle_price(payload: TestLifecyclePriceRequest):
     db = SessionLocal()
 
@@ -1228,7 +1338,7 @@ def list_subscribers():
         db.close()
 
 
-@app.post("/subscribers")
+@app.post("/subscribers", dependencies=[Depends(require_owner_action)])
 async def create_subscriber(payload: CreateSubscriberRequest):
     db = SessionLocal()
 
@@ -1290,7 +1400,7 @@ async def create_subscriber(payload: CreateSubscriberRequest):
         db.close()
 
 
-@app.post("/subscribers/{subscriber_id}/extend")
+@app.post("/subscribers/{subscriber_id}/extend", dependencies=[Depends(require_owner_action)])
 async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest):
     db = SessionLocal()
 
@@ -1329,7 +1439,7 @@ async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest
         db.close()
 
 
-@app.post("/subscribers/{subscriber_id}/status")
+@app.post("/subscribers/{subscriber_id}/status", dependencies=[Depends(require_owner_action)])
 def update_subscriber_status(subscriber_id: int, payload: UpdateSubscriberStatusRequest):
     db = SessionLocal()
 
@@ -1355,7 +1465,7 @@ def update_subscriber_status(subscriber_id: int, payload: UpdateSubscriberStatus
     finally:
         db.close()  
 
-@app.post("/subscribers/check-expirations")
+@app.post("/subscribers/check-expirations", dependencies=[Depends(require_owner_action)])
 async def check_subscriber_expirations():
     db = SessionLocal()
 
@@ -1389,6 +1499,9 @@ def system_health():
         active_subscribers = db.query(Subscriber).filter(Subscriber.status == "active").count()
         expired_subscribers = db.query(Subscriber).filter(Subscriber.status == "expired").count()
         blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
+        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        payments_summary = BillingService().summary(db)
+        production_blockers = settings.production_blockers()
 
         market_status = {}
 
@@ -1430,6 +1543,11 @@ def system_health():
                     "task_created": subscription_task is not None,
                     "task_done": subscription_task.done() if subscription_task else None,
                 },
+                "telegram_delivery_loop": {
+                    "enabled": telegram_delivery_loop_enabled,
+                    "task_created": telegram_delivery_task is not None,
+                    "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
+                },
             },
             "market": market_status,
             "signals": {
@@ -1445,12 +1563,333 @@ def system_health():
                 "expired": expired_subscribers,
                 "blocked": blocked_subscribers,
             },
+            "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
+            "production_readiness": {
+                "ready": len(production_blockers) == 0,
+                "blockers": production_blockers,
+                "live_enabled": settings.is_live_enabled,
+            },
         }
 
     finally:
         db.close()
 
-@app.post("/system/test-telegram-owner")
+
+@app.get("/audit/events")
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        service = AuditLogService()
+        return {"items": [service.serialize(event) for event in events]}
+    finally:
+        db.close()
+
+@app.get("/payments/plans")
+def list_payment_plans():
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        plans = service.list_plans(db)
+        db.commit()
+        return [service.serialize_plan(plan) for plan in plans]
+    finally:
+        db.close()
+
+
+@app.post("/payments/checkout", dependencies=[Depends(require_owner_action)])
+def create_payment_checkout(payload: CreateCheckoutRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment = service.create_checkout(
+            db=db,
+            telegram_user_id=payload.telegram_user_id,
+            plan_code=payload.plan_code,
+            username=payload.username,
+            full_name=payload.full_name,
+            provider=payload.provider,
+            notes=payload.notes,
+        )
+        db.commit()
+        db.refresh(payment)
+        return {"status": "ok", "payment": service.serialize_payment(payment)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments")
+def list_payments(limit: int = 100, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(Payment)
+        if status:
+            query = query.filter(Payment.status == status)
+        payments = query.order_by(Payment.id.desc()).limit(limit).all()
+        service = BillingService()
+        return {
+            "summary": service.summary(db),
+            "items": [service.serialize_payment(payment) for payment in payments],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        event = None
+        if payload and payload.provider_event_id:
+            payment, subscriber, activated, event = service.process_payment_event(
+                db=db,
+                payment_id=payment_id,
+                provider="manual",
+                provider_event_id=payload.provider_event_id,
+                status="paid",
+                raw_payload=payload.raw_payload,
+            )
+        else:
+            payment, subscriber, activated = service.confirm_payment(
+                db=db,
+                payment_id=payment_id,
+                raw_payload=payload.raw_payload if payload else None,
+            )
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id},
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+            "payment_event": service.serialize_payment_event(event) if event else None,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/payments/events", dependencies=[Depends(require_owner_action)])
+def process_payment_event(payload: PaymentEventRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment, subscriber, activated, event = service.process_payment_event(
+            db=db,
+            payment_id=payload.payment_id,
+            provider=payload.provider,
+            provider_event_id=payload.provider_event_id,
+            status=payload.status,
+            raw_payload=payload.raw_payload,
+        )
+        AuditLogService().record(
+            db,
+            action="payment_event_processed",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"event_id": event.id, "status": event.status, "activated": activated},
+        )
+        db.commit()
+        db.refresh(payment)
+        db.refresh(event)
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id if subscriber else None,
+            "payment_event": service.serialize_payment_event(event),
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/summary")
+def payments_summary():
+    db = SessionLocal()
+    try:
+        return BillingService().summary(db)
+    finally:
+        db.close()
+
+@app.get("/system/readiness")
+def system_readiness():
+    db = SessionLocal()
+
+    try:
+        analytics = analytics_summary()
+        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        payments_summary = BillingService().summary(db)
+        blockers = list(settings.production_blockers())
+
+        if analytics.get("total_net_pnl_usdt", 0) < 0:
+            blockers.append("rolling net PnL is negative")
+        if analytics.get("closed_signals", 0) < 200 and settings.is_live_enabled:
+            blockers.append("live mode requires at least 200 closed validation signals")
+        if telegram_delivery.get("failed", 0) > 0:
+            blockers.append("telegram delivery has failures in the last 24h")
+
+        return {
+            "status": "ready" if not blockers else "blocked",
+            "ready": not blockers,
+            "blockers": blockers,
+            "analytics": analytics,
+            "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
+            "required_gates": {
+                "closed_validation_signals": 200,
+                "failed_setup_exit_share_max_pct": 35.0,
+                "positive_then_negative_max_pct": 25.0,
+                "telegram_delivery_sla_min_pct": 99.0,
+            },
+        }
+
+    finally:
+        db.close()
+
+
+def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> str:
+    command = command.lower().strip()
+
+    if command in ["/start", "/menu"]:
+        return (
+            "🤖 Finmt Robot\n\n"
+            "Меню:\n"
+            "/plans — тарифы VIP\n"
+            "/pay — как оплатить доступ\n"
+            "/status — статус подписки\n"
+            "/help — FAQ и риски\n"
+            "/support — поддержка"
+        )
+
+    if command == "/plans":
+        return (
+            "💎 VIP планы\n\n"
+            "VIP 30 дней — полный сигнал, уровни, сопровождение и отчёты.\n"
+            "VIP 90 дней — тот же доступ с долгим периодом.\n\n"
+            "Нажмите /pay для инструкции по оплате."
+        )
+
+    if command == "/pay":
+        return (
+            "💳 Оплата VIP\n\n"
+            "Напишите /pay vip_30 или /pay vip_90, чтобы создать pending checkout. "
+            "Owner сможет подтвердить оплату в разделе Payments."
+        )
+
+    if command == "/status":
+        if not subscriber:
+            return "Статус: подписка не найдена. Нажмите /plans или /pay."
+        return (
+            "📌 Статус подписки\n\n"
+            f"Plan: {subscriber.plan}\n"
+            f"Status: {subscriber.status}\n"
+            f"Expires: {subscriber.expires_at}"
+        )
+
+    if command == "/help":
+        return (
+            "ℹ️ FAQ и риски\n\n"
+            "Сигналы не являются финансовой рекомендацией. "
+            "Используйте риск-менеджмент и не торгуйте средствами, которые не готовы потерять. "
+            "Перед live-режимом система проходит paper/live-shadow gates."
+        )
+
+    if command == "/support":
+        return "Поддержка: напишите owner/admin канала с вашим Telegram ID."
+
+    return "Неизвестная команда. Нажмите /menu."
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(payload: TelegramWebhookRequest):
+    db = SessionLocal()
+    try:
+        response = TelegramBotMenuService().handle(
+            db=db,
+            message=payload.message,
+            callback_query=payload.callback_query,
+        )
+        db.commit()
+
+        if response.chat_id:
+            await SignalBroadcaster().send_message(
+                chat_id=response.chat_id,
+                text=response.text,
+                message_type=response.message_type,
+                reply_markup=response.reply_markup,
+            )
+
+        return {
+            "status": "ok",
+            "command": response.command,
+            "telegram_user_id": response.telegram_user_id,
+            "message_type": response.message_type,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
+    finally:
+        db.close()
+
+@app.post("/system/test-telegram-owner", dependencies=[Depends(require_owner_action)])
 async def test_telegram_owner():
     router = TelegramRouter()
     await router.owner_alert(
@@ -1460,7 +1899,7 @@ async def test_telegram_owner():
     return {"status": "sent"}
 
 
-@app.post("/system/test-telegram-free")
+@app.post("/system/test-telegram-free", dependencies=[Depends(require_owner_action)])
 async def test_telegram_free():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_message(
@@ -1470,7 +1909,7 @@ async def test_telegram_free():
     return {"status": "sent"}
 
 
-@app.post("/system/test-telegram-vip")
+@app.post("/system/test-telegram-vip", dependencies=[Depends(require_owner_action)])
 async def test_telegram_vip():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_message(
@@ -1536,7 +1975,7 @@ def build_trade_plan(payload: TradePlanRequest):
     )
     return {"status": "ok", "trade_plan": plan.__dict__}
 
-@app.post("/robot/force-valid-trade-signal")
+@app.post("/robot/force-valid-trade-signal", dependencies=[Depends(require_owner_action)])
 async def force_valid_trade_signal():
     db = SessionLocal()
 
@@ -1747,7 +2186,7 @@ def intelligence_analyze(symbol: str = "BTC/USDT"):
             "error": str(e),
         }
 
-@app.post("/robot/force-intelligence-signal")
+@app.post("/robot/force-intelligence-signal", dependencies=[Depends(require_owner_action)])
 async def force_intelligence_signal(symbol: str = "BTC/USDT"):
     db = SessionLocal()
 
@@ -3222,6 +3661,22 @@ async def intelligence_scan_run():
         db.close()
         INTELLIGENCE_PUBLISH_LOCK.release()     
 
+@app.get("/intelligence/funnel")
+def intelligence_funnel(limit: int = 120):
+    """
+    Operator diagnostics for the candidate -> published -> open path.
+
+    It explains why market intelligence keeps producing candidates/watch events
+    while Signal rows do not become active published/open positions.
+    """
+    db = SessionLocal()
+
+    try:
+        return CandidateFunnelService().summarize(db, limit=limit)
+    finally:
+        db.close()
+
+
 @app.get("/intelligence/events")
 def intelligence_events(
     symbol: str | None = None,
@@ -3309,7 +3764,7 @@ def find_active_signal_for_symbol(db: Session, bot_id: int, symbol: str):
     )
 
 
-@app.post("/debug/exposure")
+@app.post("/debug/exposure", dependencies=[Depends(require_owner_action)])
 def debug_exposure(payload: ExposureDebugRequest):
     db = SessionLocal()
 
