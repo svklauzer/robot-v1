@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from core.config import settings
-from models.payment import BillingPlan, Payment
+from models.payment import BillingPlan, Payment, PaymentEvent
 from models.subscriber import Subscriber
 
 
@@ -152,6 +152,65 @@ class BillingService:
         db.flush()
         return payment, subscriber, True
 
+    def process_payment_event(
+        self,
+        db: Session,
+        payment_id: int,
+        provider: str,
+        provider_event_id: str,
+        status: str = "paid",
+        raw_payload: str | None = None,
+    ) -> tuple[Payment, Subscriber | None, bool, PaymentEvent]:
+        existing_event = (
+            db.query(PaymentEvent)
+            .filter(PaymentEvent.provider == provider, PaymentEvent.provider_event_id == provider_event_id)
+            .first()
+        )
+        if existing_event:
+            payment = db.query(Payment).filter(Payment.id == existing_event.payment_id).first()
+            subscriber = None
+            if existing_event.subscriber_id:
+                subscriber = db.query(Subscriber).filter(Subscriber.id == existing_event.subscriber_id).first()
+            if not payment:
+                raise ValueError("payment_event_without_payment")
+            return payment, subscriber, False, existing_event
+
+        payment = db.query(Payment).filter(Payment.id == payment_id).first()
+        if not payment:
+            raise ValueError("payment_not_found")
+
+        now = datetime.now(timezone.utc)
+        event = PaymentEvent(
+            payment_id=payment.id,
+            provider=provider,
+            provider_event_id=provider_event_id,
+            event_type="payment_status",
+            status=status,
+            amount=payment.amount,
+            currency=payment.currency,
+            raw_payload=raw_payload,
+            processed_at=now,
+        )
+        db.add(event)
+        db.flush()
+
+        subscriber = None
+        activated = False
+        if status == "paid":
+            payment, subscriber, activated = self.confirm_payment(
+                db=db,
+                payment_id=payment.id,
+                provider_event_id=None,
+                raw_payload=raw_payload,
+            )
+            event.subscriber_id = subscriber.id
+        elif status in ["failed", "canceled", "refunded"]:
+            payment.status = status
+            payment.raw_payload = raw_payload or payment.raw_payload
+
+        db.flush()
+        return payment, subscriber, activated, event
+
     def serialize_plan(self, plan: BillingPlan) -> dict:
         return {
             "id": plan.id,
@@ -185,11 +244,28 @@ class BillingService:
             "paid_at": str(payment.paid_at) if payment.paid_at else None,
         }
 
+    def serialize_payment_event(self, event: PaymentEvent) -> dict:
+        return {
+            "id": event.id,
+            "payment_id": event.payment_id,
+            "subscriber_id": event.subscriber_id,
+            "provider": event.provider,
+            "provider_event_id": event.provider_event_id,
+            "event_type": event.event_type,
+            "status": event.status,
+            "amount": event.amount,
+            "currency": event.currency,
+            "processed_at": str(event.processed_at) if event.processed_at else None,
+            "created_at": str(event.created_at),
+        }
+
     def summary(self, db: Session) -> dict:
         payments = db.query(Payment).all()
         paid = [p for p in payments if p.status == "paid"]
         pending = [p for p in payments if p.status == "pending"]
         failed = [p for p in payments if p.status in ["failed", "canceled", "refunded"]]
+
+        events = db.query(PaymentEvent).all()
 
         return {
             "total": len(payments),
@@ -198,4 +274,6 @@ class BillingService:
             "failed": len(failed),
             "cash_collected": round(sum(float(p.amount or 0) for p in paid), 6),
             "currency": "USDT",
+            "events_total": len(events),
+            "events_processed": sum(1 for e in events if e.processed_at is not None),
         }
