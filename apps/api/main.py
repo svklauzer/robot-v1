@@ -42,6 +42,7 @@ from services.subscription_watchdog import SubscriptionWatchdog
 from services.telegram_delivery_log import TelegramDeliveryLog, ensure_telegram_delivery_schema
 from services.telegram_delivery_worker import TelegramDeliveryWorker
 from services.billing_service import BillingService
+from services.revenue_metrics import RevenueMetricsService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -1536,6 +1537,7 @@ def system_health():
         blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
+        revenue = RevenueMetricsService().summary(db)
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
         production_blockers = settings.production_blockers()
@@ -1602,6 +1604,7 @@ def system_health():
             },
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
+            "revenue": revenue,
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
             "production_readiness": {
@@ -1610,60 +1613,7 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
-    finally:
-        db.close()
 
-
-@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
-async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
-    db = SessionLocal()
-    try:
-        service = BillingService()
-        event = None
-        if payload and payload.provider_event_id:
-            payment, subscriber, activated, event = service.process_payment_event(
-                db=db,
-                payment_id=payment_id,
-                provider="manual",
-                provider_event_id=payload.provider_event_id,
-                status="paid",
-                raw_payload=payload.raw_payload,
-            )
-        else:
-            payment, subscriber, activated = service.confirm_payment(
-                db=db,
-                payment_id=payment_id,
-                raw_payload=payload.raw_payload if payload else None,
-            )
-        AuditLogService().record(
-            db,
-            action="payment_manual_confirm",
-            resource_type="payment",
-            resource_id=payment.id,
-            details={"activated": activated, "subscriber_id": subscriber.id},
-        )
-        db.commit()
-        await TelegramRouter().owner_alert(
-            "PAYMENT CONFIRMED",
-            (
-                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
-                f"User: {subscriber.telegram_user_id}\n"
-                f"Plan: {subscriber.plan}\n"
-                f"Expires: {subscriber.expires_at}\n"
-                f"Activated now: {activated}"
-            ),
-        )
-        return {
-            "status": "ok",
-            "activated": activated,
-            "payment": service.serialize_payment(payment),
-            "subscriber_id": subscriber.id,
-            "expires_at": str(subscriber.expires_at),
-            "payment_event": service.serialize_payment_event(event) if event else None,
-        }
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": str(e)}
     finally:
         db.close()
 
@@ -1850,6 +1800,15 @@ def payments_summary():
     finally:
         db.close()
 
+@app.get("/payments/revenue")
+def payments_revenue(window_days: int = 30):
+    db = SessionLocal()
+    try:
+        window_days = min(max(window_days, 1), 365)
+        return RevenueMetricsService().summary(db, window_days=window_days)
+    finally:
+        db.close()
+
 @app.get("/system/live-safety")
 def system_live_safety():
     db = SessionLocal()
@@ -1896,6 +1855,7 @@ def system_readiness():
         analytics = analytics_summary()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
+        revenue = RevenueMetricsService().summary(db)
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
@@ -1918,6 +1878,7 @@ def system_readiness():
             "analytics": analytics,
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
+            "revenue": revenue,
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
             "required_gates": {
@@ -3798,22 +3759,6 @@ async def intelligence_scan_run():
     finally:
         db.close()
         INTELLIGENCE_PUBLISH_LOCK.release()
-
-@app.get("/intelligence/funnel")
-def intelligence_funnel(limit: int = 120):
-    """
-    Operator diagnostics for the candidate -> published -> open path.
-
-    It explains why market intelligence keeps producing candidates/watch events
-    while Signal rows do not become active published/open positions.
-    """
-    db = SessionLocal()
-
-    try:
-        return CandidateFunnelService().summarize(db, limit=limit)
-    finally:
-        db.close()
-
 
 @app.get("/intelligence/funnel")
 def intelligence_funnel(limit: int = 120):

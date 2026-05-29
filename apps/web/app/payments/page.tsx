@@ -8,6 +8,7 @@ import { CreditCard, RefreshCw, CheckCircle2 } from "lucide-react";
 export default function PaymentsPage() {
   const [payments, setPayments] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
+  const [revenue, setRevenue] = useState<any>(null);
   const [plans, setPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ telegram_user_id: "", username: "", full_name: "", plan_code: "vip_30" });
@@ -15,12 +16,14 @@ export default function PaymentsPage() {
   async function loadAll() {
     setLoading(true);
     try {
-      const [paymentsData, plansData] = await Promise.all([
+      const [paymentsData, plansData, revenueData] = await Promise.all([
         apiGet("/payments?limit=100"),
         apiGet("/payments/plans"),
+        apiGet("/payments/revenue?window_days=30"),
       ]);
       setPayments(paymentsData?.items || []);
       setSummary(paymentsData?.summary || null);
+      setRevenue(revenueData || null);
       setPlans(Array.isArray(plansData) ? plansData : []);
     } finally {
       setLoading(false);
@@ -84,11 +87,42 @@ export default function PaymentsPage() {
           </button>
         </header>
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Stat title="Total" value={summary?.total ?? 0} />
           <Stat title="Paid" value={summary?.paid ?? 0} good />
           <Stat title="Pending" value={summary?.pending ?? 0} warn />
           <Stat title="Cash" value={`${summary?.cash_collected ?? 0} ${summary?.currency ?? "USDT"}`} good />
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <Stat title="MRR est." value={`${revenue?.mrr_estimate ?? 0} ${revenue?.currency ?? "USDT"}`} good={(revenue?.mrr_estimate ?? 0) > 0} />
+          <Stat title="30d cash" value={`${revenue?.cash_collected_window ?? 0} ${revenue?.currency ?? "USDT"}`} good={(revenue?.cash_collected_window ?? 0) > 0} />
+          <Stat title="Active paid" value={revenue?.active_paid_subscribers ?? 0} good={(revenue?.active_paid_subscribers ?? 0) > 0} />
+          <Stat title="Trials" value={revenue?.active_trials ?? 0} warn={(revenue?.active_trials ?? 0) > 0} />
+          <Stat title="Trial→Paid" value={`${revenue?.trial_to_paid_conversion_pct ?? 0}%`} good={(revenue?.trial_to_paid_conversion_pct ?? 0) > 0} />
+        </section>
+
+        <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
+          <h2 className="mb-4 text-xl font-semibold text-emerald-200">Revenue funnel</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <Metric label="Pending amount" value={`${revenue?.pending_amount ?? 0} ${revenue?.currency ?? "USDT"}`} warn={(revenue?.pending_amount ?? 0) > 0} />
+            <Metric label="Paid users" value={revenue?.paid_users ?? 0} />
+            <Metric label="Known users" value={revenue?.known_users ?? 0} />
+            <Metric label="Churn proxy" value={`${revenue?.churn_proxy_pct ?? 0}%`} warn={(revenue?.churn_proxy_pct ?? 0) > 0} />
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {(revenue?.plan_breakdown || []).map((plan: any) => (
+              <div key={plan.plan_code} className="rounded-xl border border-emerald-950 bg-black/20 p-4 text-sm">
+                <div className="font-semibold text-emerald-200">{plan.plan_code}</div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-emerald-100/60">
+                  <span>payments: <b className="text-emerald-100">{plan.payments}</b></span>
+                  <span>cash: <b className="text-emerald-100">{plan.cash_collected}</b></span>
+                  <span>active: <b className="text-emerald-100">{plan.active_subscribers}</b></span>
+                </div>
+              </div>
+            ))}
+            {(revenue?.plan_breakdown || []).length === 0 && <div className="rounded-xl border border-emerald-950 bg-black/20 p-4 text-center text-emerald-100/50">Revenue данных пока нет.</div>}
+          </div>
         </section>
 
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
@@ -162,6 +196,15 @@ function Stat({ title, value, good, warn }: { title: string; value: any; good?: 
     <div className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
       <div className="text-sm text-emerald-100/60">{title}</div>
       <div className={good ? "mt-2 text-2xl font-bold text-emerald-300" : warn ? "mt-2 text-2xl font-bold text-yellow-300" : "mt-2 text-2xl font-bold text-emerald-200"}>{value}</div>
+    </div>
+  );
+}
+
+function Metric({ label, value, warn }: { label: string; value: any; warn?: boolean }) {
+  return (
+    <div className="rounded-xl border border-emerald-950 bg-black/20 p-4">
+      <div className="text-xs text-emerald-100/50">{label}</div>
+      <div className={warn ? "mt-1 text-lg font-bold text-yellow-300" : "mt-1 text-lg font-bold text-emerald-200"}>{value}</div>
     </div>
   );
 }
