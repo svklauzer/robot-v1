@@ -1,32 +1,59 @@
 import httpx
+from datetime import datetime, timedelta, timezone
+
 from core.config import settings
+from services.telegram_delivery_log import TelegramDeliveryLog
 
 
 class SignalBroadcaster:
-    async def send_message(self, chat_id: str, text: str):
+    def __init__(self):
+        self.delivery_log = TelegramDeliveryLog()
+
+    async def _send_telegram_http(self, chat_id: str, text: str) -> dict:
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
 
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(
-                    url,
-                    json={
-                        "chat_id": chat_id,
-                        "text": text,
-                        "disable_web_page_preview": True,
-                    }
-                )
-                response.raise_for_status()
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "disable_web_page_preview": True,
+                }
+            )
+            response.raise_for_status()
 
-            return {
-                "ok": True,
-                "chat_id": chat_id,
-            }
+        return {"ok": True, "chat_id": chat_id}
+
+    async def send_message(self, chat_id: str, text: str, message_type: str = "message"):
+        try:
+            result = await self._send_telegram_http(chat_id, text)
+
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="sent",
+                message_type=message_type,
+                attempts=1,
+            )
+
+            return result
 
         except Exception as e:
             print(
                 f"[TELEGRAM SEND ERROR] chat_id={chat_id}: "
                 f"{type(e).__name__}: {repr(e)}"
+            )
+
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="failed_retryable",
+                message_type=message_type,
+                error=f"{type(e).__name__}: {repr(e)}",
+                attempts=1,
+                max_attempts=3,
+                next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=60),
             )
 
             return {
@@ -37,7 +64,7 @@ class SignalBroadcaster:
 
     async def send_owner_alert(self, title: str, body: str):
         text = f"🧭 {title}\n\n{body}"
-        await self.send_message(settings.TELEGRAM_OWNER_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_OWNER_CHAT_ID, text, message_type="owner_alert")
 
     async def send_signal_to_clients(self, signal: dict, confidence: float, grade: str | None = None):
         """
@@ -62,7 +89,7 @@ class SignalBroadcaster:
             f"⚠️ Не финансовая рекомендация. Соблюдайте риск-менеджмент."
         )
 
-        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text, message_type="legacy_vip_signal")
 
     async def send_signal_update(self, symbol: str, text_status: str, extra: str = ""):
         """
@@ -78,4 +105,4 @@ class SignalBroadcaster:
         if extra:
             text += f"\n{extra}"
 
-        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text, message_type="legacy_vip_update")
