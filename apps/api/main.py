@@ -199,7 +199,6 @@ class PaymentEventRequest(BaseModel):
     status: str = "paid"
     raw_payload: str | None = None
 
-
 class KillSwitchRequest(BaseModel):
     enabled: bool = True
     reason: str | None = "owner_request"
