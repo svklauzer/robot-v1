@@ -1,9 +1,13 @@
 import httpx
 from core.config import settings
+from services.telegram_delivery_log import TelegramDeliveryLog
 
 
 class SignalBroadcaster:
-    async def send_message(self, chat_id: str, text: str):
+    def __init__(self):
+        self.delivery_log = TelegramDeliveryLog()
+
+    async def send_message(self, chat_id: str, text: str, message_type: str = "message"):
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
 
         try:
@@ -18,6 +22,13 @@ class SignalBroadcaster:
                 )
                 response.raise_for_status()
 
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="sent",
+                message_type=message_type,
+            )
+
             return {
                 "ok": True,
                 "chat_id": chat_id,
@@ -29,6 +40,14 @@ class SignalBroadcaster:
                 f"{type(e).__name__}: {repr(e)}"
             )
 
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="failed",
+                message_type=message_type,
+                error=f"{type(e).__name__}: {repr(e)}",
+            )
+
             return {
                 "ok": False,
                 "chat_id": chat_id,
@@ -37,7 +56,7 @@ class SignalBroadcaster:
 
     async def send_owner_alert(self, title: str, body: str):
         text = f"🧭 {title}\n\n{body}"
-        await self.send_message(settings.TELEGRAM_OWNER_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_OWNER_CHAT_ID, text, message_type="owner_alert")
 
     async def send_signal_to_clients(self, signal: dict, confidence: float, grade: str | None = None):
         """
@@ -62,7 +81,7 @@ class SignalBroadcaster:
             f"⚠️ Не финансовая рекомендация. Соблюдайте риск-менеджмент."
         )
 
-        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text, message_type="legacy_vip_signal")
 
     async def send_signal_update(self, symbol: str, text_status: str, extra: str = ""):
         """
@@ -78,4 +97,4 @@ class SignalBroadcaster:
         if extra:
             text += f"\n{extra}"
 
-        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text)
+        await self.send_message(settings.TELEGRAM_VIP_SIGNALS_CHAT_ID, text, message_type="legacy_vip_update")
