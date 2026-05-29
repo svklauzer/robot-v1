@@ -537,13 +537,97 @@ class RobotLoop:
 
             db.add(sig)
             db.flush()
+            db.refresh(sig)
 
+            await self._publish_new_signal_safely(
+                db=db,
+                sig=sig,
+                signal_payload=signal_payload,
+                effective_confidence=effective_confidence,
+                grade=grade,
+                is_public=should_publish,
+                result=result,
+            )
+
+    async def _publish_new_signal_safely(
+        self,
+        *,
+        db: Session,
+        sig: Signal,
+        signal_payload: dict,
+        effective_confidence: float,
+        grade: str,
+        is_public: bool,
+        result=None,
+    ) -> bool:
+        """
+        Publish Telegram notification without rolling back the trading state.
+
+        In paper mode Telegram delivery is operationally important, but it must not
+        erase a valid published signal: otherwise the lifecycle never gets a
+        chance to open a paper position. In live modes we still keep the DB
+        transaction safe and mark the signal as telegram_failed.
+        """
+        try:
             await self.telegram_router.publish_new_signal(
                 signal=signal_payload,
                 confidence=effective_confidence,
                 grade=grade,
                 signal_id=sig.id,
-            )            
+                is_public=is_public,
+            )
+            return True
+
+        except Exception as telegram_error:
+            error_text = f"{type(telegram_error).__name__}: {repr(telegram_error)}"
+            live_delivery_required = bool(getattr(settings, "is_live_enabled", False)) or str(
+                getattr(settings, "TRADING_MODE", "paper_signal")
+            ).lower().startswith("live")
+
+            plan_json = sig.plan_json or {}
+            plan_json["telegram_delivery"] = {
+                "ok": False,
+                "error": error_text,
+                "mode": "required" if live_delivery_required else "non_blocking_paper",
+            }
+            sig.plan_json = plan_json
+
+            if live_delivery_required:
+                sig.status = "telegram_failed"
+                sig.closed_reason = "initial_telegram_publish_failed"
+                event_status = "telegram_failed"
+                event_decision = "initial_telegram_publish_failed"
+            else:
+                # Paper testing should continue: keep the signal active so the
+                # lifecycle can open/track a paper position when entry is reached.
+                event_status = "warning"
+                event_decision = "telegram_delivery_failed_signal_kept_published"
+
+            db.add(
+                IntelligenceEvent(
+                    symbol=sig.symbol,
+                    status=event_status,
+                    decision=event_decision,
+                    action=sig.side,
+                    regime=getattr(result, "regime", None),
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    setup_score=(getattr(result, "setup_quality", {}) or {}).get("final_score", 0.0)
+                    if result is not None
+                    else None,
+                    payload_json={
+                        "signal_id": sig.id,
+                        "symbol": sig.symbol,
+                        "side": sig.side,
+                        "grade": grade,
+                        "is_public": is_public,
+                        "telegram_error": error_text,
+                        "live_delivery_required": live_delivery_required,
+                    },
+                )
+            )
+            db.flush()
+            return False
 
     def _intelligence_effective_confidence(self, result) -> float:
         """
