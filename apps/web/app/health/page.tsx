@@ -89,11 +89,14 @@ export default function HealthPage() {
         <Panel title="Background loops">
           <LoopRow title="Robot Loop" enabled={loops?.robot_loop?.enabled} created={loops?.robot_loop?.task_created} done={loops?.robot_loop?.task_done} />
           <LoopRow title="Subscription Loop" enabled={loops?.subscription_loop?.enabled} created={loops?.subscription_loop?.task_created} done={loops?.subscription_loop?.task_done} />
+          <LoopRow title="Telegram Delivery Loop" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
         </Panel>
 
         <Panel title="Telegram delivery 24h">
           <InfoRow label="SLA" value={`${delivery?.sla_pct ?? 100}%`} />
           <InfoRow label="Sent" value={delivery?.sent ?? 0} />
+          <InfoRow label="Queued" value={delivery?.queued ?? 0} danger={(delivery?.queued ?? 0) > 0} />
+          <InfoRow label="Retryable" value={delivery?.retryable ?? 0} danger={(delivery?.retryable ?? 0) > 0} />
           <InfoRow label="Failed" value={delivery?.failed ?? 0} danger={(delivery?.failed ?? 0) > 0} />
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
         </Panel>

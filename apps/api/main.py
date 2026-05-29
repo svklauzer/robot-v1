@@ -37,7 +37,8 @@ from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
 from services.report_service import ReportService
 from services.subscription_watchdog import SubscriptionWatchdog
-from services.telegram_delivery_log import TelegramDeliveryLog
+from services.telegram_delivery_log import TelegramDeliveryLog, ensure_telegram_delivery_schema
+from services.telegram_delivery_worker import TelegramDeliveryWorker
 from services.billing_service import BillingService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
@@ -64,6 +65,9 @@ robot_loop_enabled = True
 subscription_task = None
 subscription_loop_enabled = True
 
+telegram_delivery_task = None
+telegram_delivery_loop_enabled = True
+
 
 async def background_subscription_loop():
     global subscription_loop_enabled
@@ -86,6 +90,33 @@ async def background_subscription_loop():
             db.close()
 
         await asyncio.sleep(60 * 60 * 6)
+
+
+async def background_telegram_delivery_loop():
+    global telegram_delivery_loop_enabled
+
+    await asyncio.sleep(15)
+    worker = TelegramDeliveryWorker()
+
+    while telegram_delivery_loop_enabled:
+        db = SessionLocal()
+
+        try:
+            result = await worker.process_once(db, limit=25)
+            db.commit()
+
+            if result.get("processed", 0) > 0:
+                print(f"[TELEGRAM DELIVERY RETRY] {result}")
+
+        except Exception as e:
+            db.rollback()
+            print(f"[TELEGRAM DELIVERY LOOP ERROR] {type(e).__name__}: {e}")
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(30)
+
 
 class CloseSignalRequest(BaseModel):
     result_pct: float
@@ -192,9 +223,10 @@ async def background_robot_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled
 
     Base.metadata.create_all(bind=engine)
+    ensure_telegram_delivery_schema()
     bootstrap_owner_and_bot()
     bootstrap_billing_plans()
 
@@ -203,6 +235,9 @@ async def lifespan(app: FastAPI):
 
     subscription_loop_enabled = True
     subscription_task = asyncio.create_task(background_subscription_loop())
+
+    telegram_delivery_loop_enabled = True
+    telegram_delivery_task = asyncio.create_task(background_telegram_delivery_loop())
 
     yield
 
@@ -213,6 +248,10 @@ async def lifespan(app: FastAPI):
     subscription_loop_enabled = False
     if subscription_task:
         subscription_task.cancel()
+
+    telegram_delivery_loop_enabled = False
+    if telegram_delivery_task:
+        telegram_delivery_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
@@ -523,6 +562,11 @@ def robot_loop_state():
             "enabled": subscription_loop_enabled,
             "task_created": subscription_task is not None,
             "task_done": subscription_task.done() if subscription_task else None,
+        },
+        "telegram_delivery_loop": {
+            "enabled": telegram_delivery_loop_enabled,
+            "task_created": telegram_delivery_task is not None,
+            "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
         },
     }
 
@@ -1484,6 +1528,11 @@ def system_health():
                     "enabled": subscription_loop_enabled,
                     "task_created": subscription_task is not None,
                     "task_done": subscription_task.done() if subscription_task else None,
+                },
+                "telegram_delivery_loop": {
+                    "enabled": telegram_delivery_loop_enabled,
+                    "task_created": telegram_delivery_task is not None,
+                    "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
                 },
             },
             "market": market_status,
