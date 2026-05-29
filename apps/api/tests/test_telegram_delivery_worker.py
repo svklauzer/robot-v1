@@ -13,7 +13,7 @@ class FlakySender(TelegramDeliveryWorker):
         super().__init__()
         self.calls = 0
 
-    async def _send_telegram_http(self, chat_id: str, text: str) -> None:
+    async def _send_telegram_http(self, chat_id: str, text: str, reply_markup: dict | None = None) -> None:
         self.calls += 1
         if self.calls == 1:
             raise TimeoutError("telegram timeout")

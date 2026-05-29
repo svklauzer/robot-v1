@@ -13,6 +13,7 @@ class TelegramDelivery(Base):
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     text_preview: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reply_markup_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

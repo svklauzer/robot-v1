@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import inspect, text
@@ -21,6 +22,7 @@ class TelegramDeliveryLog:
         attempts: int = 1,
         max_attempts: int = 3,
         next_retry_at: datetime | None = None,
+        reply_markup: dict | None = None,
     ) -> None:
         db = SessionLocal()
         try:
@@ -31,6 +33,7 @@ class TelegramDeliveryLog:
                 status=status,
                 text=text,
                 text_preview=(text or "")[:500],
+                reply_markup_json=json.dumps(reply_markup) if reply_markup else None,
                 attempts=attempts,
                 max_attempts=max_attempts,
                 error=error,
@@ -53,6 +56,7 @@ class TelegramDeliveryLog:
         text_value: str,
         message_type: str = "message",
         max_attempts: int = 3,
+        reply_markup: dict | None = None,
     ) -> TelegramDelivery:
         delivery = TelegramDelivery(
             chat_id=str(chat_id),
@@ -60,6 +64,7 @@ class TelegramDeliveryLog:
             status="queued",
             text=text_value,
             text_preview=(text_value or "")[:500],
+            reply_markup_json=json.dumps(reply_markup) if reply_markup else None,
             attempts=0,
             max_attempts=max_attempts,
             next_retry_at=datetime.now(timezone.utc),
@@ -171,6 +176,7 @@ def ensure_telegram_delivery_schema() -> None:
         "next_retry_at": "TIMESTAMP NULL",
         "last_attempt_at": "TIMESTAMP NULL",
         "sent_at": "TIMESTAMP NULL",
+        "reply_markup_json": "TEXT",
     }
 
     with engine.begin() as conn:

@@ -25,6 +25,7 @@ from models.position import Position
 from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
 from models.telegram_delivery import TelegramDelivery
+from models.telegram_profile import TelegramProfile
 from models.payment import BillingPlan, Payment
 
 from workers.robot_loop import RobotLoop
@@ -53,6 +54,7 @@ from services.production_entry_gate import ProductionEntryGate
 from services.signal_replacement import SignalReplacementPolicy
 from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
+from services.telegram_bot_menu import TelegramBotMenuService
 
 from pydantic import BaseModel
 
@@ -1750,76 +1752,43 @@ def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> s
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(payload: TelegramWebhookRequest):
-    message = payload.message or {}
-    callback = payload.callback_query or {}
-
-    if callback:
-        message = callback.get("message") or {}
-        text = callback.get("data") or "/menu"
-        user = callback.get("from") or {}
-    else:
-        text = str(message.get("text") or "/menu")
-        user = message.get("from") or {}
-
-    chat = message.get("chat") or {}
-    chat_id = chat.get("id") or user.get("id")
-    telegram_user_id = str(user.get("id") or chat_id or "")
-
     db = SessionLocal()
     try:
-        subscriber = None
-        if telegram_user_id:
-            subscriber = (
-                db.query(Subscriber)
-                .filter(Subscriber.telegram_user_id == telegram_user_id)
-                .first()
-            )
+        response = TelegramBotMenuService().handle(
+            db=db,
+            message=payload.message,
+            callback_query=payload.callback_query,
+        )
+        db.commit()
 
-        command_parts = text.split()
-        command = command_parts[0] if command_parts else "/menu"
-
-        if command == "/pay" and telegram_user_id:
-            plan_code = command_parts[1] if len(command_parts) > 1 else "vip_30"
-            try:
-                payment = BillingService().create_checkout(
-                    db=db,
-                    telegram_user_id=telegram_user_id,
-                    plan_code=plan_code,
-                    username=user.get("username"),
-                    full_name=" ".join(
-                        part for part in [user.get("first_name"), user.get("last_name")] if part
-                    ) or None,
-                    provider="manual",
-                    notes="telegram_menu_checkout",
-                )
-                db.commit()
-                response_text = (
-                    "💳 Checkout создан\n\n"
-                    f"Payment ID: #{payment.id}\n"
-                    f"Plan: {payment.plan_code}\n"
-                    f"Amount: {payment.amount} {payment.currency}\n"
-                    "После оплаты owner подтвердит платеж, и VIP будет активирован автоматически."
-                )
-            except Exception as e:
-                db.rollback()
-                response_text = f"Не удалось создать checkout: {type(e).__name__}: {e}"
-        else:
-            response_text = _telegram_menu_text(command, subscriber=subscriber)
-
-        if chat_id:
+        if response.chat_id:
             await SignalBroadcaster().send_message(
-                chat_id=chat_id,
-                text=response_text,
-                message_type="bot_menu",
+                chat_id=response.chat_id,
+                text=response.text,
+                message_type=response.message_type,
+                reply_markup=response.reply_markup,
             )
 
         return {
             "status": "ok",
-            "command": command,
-            "telegram_user_id": telegram_user_id,
-            "subscriber_found": subscriber is not None,
+            "command": response.command,
+            "telegram_user_id": response.telegram_user_id,
+            "message_type": response.message_type,
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 

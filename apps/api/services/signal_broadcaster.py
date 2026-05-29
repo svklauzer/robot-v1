@@ -9,25 +9,29 @@ class SignalBroadcaster:
     def __init__(self):
         self.delivery_log = TelegramDeliveryLog()
 
-    async def _send_telegram_http(self, chat_id: str, text: str) -> dict:
+    async def _send_telegram_http(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict:
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
                 url,
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "disable_web_page_preview": True,
-                }
+                json=payload
             )
             response.raise_for_status()
 
         return {"ok": True, "chat_id": chat_id}
 
-    async def send_message(self, chat_id: str, text: str, message_type: str = "message"):
+    async def send_message(self, chat_id: str, text: str, message_type: str = "message", reply_markup: dict | None = None):
         try:
-            result = await self._send_telegram_http(chat_id, text)
+            result = await self._send_telegram_http(chat_id, text, reply_markup=reply_markup)
 
             self.delivery_log.record(
                 chat_id=chat_id,
@@ -35,6 +39,7 @@ class SignalBroadcaster:
                 status="sent",
                 message_type=message_type,
                 attempts=1,
+                reply_markup=reply_markup,
             )
 
             return result
@@ -54,6 +59,7 @@ class SignalBroadcaster:
                 attempts=1,
                 max_attempts=3,
                 next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+                reply_markup=reply_markup,
             )
 
             return {
