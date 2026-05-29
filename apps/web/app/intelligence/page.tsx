@@ -37,6 +37,7 @@ export default function IntelligencePage() {
   const [scanData, setScanData] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [scanStatusFilter, setScanStatusFilter] = useState("actionable");
 
   const [analytics, setAnalytics] = useState<any>(null);
   const [funnel, setFunnel] = useState<any>(null);
@@ -86,6 +87,21 @@ export default function IntelligencePage() {
   }, []);
 
   const results = Array.isArray(scanData?.results) ? scanData.results : [];
+
+  const filteredResults = useMemo(() => {
+    if (scanStatusFilter === "all") return results;
+
+    return results.filter((item: any) => {
+      const status = String(item.status || "").toLowerCase();
+      const decision = String(item.decision || "").toLowerCase();
+
+      if (scanStatusFilter === "actionable") {
+        return status !== "hold" || decision !== "skip_no_trade_conditions";
+      }
+
+      return status === scanStatusFilter;
+    });
+  }, [results, scanStatusFilter]);
 
   const importantEvents = useMemo(() => {
     return groupDecisionEvents(
@@ -179,19 +195,34 @@ export default function IntelligencePage() {
               </p>
             </div>
 
-            <div className="text-xs text-emerald-100/50">
-              автообновление каждые 10 секунд
+            <div className="flex flex-col gap-2 text-xs text-emerald-100/60 sm:flex-row sm:items-center">
+              <span>автообновление каждые 10 секунд</span>
+              <select
+                value={scanStatusFilter}
+                onChange={(e) => setScanStatusFilter(e.target.value)}
+                className="rounded-xl border border-emerald-800 bg-black/40 px-3 py-2 text-emerald-100 outline-none focus:border-emerald-400"
+              >
+                <option value="actionable">actionable first</option>
+                <option value="all">all statuses</option>
+                <option value="candidate">candidate</option>
+                <option value="wait">wait</option>
+                <option value="watch">watch</option>
+                <option value="blocked">blocked</option>
+                <option value="rejected">rejected</option>
+                <option value="hold">hold</option>
+              </select>
+              <span>показано {filteredResults.length} / {results.length}</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            {results.map((r: any) => (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {filteredResults.map((r: any) => (
               <ScanCard key={r.symbol} item={r} />
             ))}
 
-            {results.length === 0 && (
-              <div className="rounded-2xl border border-emerald-950 bg-black/20 p-6 text-center text-emerald-100/50 xl:col-span-3">
-                Данных пока нет
+            {filteredResults.length === 0 && (
+              <div className="rounded-2xl border border-emerald-950 bg-black/20 p-6 text-center text-emerald-100/50 xl:col-span-2">
+                Данных по выбранному фильтру нет
               </div>
             )}
           </div>

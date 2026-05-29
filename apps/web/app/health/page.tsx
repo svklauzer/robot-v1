@@ -44,9 +44,11 @@ export default function HealthPage() {
   const bot = health?.bot;
   const market = health?.market;
   const loops = health?.loops;
-  const delivery = health?.telegram_delivery || readiness?.telegram_delivery || {};
-  const production = health?.production_readiness || readiness || {};
-  const blockers = production?.blockers || readiness?.blockers || [];
+  const delivery = readiness?.telegram_delivery || health?.telegram_delivery || {};
+  // /system/readiness is the product go-live source of truth: it includes
+  // profit and Telegram SLA gates that /system/health may not treat as blockers.
+  const production = readiness || health?.production_readiness || {};
+  const blockers = readiness?.blockers || health?.production_readiness?.blockers || [];
 
   return (
     <AppShell>
