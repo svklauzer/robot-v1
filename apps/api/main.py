@@ -1610,7 +1610,60 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
+    finally:
+        db.close()
 
+
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        event = None
+        if payload and payload.provider_event_id:
+            payment, subscriber, activated, event = service.process_payment_event(
+                db=db,
+                payment_id=payment_id,
+                provider="manual",
+                provider_event_id=payload.provider_event_id,
+                status="paid",
+                raw_payload=payload.raw_payload,
+            )
+        else:
+            payment, subscriber, activated = service.confirm_payment(
+                db=db,
+                payment_id=payment_id,
+                raw_payload=payload.raw_payload if payload else None,
+            )
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id},
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+            "payment_event": service.serialize_payment_event(event) if event else None,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
     finally:
         db.close()
 
@@ -3745,6 +3798,22 @@ async def intelligence_scan_run():
     finally:
         db.close()
         INTELLIGENCE_PUBLISH_LOCK.release()
+
+@app.get("/intelligence/funnel")
+def intelligence_funnel(limit: int = 120):
+    """
+    Operator diagnostics for the candidate -> published -> open path.
+
+    It explains why market intelligence keeps producing candidates/watch events
+    while Signal rows do not become active published/open positions.
+    """
+    db = SessionLocal()
+
+    try:
+        return CandidateFunnelService().summarize(db, limit=limit)
+    finally:
+        db.close()
+
 
 @app.get("/intelligence/funnel")
 def intelligence_funnel(limit: int = 120):
