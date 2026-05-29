@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     OWNER_EMAIL: str = "owner@example.com"
     OWNER_PASSWORD: str = "owner-password-change-me"
+    OWNER_API_TOKEN: str = ""
 
     # =========================
     # DATABASE
@@ -232,6 +233,8 @@ class Settings(BaseSettings):
                 blockers.append("JWT_SECRET uses development default")
             if self.OWNER_PASSWORD == "owner-password-change-me":
                 blockers.append("OWNER_PASSWORD uses development default")
+            if not self.OWNER_API_TOKEN:
+                blockers.append("OWNER_API_TOKEN is not configured")
             if not self.TELEGRAM_BOT_TOKEN:
                 blockers.append("TELEGRAM_BOT_TOKEN is not configured")
             if not self.HTX_API_KEY or not self.HTX_API_SECRET:

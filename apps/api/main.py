@@ -5,7 +5,7 @@ from core.decision_codes import (
     DECISION_MAX_ACTIVE_SIGNALS_REACHED,
     DECISION_REQUIRED_MARGIN_EXCEEDS_FREE_MARGIN,
 )
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 
 from core.db import Base, engine, SessionLocal
 from core.config import settings
-from core.security import hash_password
+from core.security import hash_password, require_owner_action
 
 from models.user import User
 from models.bot import Bot
@@ -528,7 +528,7 @@ def list_orders():
         db.close()
 
 
-@app.post("/robot/run-once")
+@app.post("/robot/run-once", dependencies=[Depends(require_owner_action)])
 async def run_robot_once():
     db = SessionLocal()
 
@@ -581,7 +581,7 @@ def robot_loop_state():
     }
 
 
-@app.post("/telegram/test-owner")
+@app.post("/telegram/test-owner", dependencies=[Depends(require_owner_action)])
 async def telegram_test_owner():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_owner_alert(
@@ -590,7 +590,7 @@ async def telegram_test_owner():
     )
     return {"status": "sent"}
 
-@app.get("/robot/debug-signals")
+@app.get("/robot/debug-signals", dependencies=[Depends(require_owner_action)])
 def debug_signals():
     db = SessionLocal()
 
@@ -631,7 +631,7 @@ def debug_signals():
     finally:
         db.close()
 
-@app.post("/robot/force-paper-signal")
+@app.post("/robot/force-paper-signal", dependencies=[Depends(require_owner_action)])
 async def force_paper_signal():
     db = SessionLocal()
 
@@ -932,7 +932,7 @@ async def close_signal(signal_id: int, payload: CloseSignalRequest):
     finally:
         db.close()
 
-@app.post("/robot/force-live-near-signal")
+@app.post("/robot/force-live-near-signal", dependencies=[Depends(require_owner_action)])
 async def force_live_near_signal():
     db = SessionLocal()
 
@@ -1033,7 +1033,7 @@ def queued_to_published():
     finally:
         db.close()
 
-@app.post("/robot/run-lifecycle-once")
+@app.post("/robot/run-lifecycle-once", dependencies=[Depends(require_owner_action)])
 async def run_lifecycle_once():
     db = SessionLocal()
 
@@ -1054,7 +1054,7 @@ async def run_lifecycle_once():
     finally:
         db.close()
 
-@app.post("/robot/force-scalp-signal")
+@app.post("/robot/force-scalp-signal", dependencies=[Depends(require_owner_action)])
 async def force_scalp_signal():
     db = SessionLocal()
 
@@ -1211,7 +1211,7 @@ async def force_scalp_signal():
     finally:
         db.close()
 
-@app.post("/robot/test-lifecycle-price")
+@app.post("/robot/test-lifecycle-price", dependencies=[Depends(require_owner_action)])
 async def test_lifecycle_price(payload: TestLifecyclePriceRequest):
     db = SessionLocal()
 
@@ -1334,7 +1334,7 @@ def list_subscribers():
         db.close()
 
 
-@app.post("/subscribers")
+@app.post("/subscribers", dependencies=[Depends(require_owner_action)])
 async def create_subscriber(payload: CreateSubscriberRequest):
     db = SessionLocal()
 
@@ -1396,7 +1396,7 @@ async def create_subscriber(payload: CreateSubscriberRequest):
         db.close()
 
 
-@app.post("/subscribers/{subscriber_id}/extend")
+@app.post("/subscribers/{subscriber_id}/extend", dependencies=[Depends(require_owner_action)])
 async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest):
     db = SessionLocal()
 
@@ -1435,7 +1435,7 @@ async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest
         db.close()
 
 
-@app.post("/subscribers/{subscriber_id}/status")
+@app.post("/subscribers/{subscriber_id}/status", dependencies=[Depends(require_owner_action)])
 def update_subscriber_status(subscriber_id: int, payload: UpdateSubscriberStatusRequest):
     db = SessionLocal()
 
@@ -1461,7 +1461,7 @@ def update_subscriber_status(subscriber_id: int, payload: UpdateSubscriberStatus
     finally:
         db.close()  
 
-@app.post("/subscribers/check-expirations")
+@app.post("/subscribers/check-expirations", dependencies=[Depends(require_owner_action)])
 async def check_subscriber_expirations():
     db = SessionLocal()
 
@@ -1583,7 +1583,7 @@ def list_payment_plans():
         db.close()
 
 
-@app.post("/payments/checkout")
+@app.post("/payments/checkout", dependencies=[Depends(require_owner_action)])
 def create_payment_checkout(payload: CreateCheckoutRequest):
     db = SessionLocal()
     try:
@@ -1625,7 +1625,7 @@ def list_payments(limit: int = 100, status: str | None = None):
         db.close()
 
 
-@app.post("/payments/{payment_id}/manual-confirm")
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
 async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
     db = SessionLocal()
     try:
@@ -1687,7 +1687,7 @@ def list_payment_events(limit: int = 100):
         db.close()
 
 
-@app.post("/payments/events")
+@app.post("/payments/events", dependencies=[Depends(require_owner_action)])
 def process_payment_event(payload: PaymentEventRequest):
     db = SessionLocal()
     try:
@@ -1856,112 +1856,7 @@ def telegram_deliveries_summary(hours: int = 24):
     finally:
         db.close()
 
-
-def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> str:
-    command = command.lower().strip()
-
-    if command in ["/start", "/menu"]:
-        return (
-            "🤖 Finmt Robot\n\n"
-            "Меню:\n"
-            "/plans — тарифы VIP\n"
-            "/pay — как оплатить доступ\n"
-            "/status — статус подписки\n"
-            "/help — FAQ и риски\n"
-            "/support — поддержка"
-        )
-
-    if command == "/plans":
-        return (
-            "💎 VIP планы\n\n"
-            "VIP 30 дней — полный сигнал, уровни, сопровождение и отчёты.\n"
-            "VIP 90 дней — тот же доступ с долгим периодом.\n\n"
-            "Нажмите /pay для инструкции по оплате."
-        )
-
-    if command == "/pay":
-        return (
-            "💳 Оплата VIP\n\n"
-            "Напишите /pay vip_30 или /pay vip_90, чтобы создать pending checkout. "
-            "Owner сможет подтвердить оплату в разделе Payments."
-        )
-
-    if command == "/status":
-        if not subscriber:
-            return "Статус: подписка не найдена. Нажмите /plans или /pay."
-        return (
-            "📌 Статус подписки\n\n"
-            f"Plan: {subscriber.plan}\n"
-            f"Status: {subscriber.status}\n"
-            f"Expires: {subscriber.expires_at}"
-        )
-
-    if command == "/help":
-        return (
-            "ℹ️ FAQ и риски\n\n"
-            "Сигналы не являются финансовой рекомендацией. "
-            "Используйте риск-менеджмент и не торгуйте средствами, которые не готовы потерять. "
-            "Перед live-режимом система проходит paper/live-shadow gates."
-        )
-
-    if command == "/support":
-        return "Поддержка: напишите owner/admin канала с вашим Telegram ID."
-
-    return "Неизвестная команда. Нажмите /menu."
-
-
-@app.post("/telegram/webhook")
-async def telegram_webhook(payload: TelegramWebhookRequest):
-    db = SessionLocal()
-    try:
-        response = TelegramBotMenuService().handle(
-            db=db,
-            message=payload.message,
-            callback_query=payload.callback_query,
-        )
-        db.commit()
-
-        if response.chat_id:
-            await SignalBroadcaster().send_message(
-                chat_id=response.chat_id,
-                text=response.text,
-                message_type=response.message_type,
-                reply_markup=response.reply_markup,
-            )
-
-        return {
-            "status": "ok",
-            "command": response.command,
-            "telegram_user_id": response.telegram_user_id,
-            "message_type": response.message_type,
-        }
-
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
-
-    finally:
-        db.close()
-
-
-@app.get("/telegram/deliveries/summary")
-def telegram_deliveries_summary(hours: int = 24):
-    db = SessionLocal()
-    try:
-        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
-    finally:
-        db.close()
-
-
-@app.get("/telegram/deliveries/summary")
-def telegram_deliveries_summary(hours: int = 24):
-    db = SessionLocal()
-    try:
-        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
-    finally:
-        db.close()
-
-@app.post("/system/test-telegram-owner")
+@app.post("/system/test-telegram-owner", dependencies=[Depends(require_owner_action)])
 async def test_telegram_owner():
     router = TelegramRouter()
     await router.owner_alert(
@@ -1971,7 +1866,7 @@ async def test_telegram_owner():
     return {"status": "sent"}
 
 
-@app.post("/system/test-telegram-free")
+@app.post("/system/test-telegram-free", dependencies=[Depends(require_owner_action)])
 async def test_telegram_free():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_message(
@@ -1981,7 +1876,7 @@ async def test_telegram_free():
     return {"status": "sent"}
 
 
-@app.post("/system/test-telegram-vip")
+@app.post("/system/test-telegram-vip", dependencies=[Depends(require_owner_action)])
 async def test_telegram_vip():
     broadcaster = SignalBroadcaster()
     await broadcaster.send_message(
@@ -2047,7 +1942,7 @@ def build_trade_plan(payload: TradePlanRequest):
     )
     return {"status": "ok", "trade_plan": plan.__dict__}
 
-@app.post("/robot/force-valid-trade-signal")
+@app.post("/robot/force-valid-trade-signal", dependencies=[Depends(require_owner_action)])
 async def force_valid_trade_signal():
     db = SessionLocal()
 
@@ -2258,7 +2153,7 @@ def intelligence_analyze(symbol: str = "BTC/USDT"):
             "error": str(e),
         }
 
-@app.post("/robot/force-intelligence-signal")
+@app.post("/robot/force-intelligence-signal", dependencies=[Depends(require_owner_action)])
 async def force_intelligence_signal(symbol: str = "BTC/USDT"):
     db = SessionLocal()
 
@@ -3836,7 +3731,7 @@ def find_active_signal_for_symbol(db: Session, bot_id: int, symbol: str):
     )
 
 
-@app.post("/debug/exposure")
+@app.post("/debug/exposure", dependencies=[Depends(require_owner_action)])
 def debug_exposure(payload: ExposureDebugRequest):
     db = SessionLocal()
 
