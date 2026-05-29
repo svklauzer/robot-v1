@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
-import { Activity, Bot, Database, RefreshCw, Radio, ShieldCheck, Wifi } from "lucide-react";
+import { Activity, Bot, Database, RefreshCw, Radio, ShieldAlert, ShieldCheck, Wifi } from "lucide-react";
 
 export default function HealthPage() {
   const [health, setHealth] = useState<any>(null);
@@ -35,6 +35,15 @@ export default function HealthPage() {
     alert("Owner Telegram test отправлен");
   }
 
+  async function setKillSwitch(enabled: boolean) {
+    const text = enabled
+      ? "⚠️ Включить kill switch и остановить робота до ручного отключения?"
+      : "Отключить kill switch и разрешить запуск при прохождении safety gates?";
+    if (!window.confirm(text)) return;
+    await apiPost("/system/kill-switch", { enabled, reason: enabled ? "owner_health_page" : "owner_resume" });
+    await loadAll();
+  }
+
   useEffect(() => {
     loadAll();
     const timer = setInterval(loadAll, 5000);
@@ -48,6 +57,7 @@ export default function HealthPage() {
   // /system/readiness is the product go-live source of truth: it includes
   // profit and Telegram SLA gates that /system/health may not treat as blockers.
   const production = readiness || health?.production_readiness || {};
+  const liveSafety = readiness?.live_safety || health?.live_safety || {};
   const blockers = readiness?.blockers || health?.production_readiness?.blockers || [];
 
   return (
@@ -75,21 +85,41 @@ export default function HealthPage() {
             <Radio size={16} />
             Telegram Test
           </button>
+          <button
+            onClick={() => setKillSwitch(!liveSafety?.kill_switch_enabled)}
+            className={
+              liveSafety?.kill_switch_enabled
+                ? "flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold hover:bg-emerald-600"
+                : "flex items-center gap-2 rounded-xl bg-red-700 px-4 py-2 font-semibold hover:bg-red-600"
+            }
+          >
+            <ShieldAlert size={16} />
+            {liveSafety?.kill_switch_enabled ? "Resume" : "Kill switch"}
+          </button>
         </div>
       </header>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <HealthCard icon={<Database size={18} />} title="API" value={health?.api?.ok ? "online" : "offline"} status={health?.api?.ok ? "good" : "bad"} subtitle={`${health?.api?.env || "-"} / ${health?.api?.mode || "-"}`} />
         <HealthCard icon={<Bot size={18} />} title="Bot" value={bot?.status || "-"} status={bot?.status === "running" ? "good" : "warn"} subtitle={bot?.mode || "-"} />
         <HealthCard icon={<Wifi size={18} />} title="Market" value={market?.ok ? "online" : "offline"} status={market?.ok ? "good" : "bad"} subtitle={`${market?.source || "-"} / ${formatNumber(market?.last)}`} />
         <HealthCard icon={<ShieldCheck size={18} />} title="Readiness" value={production?.ready ? "ready" : "blocked"} status={production?.ready ? "good" : "bad"} subtitle={`${blockers.length} blockers`} />
+        <HealthCard icon={<ShieldAlert size={18} />} title="Live safety" value={liveSafety?.blocked ? "blocked" : "clear"} status={liveSafety?.blocked ? "bad" : "good"} subtitle={`day loss ${liveSafety?.daily_loss_pct ?? 0}% / max ${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Panel title="Background loops">
           <LoopRow title="Robot Loop" enabled={loops?.robot_loop?.enabled} created={loops?.robot_loop?.task_created} done={loops?.robot_loop?.task_done} />
           <LoopRow title="Subscription Loop" enabled={loops?.subscription_loop?.enabled} created={loops?.subscription_loop?.task_created} done={loops?.subscription_loop?.task_done} />
           <LoopRow title="Telegram Delivery Loop" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
+        </Panel>
+
+        <Panel title="Live safety">
+          <InfoRow label="Kill switch" value={liveSafety?.kill_switch_enabled ? "enabled" : "disabled"} danger={liveSafety?.kill_switch_enabled} />
+          <InfoRow label="24h Net PnL" value={`${liveSafety?.daily_net_pnl_usdt ?? 0} USDT`} danger={(liveSafety?.daily_net_pnl_usdt ?? 0) < 0} />
+          <InfoRow label="Daily loss" value={`${liveSafety?.daily_loss_pct ?? 0}%`} danger={liveSafety?.daily_loss_blocked} />
+          <InfoRow label="Max daily loss" value={`${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
+          {liveSafety?.kill_switch_reason && <InfoRow label="Reason" value={liveSafety.kill_switch_reason} danger={liveSafety?.kill_switch_enabled} />}
         </Panel>
 
         <Panel title="Telegram delivery 24h">

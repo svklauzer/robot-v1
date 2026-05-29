@@ -57,6 +57,7 @@ from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
+from services.live_safety import LiveSafetyService
 
 from pydantic import BaseModel
 
@@ -198,6 +199,10 @@ class PaymentEventRequest(BaseModel):
     status: str = "paid"
     raw_payload: str | None = None
 
+class KillSwitchRequest(BaseModel):
+    enabled: bool = True
+    reason: str | None = "owner_request"
+
 async def background_robot_loop():
     global robot_loop_enabled
 
@@ -212,15 +217,21 @@ async def background_robot_loop():
             bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
 
             if bot and bot.status == "running":
-                await loop.step(
-                    db=db,
-                    bot=bot,
-                    headlines=[],
-                    balance_usdt=1000,
-                    daily_loss_pct=0,
-                    drawdown_pct=0,
-                )
-                db.commit()
+                safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+
+                if safety.get("blocked"):
+                    db.commit()
+                    print(f"[ROBOT LOOP SAFETY SKIP] {safety}")
+                else:
+                    await loop.step(
+                        db=db,
+                        bot=bot,
+                        headlines=[],
+                        balance_usdt=1000,
+                        daily_loss_pct=safety.get("daily_loss_pct", 0),
+                        drawdown_pct=0,
+                    )
+                    db.commit()
 
         except Exception as e:
             db.rollback()
@@ -392,10 +403,26 @@ def start_bot():
 
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        if not bot:
+            return {"status": "error", "error": "bot_not_found"}
+
+        live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
+        if live_safety.get("blocked"):
+            AuditLogService().record(
+                db,
+                action="bot_start_blocked_by_live_safety",
+                resource_type="bot",
+                resource_id=bot.id,
+                status="blocked",
+                details=live_safety,
+            )
+            db.commit()
+            return {"status": "blocked", "reason": "live_safety_blocked", "live_safety": live_safety}
+
         bot.status = "running"
         AuditLogService().record(db, action="bot_start", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
-        return {"status": "running"}
+        return {"status": "running", "live_safety": live_safety}
 
     finally:
         db.close()
@@ -539,8 +566,15 @@ async def run_robot_once():
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
 
+        if not bot:
+            return {"status": "skipped", "reason": "bot_not_found"}
         if bot.status != "running":
             return {"status": "skipped", "reason": "bot_stopped"}
+
+        safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+        if safety.get("blocked"):
+            db.commit()
+            return {"status": "skipped", "reason": "live_safety_blocked", "live_safety": safety}
 
         loop = RobotLoop()
 
@@ -549,7 +583,7 @@ async def run_robot_once():
             bot=bot,
             headlines=[],
             balance_usdt=1000,
-            daily_loss_pct=0,
+            daily_loss_pct=safety.get("daily_loss_pct", 0),
             drawdown_pct=0,
         )
 
@@ -1501,6 +1535,7 @@ def system_health():
         blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
+        live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         production_blockers = settings.production_blockers()
 
         market_status = {}
@@ -1565,6 +1600,7 @@ def system_health():
             },
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
+            "live_safety": live_safety,
             "production_readiness": {
                 "ready": len(production_blockers) == 0,
                 "blockers": production_blockers,
@@ -1758,6 +1794,44 @@ def payments_summary():
     finally:
         db.close()
 
+@app.get("/system/live-safety")
+def system_live_safety():
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        return LiveSafetyService().snapshot(db=db, bot=bot)
+
+    finally:
+        db.close()
+
+
+@app.post("/system/kill-switch", dependencies=[Depends(require_owner_action)])
+def system_kill_switch(payload: KillSwitchRequest):
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        if not bot:
+            return {"status": "error", "error": "bot_not_found"}
+
+        state = LiveSafetyService().set_kill_switch(
+            db=db,
+            bot=bot,
+            enabled=payload.enabled,
+            reason=payload.reason,
+        )
+        db.commit()
+        return {"status": "ok", "live_safety": state}
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
+
+
 @app.get("/system/readiness")
 def system_readiness():
     db = SessionLocal()
@@ -1766,6 +1840,8 @@ def system_readiness():
         analytics = analytics_summary()
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         blockers = list(settings.production_blockers())
 
         if analytics.get("total_net_pnl_usdt", 0) < 0:
@@ -1774,6 +1850,7 @@ def system_readiness():
             blockers.append("live mode requires at least 200 closed validation signals")
         if telegram_delivery.get("failed", 0) > 0:
             blockers.append("telegram delivery has failures in the last 24h")
+        blockers.extend(live_safety.get("blockers", []))
 
         return {
             "status": "ready" if not blockers else "blocked",
@@ -1782,6 +1859,7 @@ def system_readiness():
             "analytics": analytics,
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
+            "live_safety": live_safety,
             "required_gates": {
                 "closed_validation_signals": 200,
                 "failed_setup_exit_share_max_pct": 35.0,
