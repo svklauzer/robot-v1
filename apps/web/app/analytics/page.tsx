@@ -9,19 +9,22 @@ export default function AnalyticsPage() {
   const [summary, setSummary] = useState<any>(null);
   const [quality, setQuality] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
+  const [rootCause, setRootCause] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [summaryData, qualityData, readinessData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
+        apiGet("/analytics/outcome-root-cause?reason=failed_setup_exit&limit=500"),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
       setReadiness(readinessData);
+      setRootCause(rootCauseData);
     } finally {
       setLoading(false);
     }
@@ -103,6 +106,47 @@ export default function AnalyticsPage() {
                 <div className="mt-1 text-2xl font-bold text-emerald-200">{String(count)}</div>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-red-900/70 bg-red-950/20 p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-red-200">Failed setup root cause</h2>
+              <p className="text-sm text-red-100/60">
+                Roadmap Phase 1: где именно утек PnL по failed_setup_exit.
+              </p>
+            </div>
+            <div className="text-right text-sm text-red-100/70">
+              <div>{rootCause?.target_count ?? 0} / {rootCause?.sample_closed_signals ?? 0} closed</div>
+              <div className="font-semibold text-red-200">{rootCause?.target_share_pct ?? 0}% share</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div className="rounded-xl border border-red-900/60 bg-black/20 p-4">
+              <h3 className="mb-3 font-semibold text-red-100">Worst symbols</h3>
+              {(rootCause?.worst_symbols || []).slice(0, 5).map((item: any) => (
+                <Metric key={item.key} label={`${item.key} (${item.count})`} value={`${item.net_pnl_usdt} USDT`} />
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-red-900/60 bg-black/20 p-4">
+              <h3 className="mb-3 font-semibold text-red-100">Lifecycle leak</h3>
+              <Metric label="Positive→Negative" value={`${rootCause?.metrics?.positive_then_negative_rate ?? 0}%`} />
+              <Metric label="Avg MFE" value={`${rootCause?.metrics?.avg_mfe_pct ?? "-"}%`} />
+              <Metric label="Avg missed" value={`${rootCause?.metrics?.avg_missed_profit_pct ?? "-"}%`} />
+              <Metric label="Target net" value={`${rootCause?.target_net_pnl_usdt ?? 0} USDT`} />
+            </div>
+
+            <div className="rounded-xl border border-red-900/60 bg-black/20 p-4">
+              <h3 className="mb-3 font-semibold text-red-100">Actions</h3>
+              <div className="space-y-2 text-sm text-red-50/80">
+                {(rootCause?.recommendations || []).map((item: string, idx: number) => (
+                  <div key={idx} className="rounded-lg border border-red-900/50 bg-black/20 p-2">{item}</div>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
     </AppShell>
