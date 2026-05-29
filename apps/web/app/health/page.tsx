@@ -58,6 +58,7 @@ export default function HealthPage() {
   // profit and Telegram SLA gates that /system/health may not treat as blockers.
   const production = readiness || health?.production_readiness || {};
   const liveSafety = readiness?.live_safety || health?.live_safety || {};
+  const mlOutcomes = readiness?.ml_outcomes || health?.ml_outcomes || {};
   const blockers = readiness?.blockers || health?.production_readiness?.blockers || [];
 
   return (
@@ -107,7 +108,7 @@ export default function HealthPage() {
         <HealthCard icon={<ShieldAlert size={18} />} title="Live safety" value={liveSafety?.blocked ? "blocked" : "clear"} status={liveSafety?.blocked ? "bad" : "good"} subtitle={`day loss ${liveSafety?.daily_loss_pct ?? 0}% / max ${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Panel title="Background loops">
           <LoopRow title="Robot Loop" enabled={loops?.robot_loop?.enabled} created={loops?.robot_loop?.task_created} done={loops?.robot_loop?.task_done} />
           <LoopRow title="Subscription Loop" enabled={loops?.subscription_loop?.enabled} created={loops?.subscription_loop?.task_created} done={loops?.subscription_loop?.task_done} />
@@ -120,6 +121,13 @@ export default function HealthPage() {
           <InfoRow label="Daily loss" value={`${liveSafety?.daily_loss_pct ?? 0}%`} danger={liveSafety?.daily_loss_blocked} />
           <InfoRow label="Max daily loss" value={`${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
           {liveSafety?.kill_switch_reason && <InfoRow label="Reason" value={liveSafety.kill_switch_reason} danger={liveSafety?.kill_switch_enabled} />}
+        </Panel>
+
+        <Panel title="ML outcomes">
+          <InfoRow label="Status" value={mlOutcomes?.status || "unknown"} danger={!["ok", "empty"].includes(mlOutcomes?.status)} />
+          <InfoRow label="Rows" value={mlOutcomes?.total ?? 0} />
+          <InfoRow label="Parse errors" value={mlOutcomes?.parse_errors ?? 0} danger={(mlOutcomes?.parse_errors ?? 0) > 0} />
+          <InfoRow label="Source" value={shortPath(mlOutcomes?.source_path)} />
         </Panel>
 
         <Panel title="Telegram delivery 24h">
@@ -211,4 +219,10 @@ function formatNumber(value: any) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "-";
   return num.toFixed(4);
+}
+
+function shortPath(value: any) {
+  if (!value) return "-";
+  const text = String(value);
+  return text.length > 36 ? `...${text.slice(-33)}` : text;
 }
