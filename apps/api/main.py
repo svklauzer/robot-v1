@@ -26,6 +26,7 @@ from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
 from models.telegram_delivery import TelegramDelivery
 from models.telegram_profile import TelegramProfile
+from models.audit_event import AuditEvent
 from models.payment import BillingPlan, Payment, PaymentEvent
 
 from workers.robot_loop import RobotLoop
@@ -55,6 +56,7 @@ from services.signal_replacement import SignalReplacementPolicy
 from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.telegram_bot_menu import TelegramBotMenuService
+from services.audit_log import AuditLogService
 
 from pydantic import BaseModel
 
@@ -384,13 +386,14 @@ def bot_state():
         db.close()
 
 
-@app.post("/bot/start")
+@app.post("/bot/start", dependencies=[Depends(require_owner_action)])
 def start_bot():
     db = SessionLocal()
 
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         bot.status = "running"
+        AuditLogService().record(db, action="bot_start", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
         return {"status": "running"}
 
@@ -398,13 +401,14 @@ def start_bot():
         db.close()
 
 
-@app.post("/bot/stop")
+@app.post("/bot/stop", dependencies=[Depends(require_owner_action)])
 def stop_bot():
     db = SessionLocal()
 
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         bot.status = "stopped"
+        AuditLogService().record(db, action="bot_stop", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
         return {"status": "stopped"}
 
@@ -1571,6 +1575,21 @@ def system_health():
     finally:
         db.close()
 
+
+@app.get("/audit/events")
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        service = AuditLogService()
+        return {"items": [service.serialize(event) for event in events]}
+    finally:
+        db.close()
+
 @app.get("/payments/plans")
 def list_payment_plans():
     db = SessionLocal()
@@ -1646,6 +1665,13 @@ async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentR
                 payment_id=payment_id,
                 raw_payload=payload.raw_payload if payload else None,
             )
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id},
+        )
         db.commit()
         await TelegramRouter().owner_alert(
             "PAYMENT CONFIRMED",
@@ -1699,6 +1725,13 @@ def process_payment_event(payload: PaymentEventRequest):
             provider_event_id=payload.provider_event_id,
             status=payload.status,
             raw_payload=payload.raw_payload,
+        )
+        AuditLogService().record(
+            db,
+            action="payment_event_processed",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"event_id": event.id, "status": event.status, "activated": activated},
         )
         db.commit()
         db.refresh(payment)

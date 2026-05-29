@@ -9,3 +9,4 @@ from models.telegram_delivery import TelegramDelivery
 from models.payment import BillingPlan, Payment, PaymentEvent
 
 from models.telegram_profile import TelegramProfile
+from models.audit_event import AuditEvent
