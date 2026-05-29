@@ -1792,6 +1792,15 @@ def telegram_deliveries_summary(hours: int = 24):
     finally:
         db.close()
 
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
+    finally:
+        db.close()
+
 @app.post("/system/test-telegram-owner")
 async def test_telegram_owner():
     router = TelegramRouter()
