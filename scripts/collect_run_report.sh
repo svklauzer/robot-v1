@@ -72,6 +72,7 @@ curl_json analytics_summary "$API_URL/analytics/summary"
 curl_json analytics_reason_breakdown "$API_URL/analytics/reason-breakdown"
 curl_json analytics_signal_quality "$API_URL/analytics/signal-quality"
 curl_json intelligence_events "$API_URL/intelligence/events?limit=300"
+curl_json ml_outcomes_api_summary "$API_URL/ml/outcomes/summary"
 
 # --- ML outcomes raw excerpt ---
 if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
@@ -92,55 +93,7 @@ if [[ -f "$ROOT_DIR/storage/ml/trade_outcomes.jsonl" ]]; then
   fi
 
   if [[ -n "$PYTHON_BIN" ]]; then
-    if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" - <<'PY' >"$RUN_DIR/ml_outcomes_summary.json"; then
-import json
-from collections import Counter, defaultdict
-from pathlib import Path
-
-import os
-root = Path(os.environ.get("ROOT_DIR", "."))
-p = root / "storage/ml/trade_outcomes.jsonl"
-
-rows = []
-for line in p.read_text(encoding="utf-8").splitlines():
-    line=line.strip()
-    if not line:
-        continue
-    try:
-        rows.append(json.loads(line))
-    except Exception:
-        pass
-
-closed = [r for r in rows if str(r.get("status")) == "closed"]
-res = {
-  "total_rows": len(rows),
-  "closed_rows": len(closed),
-}
-if closed:
-  pnl = [float(r.get("closed_net_pnl") or 0.0) for r in closed]
-  wins = sum(1 for x in pnl if x > 0)
-  losses = sum(1 for x in pnl if x <= 0)
-  res.update({
-    "net_pnl_sum": round(sum(pnl), 6),
-    "winrate_pct": round(wins / len(closed) * 100, 2),
-    "wins": wins,
-    "losses": losses,
-  })
-  reason = Counter(str(r.get("closed_reason") or "unknown") for r in closed)
-  res["closed_reason_top"] = reason.most_common(10)
-
-  sym=defaultdict(lambda: {"count":0,"pnl":0.0})
-  for r in closed:
-    s=str(r.get("symbol") or "unknown")
-    sym[s]["count"] += 1
-    sym[s]["pnl"] += float(r.get("closed_net_pnl") or 0.0)
-  res["symbol_pnl"] = sorted(
-    [{"symbol":k, "count":v["count"], "net_pnl":round(v["pnl"],6)} for k,v in sym.items()],
-    key=lambda x: x["net_pnl"]
-  )[:12]
-
-print(json.dumps(res, ensure_ascii=False, indent=2))
-PY
+    if ! ROOT_DIR="$ROOT_DIR" "$PYTHON_BIN" "${PYTHON_BIN_ARGS[@]}" "$ROOT_DIR/scripts/ml_outcomes_summary.py" > "$RUN_DIR/ml_outcomes_summary.json"; then
       echo "{\"status\": \"degraded\", \"fallback_used\": false, \"reason\": \"ml_summary_python_failed\", \"python_bin\": \"$PYTHON_BIN\"}" > "$RUN_DIR/ml_outcomes_summary.json"
     fi
   else
