@@ -39,6 +39,7 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(false);
 
   const [analytics, setAnalytics] = useState<any>(null);
+  const [funnel, setFunnel] = useState<any>(null);
 
   const loadingRef = useRef(false);
 
@@ -49,10 +50,11 @@ export default function IntelligencePage() {
     setLoading(true);
 
     try {
-      const [scanResponse, eventsResponse, analyticsResponse] = await Promise.all([
+      const [scanResponse, eventsResponse, analyticsResponse, funnelResponse] = await Promise.all([
         apiGet("/intelligence/scan"),
         apiGet("/intelligence/events?limit=80"),
         apiGet("/analytics/summary"),
+        apiGet("/intelligence/funnel?limit=120"),
       ]);
 
       if (scanResponse?.status !== "busy") {
@@ -70,6 +72,7 @@ export default function IntelligencePage() {
       }
 
       setAnalytics(analyticsResponse);
+      setFunnel(funnelResponse);
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -158,10 +161,12 @@ export default function IntelligencePage() {
           <Card title="Candidates" value={stats.candidate} />
           <Card title="Scan Published" value={stats.published} />
           <Card title="Active Signals" value={stats.activeSignals} />
+          <Card title="TG Failed" value={analytics?.telegram_failed_signals ?? funnel?.signals?.telegram_failed ?? 0} />
           <Card title="Blocked" value={stats.blocked} />
-          <Card title="Rejected" value={stats.rejected} />
           <Card title="Avg Conf" value={`${stats.avgConfidence}%`} />
         </section>
+
+        {funnel && <FunnelPanel funnel={funnel} />}
 
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -225,6 +230,72 @@ export default function IntelligencePage() {
           </div>
         </section>
     </AppShell>
+  );
+}
+
+function FunnelPanel({ funnel }: { funnel: any }) {
+  const reasons = Array.isArray(funnel?.diagnosis?.reasons) ? funnel.diagnosis.reasons : [];
+  const actions = Array.isArray(funnel?.diagnosis?.actions) ? funnel.diagnosis.actions : [];
+  const blockers = Array.isArray(funnel?.events?.top_blockers) ? funnel.events.top_blockers : [];
+
+  return (
+    <section className="rounded-2xl border border-amber-700/60 bg-amber-950/20 p-5">
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-amber-200">
+            Candidate → Published/Open Funnel
+          </h2>
+          <p className="text-xs text-amber-100/60">
+            Почему кандидаты не доходят до published/open: readonly scan, bot status, production gates, Telegram delivery.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-xs">
+          <MiniPill label="bot" value={funnel?.bot?.status || "-"} danger={!funnel?.bot?.running} />
+          <MiniPill label="ready" value={funnel?.events?.ready_candidates ?? 0} />
+          <MiniPill label="active" value={funnel?.signals?.active_like ?? 0} />
+          <MiniPill label="tg failed" value={funnel?.telegram_delivery?.failed ?? 0} danger={Number(funnel?.telegram_delivery?.failed || 0) > 0} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-amber-800/50 bg-black/20 p-4 lg:col-span-2">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-200/80">
+            Diagnosis
+          </div>
+          <ul className="space-y-2 text-sm text-amber-50/80">
+            {reasons.map((reason: string, idx: number) => (
+              <li key={`${reason}-${idx}`} className="rounded-lg border border-amber-900/50 bg-black/20 p-3">
+                {reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="rounded-xl border border-amber-800/50 bg-black/20 p-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-200/80">
+            Next actions
+          </div>
+          <ul className="space-y-2 text-sm text-amber-50/80">
+            {actions.map((action: string, idx: number) => (
+              <li key={`${action}-${idx}`} className="rounded-lg border border-amber-900/50 bg-black/20 p-3">
+                {action}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      {blockers.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          {blockers.map((blocker: any) => (
+            <span key={blocker.decision} className="rounded-full border border-amber-800/70 bg-black/20 px-3 py-1 text-amber-100/80">
+              {blocker.decision}: {blocker.count}
+            </span>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

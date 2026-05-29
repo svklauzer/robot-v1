@@ -50,6 +50,7 @@ from services.candidate_priority import CandidatePriorityService
 from services.reentry_cooldown import ReEntryCooldownGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.signal_replacement import SignalReplacementPolicy
+from services.candidate_funnel import CandidateFunnelService
 
 from pydantic import BaseModel
 
@@ -656,6 +657,8 @@ def analytics_summary():
 
         expired = db.query(Signal).filter(Signal.status == "expired").count()
         rejected = db.query(Signal).filter(Signal.status == "rejected").count()
+        telegram_failed = db.query(Signal).filter(Signal.status == "telegram_failed").count()
+        queued = db.query(Signal).filter(Signal.status == "queued").count()
 
         wins = 0
         losses = 0
@@ -715,6 +718,8 @@ def analytics_summary():
             "closed_signals": closed_count,
             "expired_signals": expired,
             "rejected_signals": rejected,
+            "telegram_failed_signals": telegram_failed,
+            "queued_signals": queued,
 
             "wins": wins,
             "losses": losses,
@@ -3537,6 +3542,22 @@ async def intelligence_scan_run():
     finally:
         db.close()
         INTELLIGENCE_PUBLISH_LOCK.release()     
+
+@app.get("/intelligence/funnel")
+def intelligence_funnel(limit: int = 120):
+    """
+    Operator diagnostics for the candidate -> published -> open path.
+
+    It explains why market intelligence keeps producing candidates/watch events
+    while Signal rows do not become active published/open positions.
+    """
+    db = SessionLocal()
+
+    try:
+        return CandidateFunnelService().summarize(db, limit=limit)
+    finally:
+        db.close()
+
 
 @app.get("/intelligence/events")
 def intelligence_events(
