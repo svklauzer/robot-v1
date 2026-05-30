@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "robot"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
+    DB_AUTO_CREATE_SCHEMA: bool = True
 
     REDIS_URL: str = "redis://localhost:6379"
 
@@ -247,6 +248,8 @@ class Settings(BaseSettings):
         blockers: list[str] = []
 
         if self.APP_ENV == "production":
+            if self.DB_AUTO_CREATE_SCHEMA:
+                blockers.append("DB_AUTO_CREATE_SCHEMA must be disabled in production; run Alembic migrations")
             if self.JWT_SECRET == "dev-jwt-secret-change-me":
                 blockers.append("JWT_SECRET uses development default")
             if self.OWNER_PASSWORD == "owner-password-change-me":
@@ -270,6 +273,10 @@ class Settings(BaseSettings):
     @property
     def is_live_enabled(self) -> bool:
         return bool(self.ENABLE_LIVE_ORDERS or self.TRADING_MODE in ["live", "live_limited"])
+
+    @property
+    def should_auto_create_schema(self) -> bool:
+        return bool(self.DB_AUTO_CREATE_SCHEMA and self.APP_ENV != "production")
 
     @property
     def database_url(self) -> str:

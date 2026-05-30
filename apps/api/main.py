@@ -287,12 +287,26 @@ async def background_robot_loop():
 
 
 
+def initialize_database_schema():
+    if settings.should_auto_create_schema:
+        Base.metadata.create_all(bind=engine)
+        ensure_telegram_delivery_schema()
+        return
+
+    log_event(
+        logger,
+        logging.INFO,
+        "database_schema_auto_create_skipped",
+        app_env=settings.APP_ENV,
+        db_auto_create_schema=settings.DB_AUTO_CREATE_SCHEMA,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled
 
-    Base.metadata.create_all(bind=engine)
-    ensure_telegram_delivery_schema()
+    initialize_database_schema()
     bootstrap_owner_and_bot()
     bootstrap_billing_plans()
 
