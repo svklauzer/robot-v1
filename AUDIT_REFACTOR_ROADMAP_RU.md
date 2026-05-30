@@ -475,7 +475,7 @@ Hard controls:
 4. Payment reconciliation worker: auto-expire stale pending checkouts, audit event, `/payments/reconcile`.
 5. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
 5. MFE capture analytics and adaptive exit experiments (`adaptive_mfe_capture` before TP1, configurable thresholds).
-6. Structured logs + health checks.
+6. Structured logs + health checks (JSON events for background loops and Telegram delivery, secret redaction).
 7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
 7. Alembic migrations for new billing/telegram tables.
 
@@ -542,6 +542,7 @@ Hard controls:
 - [ ] Owner endpoints authenticated.
 - [ ] Debug endpoints disabled in production.
 - [ ] Secrets not logged.
+- [ ] Background loops emit structured JSON logs with Telegram/owner secrets redacted.
 - [ ] Alembic migrations in place.
 - [ ] Docker production profile documented.
 - [ ] Backup/restore tested.

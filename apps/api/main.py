@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from core.decision_codes import (
     DECISION_WAIT_BETTER_ENTRY_RR,
     DECISION_ACTIVE_SIGNAL_ALREADY_EXISTS,
@@ -16,6 +17,7 @@ from contextlib import asynccontextmanager
 from core.db import Base, engine, SessionLocal
 from core.config import settings
 from core.security import hash_password, require_owner_action
+from core.logging import get_logger, log_event
 
 from models.user import User
 from models.bot import Bot
@@ -81,6 +83,8 @@ telegram_delivery_loop_enabled = True
 payment_reconciliation_task = None
 payment_reconciliation_loop_enabled = True
 
+logger = get_logger(__name__)
+
 
 async def background_subscription_loop():
     global subscription_loop_enabled
@@ -97,7 +101,7 @@ async def background_subscription_loop():
 
         except Exception as e:
             db.rollback()
-            print(f"[SUBSCRIPTION LOOP ERROR] {e}")
+            log_event(logger, logging.ERROR, "subscription_loop_error", error_type=type(e).__name__, error=str(e))
 
         finally:
             db.close()
@@ -119,11 +123,11 @@ async def background_telegram_delivery_loop():
             db.commit()
 
             if result.get("processed", 0) > 0:
-                print(f"[TELEGRAM DELIVERY RETRY] {result}")
+                log_event(logger, logging.INFO, "telegram_delivery_retry", **result)
 
         except Exception as e:
             db.rollback()
-            print(f"[TELEGRAM DELIVERY LOOP ERROR] {type(e).__name__}: {e}")
+            log_event(logger, logging.ERROR, "telegram_delivery_loop_error", error_type=type(e).__name__, error=str(e))
 
         finally:
             db.close()
@@ -145,11 +149,11 @@ async def background_payment_reconciliation_loop():
             db.commit()
 
             if result.get("expired", 0) > 0:
-                print(f"[PAYMENT RECONCILIATION] {result}")
+                log_event(logger, logging.INFO, "payment_reconciliation", **result)
 
         except Exception as e:
             db.rollback()
-            print(f"[PAYMENT RECONCILIATION LOOP ERROR] {type(e).__name__}: {e}")
+            log_event(logger, logging.ERROR, "payment_reconciliation_loop_error", error_type=type(e).__name__, error=str(e))
 
         finally:
             db.close()
@@ -260,7 +264,7 @@ async def background_robot_loop():
 
                 if safety.get("blocked"):
                     db.commit()
-                    print(f"[ROBOT LOOP SAFETY SKIP] {safety}")
+                    log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
                 else:
                     await loop.step(
                         db=db,
@@ -274,7 +278,7 @@ async def background_robot_loop():
 
         except Exception as e:
             db.rollback()
-            print(f"[ROBOT LOOP ERROR] {e}")
+            log_event(logger, logging.ERROR, "robot_loop_error", error_type=type(e).__name__, error=str(e))
 
         finally:
             db.close()
@@ -302,6 +306,7 @@ async def lifespan(app: FastAPI):
     telegram_delivery_task = asyncio.create_task(background_telegram_delivery_loop())
 
     payment_reconciliation_loop_enabled = True
+
     payment_reconciliation_task = asyncio.create_task(background_payment_reconciliation_loop())
 
     yield

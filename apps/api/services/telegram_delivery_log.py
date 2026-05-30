@@ -1,12 +1,16 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from core.db import SessionLocal, engine
+from core.logging import get_logger, log_event
 from models.telegram_delivery import TelegramDelivery
 from services.telegram_errors import is_retryable_telegram_error, sanitize_telegram_error
+
+logger = get_logger(__name__)
 
 RETRYABLE_STATUSES = {"queued", "failed_retryable"}
 FAILED_STATUSES = {"failed", "failed_retryable", "failed_final"}
@@ -53,7 +57,7 @@ class TelegramDeliveryLog:
             db.commit()
         except Exception as exc:
             db.rollback()
-            print(f"[TELEGRAM DELIVERY LOG ERROR] {type(exc).__name__}: {exc}")
+            log_event(logger, logging.ERROR, "telegram_delivery_log_error", error_type=type(exc).__name__, error=str(exc))
         finally:
             db.close()
 

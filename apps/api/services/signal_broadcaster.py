@@ -1,9 +1,14 @@
+import logging
+
 import httpx
 from datetime import datetime, timedelta, timezone
 
 from core.config import settings
+from core.logging import get_logger, log_event
 from services.telegram_delivery_log import TelegramDeliveryLog
 from services.telegram_errors import is_retryable_telegram_error, sanitize_telegram_error
+
+logger = get_logger(__name__)
 
 
 class SignalBroadcaster:
@@ -49,9 +54,14 @@ class SignalBroadcaster:
             error_text = f"{type(e).__name__}: {repr(e)}"
             sanitized_error = sanitize_telegram_error(error_text)
             retryable = is_retryable_telegram_error(e)
-            print(
-                f"[TELEGRAM SEND ERROR] chat_id={chat_id}: "
-                f"{sanitized_error}"
+            log_event(
+                logger,
+                logging.WARNING,
+                "telegram_send_error",
+                chat_id=chat_id,
+                message_type=message_type,
+                retryable=retryable,
+                error=sanitized_error,
             )
 
             self.delivery_log.record(
