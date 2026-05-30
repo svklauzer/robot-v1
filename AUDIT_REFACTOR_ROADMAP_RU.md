@@ -477,7 +477,7 @@ Hard controls:
 5. MFE capture analytics and adaptive exit experiments (`adaptive_mfe_capture` before TP1, configurable thresholds).
 6. Structured logs + health checks (JSON events for background loops and Telegram delivery, secret redaction).
 7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
-7. Alembic migrations for new billing/telegram tables.
+7. Alembic migrations for new billing/telegram/audit tables (baseline runtime + operational domains migration added; continue moving create_all to dev-only).
 
 ### P2 — масштабирование
 
@@ -543,7 +543,7 @@ Hard controls:
 - [ ] Debug endpoints disabled in production.
 - [ ] Secrets not logged.
 - [ ] Background loops emit structured JSON logs with Telegram/owner secrets redacted.
-- [ ] Alembic migrations in place.
+- [ ] Alembic migrations in place for operational domains; production startup no longer depends on `Base.metadata.create_all`.
 - [ ] Docker production profile documented.
 - [ ] Backup/restore tested.
 
