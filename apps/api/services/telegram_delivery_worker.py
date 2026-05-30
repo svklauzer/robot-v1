@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from services.telegram_delivery_log import TelegramDeliveryLog
+from services.telegram_errors import is_retryable_telegram_error, sanitize_telegram_error
 
 
 class TelegramDeliveryWorker:
@@ -26,6 +27,14 @@ class TelegramDeliveryWorker:
                 processed += 1
                 continue
 
+            if delivery.error and not is_retryable_telegram_error(delivery.error):
+                delivery.status = "failed_final"
+                delivery.error = sanitize_telegram_error(delivery.error)
+                delivery.next_retry_at = None
+                failed_final += 1
+                processed += 1
+                continue
+
             try:
                 reply_markup = json.loads(delivery.reply_markup_json) if delivery.reply_markup_json else None
                 await self._send_telegram_http(str(delivery.chat_id), str(delivery.text), reply_markup=reply_markup)
@@ -36,6 +45,7 @@ class TelegramDeliveryWorker:
                     db,
                     delivery,
                     f"{type(exc).__name__}: {repr(exc)}",
+                    retryable=is_retryable_telegram_error(exc),
                 )
                 if delivery.status == "failed_final":
                     failed_final += 1

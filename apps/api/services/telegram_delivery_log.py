@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from core.db import SessionLocal, engine
 from models.telegram_delivery import TelegramDelivery
+from services.telegram_errors import is_retryable_telegram_error, sanitize_telegram_error
 
 RETRYABLE_STATUSES = {"queued", "failed_retryable"}
 FAILED_STATUSES = {"failed", "failed_retryable", "failed_final"}
@@ -27,17 +28,24 @@ class TelegramDeliveryLog:
         db = SessionLocal()
         try:
             now = datetime.now(timezone.utc)
+            sanitized_error = sanitize_telegram_error(error)
+            effective_status = status
+            effective_next_retry_at = next_retry_at
+            if status in {"failed", "failed_retryable"} and not is_retryable_telegram_error(error):
+                effective_status = "failed_final"
+                effective_next_retry_at = None
+
             delivery = TelegramDelivery(
                 chat_id=str(chat_id),
                 message_type=message_type,
-                status=status,
+                status=effective_status,
                 text=text,
                 text_preview=(text or "")[:500],
                 reply_markup_json=json.dumps(reply_markup) if reply_markup else None,
                 attempts=attempts,
                 max_attempts=max_attempts,
-                error=error,
-                next_retry_at=next_retry_at,
+                error=sanitized_error,
+                next_retry_at=effective_next_retry_at,
                 last_attempt_at=now if attempts else None,
                 sent_at=now if status == "sent" else None,
             )
@@ -80,13 +88,15 @@ class TelegramDeliveryLog:
         delivery.last_attempt_at = now
         delivery.sent_at = now
 
-    def mark_failed(self, db: Session, delivery: TelegramDelivery, error: str, base_delay_seconds: int = 60) -> None:
+    def mark_failed(self, db: Session, delivery: TelegramDelivery, error: str, base_delay_seconds: int = 60, retryable: bool | None = None) -> None:
         now = datetime.now(timezone.utc)
         delivery.attempts = int(delivery.attempts or 0) + 1
-        delivery.error = error
+        delivery.error = sanitize_telegram_error(error)
         delivery.last_attempt_at = now
 
-        if delivery.attempts >= int(delivery.max_attempts or 3):
+        should_retry = is_retryable_telegram_error(error) if retryable is None else retryable
+
+        if not should_retry or delivery.attempts >= int(delivery.max_attempts or 3):
             delivery.status = "failed_final"
             delivery.next_retry_at = None
             return
@@ -135,7 +145,7 @@ class TelegramDeliveryLog:
                 bucket["sent"] += 1
             if row.status in FAILED_STATUSES:
                 bucket["failed"] += 1
-                last_error = row.error or last_error
+                last_error = sanitize_telegram_error(row.error) or last_error
             if row.status == "queued":
                 bucket["queued"] += 1
             if row.status == "failed_retryable":

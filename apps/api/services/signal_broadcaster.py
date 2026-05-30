@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from core.config import settings
 from services.telegram_delivery_log import TelegramDeliveryLog
+from services.telegram_errors import is_retryable_telegram_error, sanitize_telegram_error
 
 
 class SignalBroadcaster:
@@ -45,9 +46,24 @@ class SignalBroadcaster:
             return result
 
         except Exception as e:
+            error_text = f"{type(e).__name__}: {repr(e)}"
+            sanitized_error = sanitize_telegram_error(error_text)
+            retryable = is_retryable_telegram_error(e)
             print(
                 f"[TELEGRAM SEND ERROR] chat_id={chat_id}: "
-                f"{type(e).__name__}: {repr(e)}"
+                f"{sanitized_error}"
+            )
+
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="failed_retryable" if retryable else "failed_final",
+                message_type=message_type,
+                error=sanitized_error,
+                attempts=1,
+                max_attempts=3,
+                next_retry_at=(datetime.now(timezone.utc) + timedelta(seconds=60)) if retryable else None,
+                reply_markup=reply_markup,
             )
 
             self.delivery_log.record(
@@ -65,7 +81,7 @@ class SignalBroadcaster:
             return {
                 "ok": False,
                 "chat_id": chat_id,
-                "error": str(e),
+                "error": sanitized_error,
             }
 
     async def send_owner_alert(self, title: str, body: str):
