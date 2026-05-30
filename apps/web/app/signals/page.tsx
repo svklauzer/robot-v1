@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
 
 type SignalItem = any;
@@ -100,9 +100,7 @@ export default function SignalsPage() {
   }, [signals]);
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <Nav />
+    <AppShell>
 
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -198,8 +196,7 @@ export default function SignalsPage() {
             )}
           </div>
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
 
