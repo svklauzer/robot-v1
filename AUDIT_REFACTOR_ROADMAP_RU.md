@@ -474,7 +474,7 @@ Hard controls:
 3. Payment webhook idempotency.
 4. Payment reconciliation worker: auto-expire stale pending checkouts, audit event, `/payments/reconcile`.
 5. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
-5. MFE capture analytics and adaptive exit experiments.
+5. MFE capture analytics and adaptive exit experiments (`adaptive_mfe_capture` before TP1, configurable thresholds).
 6. Structured logs + health checks.
 7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
 7. Alembic migrations for new billing/telegram tables.
@@ -513,6 +513,7 @@ Hard controls:
 - [ ] Rolling net PnL positive after all costs.
 - [ ] `failed_setup_exit < 35%`.
 - [ ] `positive_then_negative_rate < 25%`.
+- [ ] Adaptive MFE capture experiment is enabled/configurable and measured by close reason.
 - [ ] Per-symbol profitability guard виден owner-у и блокирует/снижает риск по убыточным символам.
 - [ ] At least 200 closed paper/live_shadow outcomes.
 - [ ] Live kill switch tested.
