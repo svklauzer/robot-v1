@@ -437,6 +437,7 @@ Hard controls:
    - privacy policy.
 3. Funnel:
    - Telegram free channel -> bot `/start` -> trial -> payment -> VIP invite.
+   - HTX affiliate hook: пользователь переходит по `HTX_AFFILIATE_LINK`, регистрируется в HTX и получает бесплатный VIP на `AFFILIATE_FREE_VIP_DAYS` дней с invite из `VIP_INVITE_LINK` (MVP: self-claim в боте, later: verification webhook/provider report).
 4. Retention:
    - daily/weekly transparent reports;
    - explain closed trades;
@@ -469,6 +470,7 @@ Hard controls:
 
 1. Revenue dashboard.
 2. VIP access automation.
+3. HTX affiliate free-VIP funnel: `/htx` в Telegram, tracking stage, trial activation на 30 дней, анти-дублирование и последующая верификация регистрации.
 3. Payment webhook idempotency.
 4. Per-symbol profitability guard.
 5. MFE capture analytics and adaptive exit experiments.
@@ -477,7 +479,7 @@ Hard controls:
 
 ### P2 — масштабирование
 
-1. A/B тарифы и trial duration.
+1. A/B тарифы, trial duration и affiliate free-VIP офферы.
 2. Referral codes.
 3. Cohort analytics.
 4. Multi-provider payments.
@@ -527,6 +529,7 @@ Hard controls:
 - [ ] Success activates/extends subscription.
 - [ ] Expiry revokes or flags VIP access.
 - [ ] Revenue dashboard exists.
+- [ ] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion.
 
 ### Security/ops
 

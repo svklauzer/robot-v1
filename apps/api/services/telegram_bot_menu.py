@@ -7,6 +7,8 @@ from models.payment import Payment
 from models.subscriber import Subscriber
 from models.telegram_profile import TelegramProfile
 from services.billing_service import BillingService
+from services.affiliate_trial import AffiliateTrialService
+from core.config import settings
 
 
 @dataclass
@@ -20,8 +22,9 @@ class TelegramBotResponse:
 
 
 class TelegramBotMenuService:
-    def __init__(self, billing: BillingService | None = None):
+    def __init__(self, billing: BillingService | None = None, affiliate: AffiliateTrialService | None = None):
         self.billing = billing or BillingService()
+        self.affiliate = affiliate or AffiliateTrialService()
 
     def handle(self, db: Session, message: dict | None, callback_query: dict | None) -> TelegramBotResponse:
         message = message or {}
@@ -89,6 +92,26 @@ class TelegramBotMenuService:
                     self._plans_keyboard(db),
                 )
 
+        if command == "/htx":
+            profile.funnel_stage = "htx_affiliate_clicked"
+            return self._response(chat_id, telegram_user_id, command, self._htx_affiliate_text(), self._htx_affiliate_keyboard())
+
+        if command == "/affiliate-registered":
+            subscriber, activated, reason = self.affiliate.activate_htx_trial(
+                db=db,
+                telegram_user_id=telegram_user_id or "",
+                username=user.get("username"),
+                full_name=self._full_name(user),
+            )
+            profile.funnel_stage = "affiliate_trial_active" if activated else "affiliate_trial_blocked"
+            return self._response(
+                chat_id,
+                telegram_user_id,
+                command,
+                self._affiliate_trial_text(subscriber, activated, reason),
+                self._main_keyboard(),
+            )
+
         if command == "/status":
             profile.funnel_stage = "active" if subscriber and subscriber.status == "active" else "status_checked"
             return self._response(chat_id, telegram_user_id, command, self._status_text(subscriber), self._main_keyboard())
@@ -144,6 +167,8 @@ class TelegramBotMenuService:
             "renew": "/pay vip_30",
             "faq_risks": "/help",
             "contact_support": "/support",
+            "htx_affiliate": "/htx",
+            "affiliate_registered": "/affiliate-registered",
         }
         if text in callback_map:
             text = callback_map[text]
@@ -170,7 +195,7 @@ class TelegramBotMenuService:
         return (
             "🤖 Finmt Robot\n\n"
             "Сигналы, уровни входа/стопа/TP, сопровождение и отчеты.\n"
-            "Выберите действие ниже или используйте команды /plans /pay /status /help /support."
+            "Выберите действие ниже или используйте команды /plans /pay /status /htx /help /support."
             f"{status_line}"
         )
 
@@ -179,7 +204,7 @@ class TelegramBotMenuService:
         rows = ["💎 VIP планы\n"]
         for plan in plans:
             rows.append(f"• {plan.title}: {plan.amount_usdt:g} {plan.currency}, {plan.duration_days} дней")
-        rows.append("\nНажмите кнопку тарифа, чтобы создать pending checkout.")
+        rows.append("\nНажмите кнопку тарифа, чтобы создать pending checkout. Или получите бесплатный VIP через HTX партнёрскую регистрацию: /htx.")
         return "\n".join(rows)
 
     def _checkout_text(self, payment: Payment) -> str:
@@ -207,12 +232,39 @@ class TelegramBotMenuService:
             f"Expires: {subscriber.expires_at}"
         )
 
+    def _htx_affiliate_text(self) -> str:
+        days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)
+        link = settings.HTX_AFFILIATE_LINK or "HTX_AFFILIATE_LINK не настроен"
+        return (
+            "🎁 Бесплатный VIP через HTX\n\n"
+            f"1) Зарегистрируйтесь в HTX по партнёрской ссылке:\n{link}\n\n"
+            f"2) После регистрации нажмите «Я зарегистрировался» — бот активирует VIP на {days} дней.\n\n"
+            "Важно: доступ выдаётся как trial, без гарантии прибыли и с обязательным риск-менеджментом."
+        )
+
+    def _affiliate_trial_text(self, subscriber: Subscriber | None, activated: bool, reason: str) -> str:
+        invite = settings.VIP_INVITE_LINK or "VIP invite будет выдан owner/admin."
+        if activated and subscriber:
+            return (
+                "✅ HTX affiliate VIP активирован\n\n"
+                f"Период: {settings.AFFILIATE_FREE_VIP_DAYS} дней\n"
+                f"Доступ до: {subscriber.expires_at}\n"
+                f"VIP invite: {invite}\n\n"
+                "Проверить статус можно через /status."
+            )
+        if reason == "paid_subscription_already_active":
+            return "✅ У вас уже активна платная VIP подписка. Проверить статус: /status."
+        if reason == "affiliate_trial_already_claimed":
+            return "ℹ️ HTX affiliate trial уже был активирован ранее. Проверить статус: /status."
+        return f"Не удалось активировать HTX affiliate VIP: {reason}. Напишите /support."
+
     def _help_text(self) -> str:
         return (
             "ℹ️ FAQ и риски\n\n"
             "Сигналы не являются финансовой рекомендацией. Нет гарантированной прибыли. "
             "Используйте риск-менеджмент, ограничивайте плечо и не торгуйте средствами, которые не готовы потерять. "
-            "Перед live-режимом система проходит paper/live-shadow gates."
+            "Перед live-режимом система проходит paper/live-shadow gates. "
+            "Маркетинговый бонус: /htx выдаёт пробный VIP после регистрации по партнёрской ссылке HTX."
         )
 
     def _support_text(self, telegram_user_id: str | None) -> str:
@@ -226,10 +278,19 @@ class TelegramBotMenuService:
         return {
             "inline_keyboard": [
                 [{"text": "💎 Тарифы", "callback_data": "plans"}, {"text": "💳 Оплатить", "callback_data": "pay"}],
-                [{"text": "📌 Статус", "callback_data": "status"}, {"text": "ℹ️ Риски", "callback_data": "faq_risks"}],
+                [{"text": "🎁 HTX 30d VIP", "callback_data": "htx_affiliate"}, {"text": "📌 Статус", "callback_data": "status"}],
+                [{"text": "ℹ️ Риски", "callback_data": "faq_risks"}],
                 [{"text": "🛟 Поддержка", "callback_data": "contact_support"}],
             ]
         }
+
+    def _htx_affiliate_keyboard(self) -> dict:
+        rows = []
+        if settings.HTX_AFFILIATE_LINK:
+            rows.append([{"text": "🔗 Открыть HTX", "url": settings.HTX_AFFILIATE_LINK}])
+        rows.append([{"text": "✅ Я зарегистрировался", "callback_data": "affiliate_registered"}])
+        rows.append([{"text": "⬅️ Меню", "callback_data": "menu"}, {"text": "🛟 Поддержка", "callback_data": "support"}])
+        return {"inline_keyboard": rows}
 
     def _plans_keyboard(self, db: Session) -> dict:
         plans = self.billing.list_plans(db)
