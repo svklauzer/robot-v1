@@ -44,6 +44,7 @@ from services.telegram_delivery_worker import TelegramDeliveryWorker
 from services.billing_service import BillingService
 from services.revenue_metrics import RevenueMetricsService
 from services.customer_notifications import CustomerNotificationService
+from services.payment_reconciliation import PaymentReconciliationService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -75,6 +76,9 @@ subscription_loop_enabled = True
 
 telegram_delivery_task = None
 telegram_delivery_loop_enabled = True
+
+payment_reconciliation_task = None
+payment_reconciliation_loop_enabled = True
 
 
 async def background_subscription_loop():
@@ -124,6 +128,32 @@ async def background_telegram_delivery_loop():
             db.close()
 
         await asyncio.sleep(30)
+
+
+async def background_payment_reconciliation_loop():
+    global payment_reconciliation_loop_enabled
+
+    await asyncio.sleep(20)
+    service = PaymentReconciliationService()
+
+    while payment_reconciliation_loop_enabled:
+        db = SessionLocal()
+
+        try:
+            result = service.reconcile_pending(db)
+            db.commit()
+
+            if result.get("expired", 0) > 0:
+                print(f"[PAYMENT RECONCILIATION] {result}")
+
+        except Exception as e:
+            db.rollback()
+            print(f"[PAYMENT RECONCILIATION LOOP ERROR] {type(e).__name__}: {e}")
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(60 * 60)
 
 
 class CloseSignalRequest(BaseModel):
@@ -203,6 +233,10 @@ class PaymentEventRequest(BaseModel):
     raw_payload: str | None = None
 
 
+class PaymentReconcileRequest(BaseModel):
+    older_than_hours: int | None = None
+
+
 class KillSwitchRequest(BaseModel):
     enabled: bool = True
     reason: str | None = "owner_request"
@@ -250,7 +284,7 @@ async def background_robot_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled
 
     Base.metadata.create_all(bind=engine)
     ensure_telegram_delivery_schema()
@@ -266,6 +300,9 @@ async def lifespan(app: FastAPI):
     telegram_delivery_loop_enabled = True
     telegram_delivery_task = asyncio.create_task(background_telegram_delivery_loop())
 
+    payment_reconciliation_loop_enabled = True
+    payment_reconciliation_task = asyncio.create_task(background_payment_reconciliation_loop())
+
     yield
 
     robot_loop_enabled = False
@@ -279,6 +316,10 @@ async def lifespan(app: FastAPI):
     telegram_delivery_loop_enabled = False
     if telegram_delivery_task:
         telegram_delivery_task.cancel()
+
+    payment_reconciliation_loop_enabled = False
+    if payment_reconciliation_task:
+        payment_reconciliation_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
@@ -1628,6 +1669,19 @@ def system_health():
             },
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
@@ -1817,6 +1871,31 @@ def payments_summary():
         return BillingService().summary(db)
     finally:
         db.close()
+
+
+@app.post("/payments/reconcile", dependencies=[Depends(require_owner_action)])
+def reconcile_payments(payload: PaymentReconcileRequest | None = None):
+    db = SessionLocal()
+    try:
+        result = PaymentReconciliationService().reconcile_pending(
+            db,
+            older_than_hours=payload.older_than_hours if payload else None,
+        )
+        if result.get("expired", 0) > 0:
+            AuditLogService().record(
+                db,
+                action="payment_reconciliation",
+                resource_type="payment",
+                details=result,
+            )
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
 
 @app.get("/payments/revenue")
 def payments_revenue(window_days: int = 30):

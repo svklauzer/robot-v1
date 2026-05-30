@@ -224,6 +224,11 @@ class Settings(BaseSettings):
     AFFILIATE_FREE_VIP_DAYS: int = 30
     VIP_INVITE_LINK: str = ""
 
+    # =========================
+    # PAYMENTS / CHECKOUTS
+    # =========================
+    PAYMENT_PENDING_EXPIRE_HOURS: int = 48
+
 
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []

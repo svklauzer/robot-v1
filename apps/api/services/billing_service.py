@@ -263,7 +263,7 @@ class BillingService:
         payments = db.query(Payment).all()
         paid = [p for p in payments if p.status == "paid"]
         pending = [p for p in payments if p.status == "pending"]
-        failed = [p for p in payments if p.status in ["failed", "canceled", "refunded"]]
+        failed = [p for p in payments if p.status in ["failed", "canceled", "refunded", "expired"]]
 
         events = db.query(PaymentEvent).all()
 

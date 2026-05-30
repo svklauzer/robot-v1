@@ -472,7 +472,8 @@ Hard controls:
 2. VIP access automation.
 3. HTX affiliate free-VIP funnel: `/htx` в Telegram, tracking stage, trial activation на 30 дней, анти-дублирование и последующая верификация регистрации.
 3. Payment webhook idempotency.
-4. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
+4. Payment reconciliation worker: auto-expire stale pending checkouts, audit event, `/payments/reconcile`.
+5. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
 5. MFE capture analytics and adaptive exit experiments.
 6. Structured logs + health checks.
 7. Alembic migrations for new billing/telegram tables.
@@ -526,6 +527,7 @@ Hard controls:
 ### Payments/subscriptions
 
 - [ ] Checkout creates payment.
+- [ ] Stale pending checkout expires automatically and is audit-visible.
 - [ ] Webhook is idempotent.
 - [ ] Success activates/extends subscription.
 - [ ] Expiry revokes or flags VIP access.
