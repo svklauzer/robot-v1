@@ -1743,7 +1743,74 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
+    finally:
+        db.close()
 
+
+@app.get("/audit/events")
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        service = AuditLogService()
+        return {"items": [service.serialize(event) for event in events]}
+    finally:
+        db.close()
+
+@app.get("/payments/plans")
+def list_payment_plans():
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        plans = service.list_plans(db)
+        db.commit()
+        return [service.serialize_plan(plan) for plan in plans]
+    finally:
+        db.close()
+
+
+@app.post("/payments/checkout", dependencies=[Depends(require_owner_action)])
+def create_payment_checkout(payload: CreateCheckoutRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment = service.create_checkout(
+            db=db,
+            telegram_user_id=payload.telegram_user_id,
+            plan_code=payload.plan_code,
+            username=payload.username,
+            full_name=payload.full_name,
+            provider=payload.provider,
+            notes=payload.notes,
+        )
+        db.commit()
+        db.refresh(payment)
+        return {"status": "ok", "payment": service.serialize_payment(payment)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments")
+def list_payments(limit: int = 100, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(Payment)
+        if status:
+            query = query.filter(Payment.status == status)
+        payments = query.order_by(Payment.id.desc()).limit(limit).all()
+        service = BillingService()
+        return {
+            "summary": service.summary(db),
+            "items": [service.serialize_payment(payment) for payment in payments],
+        }
     finally:
         db.close()
 

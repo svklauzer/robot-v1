@@ -184,19 +184,19 @@ class Settings(BaseSettings):
     # Дополнительные фильтры качества setup в learning/paper.
     LEARNING_SETUP_MIN_SCORE: float = 62.0
     LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 45.0
-    LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 6.0
-    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = False
+    LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 5.0
+    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = True
     MIN_TREND_CONTINUATION_SCORE: float = 58.0
     MIN_TREND_STRUCTURE_SCORE: float = 14.0
-    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 35.0
+    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 25.0
     LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
     # Paper/publish soft gates for already approved learning setups.
     # Keep configurable to avoid deadlock when the market produces
     # valid candidates with trend_alignment ~= 30.
-    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 4
-    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 3.0
+    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 5
+    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 2.0
     PUBLISH_MIN_TREND_ALIGNMENT: float = 30.0
     PUBLISH_MIN_ENTRY_TIMING: float = 12.0
 
