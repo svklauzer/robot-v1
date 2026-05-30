@@ -85,6 +85,9 @@ telegram_delivery_loop_enabled = True
 payment_reconciliation_task = None
 payment_reconciliation_loop_enabled = True
 
+funding_arb_task = None
+funding_arb_loop_enabled = True
+
 logger = get_logger(__name__)
 
 
@@ -161,6 +164,39 @@ async def background_payment_reconciliation_loop():
             db.close()
 
         await asyncio.sleep(60 * 60)
+
+
+async def background_funding_arb_loop():
+    global funding_arb_loop_enabled
+
+    await asyncio.sleep(30)
+    monitor = FundingMonitorService()
+
+    while funding_arb_loop_enabled:
+        db = SessionLocal()
+
+        try:
+            if settings.ENABLE_FUNDING_ARB:
+                result = monitor.scan(db)
+                db.commit()
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "funding_arb_scan",
+                    opportunities=len(result.get("items", [])),
+                    errors=len(result.get("errors", [])),
+                )
+            else:
+                db.rollback()
+
+        except Exception as e:
+            db.rollback()
+            log_event(logger, logging.ERROR, "funding_arb_loop_error", error_type=type(e).__name__, error=str(e))
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(monitor.scan_interval_seconds())
 
 
 class CloseSignalRequest(BaseModel):
@@ -323,7 +359,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -342,6 +378,9 @@ async def lifespan(app: FastAPI):
 
     payment_reconciliation_task = asyncio.create_task(background_payment_reconciliation_loop())
 
+    funding_arb_loop_enabled = True
+    funding_arb_task = asyncio.create_task(background_funding_arb_loop())
+
     yield
 
     robot_loop_enabled = False
@@ -359,6 +398,10 @@ async def lifespan(app: FastAPI):
     payment_reconciliation_loop_enabled = False
     if payment_reconciliation_task:
         payment_reconciliation_task.cancel()
+
+    funding_arb_loop_enabled = False
+    if funding_arb_task:
+        funding_arb_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
@@ -1667,6 +1710,12 @@ def system_health():
                     "task_created": telegram_delivery_task is not None,
                     "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
                 },
+                "funding_arb_loop": {
+                    "enabled": funding_arb_loop_enabled and settings.ENABLE_FUNDING_ARB,
+                    "task_created": funding_arb_task is not None,
+                    "task_done": funding_arb_task.done() if funding_arb_task else None,
+                    "scan_interval_hours": settings.FUNDING_ARB_SCAN_INTERVAL_HOURS,
+                },
             },
             "market": market_status,
             "signals": {
@@ -1694,7 +1743,24 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
     finally:
         db.close()
 

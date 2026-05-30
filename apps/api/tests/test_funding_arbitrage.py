@@ -146,3 +146,12 @@ def test_live_open_uses_one_htx_client_for_spot_and_swap_orders():
         settings.ENABLE_FUTURES = old_futures
         settings.ENABLE_LIVE_ORDERS = old_live
         db.close()
+
+
+def test_monitor_scan_interval_defaults_to_eight_hours():
+    old_interval = settings.FUNDING_ARB_SCAN_INTERVAL_HOURS
+    try:
+        settings.FUNDING_ARB_SCAN_INTERVAL_HOURS = 8
+        assert FundingMonitorService(client=FakeHTXFundingClient()).scan_interval_seconds() == 8 * 60 * 60
+    finally:
+        settings.FUNDING_ARB_SCAN_INTERVAL_HOURS = old_interval

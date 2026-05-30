@@ -102,6 +102,9 @@ class FundingMonitorService:
             raw={"funding": funding},
         )
 
+    def scan_interval_seconds(self) -> int:
+        return max(int(getattr(settings, "FUNDING_ARB_SCAN_INTERVAL_HOURS", 8)), 1) * 60 * 60
+
     def scan(self, db: Session, symbols: list[str] | None = None) -> dict:
         items: list[FundingArbOpportunity] = []
         errors: list[dict] = []

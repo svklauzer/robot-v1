@@ -237,6 +237,7 @@ class Settings(BaseSettings):
     FUNDING_ARB_MAX_NOTIONAL_USDT: float = 500.0
     FUNDING_ARB_CLOSE_RATE_PCT: float = 0.005
     FUNDING_ARB_MAX_HOLD_HOURS: int = 72
+    FUNDING_ARB_SCAN_INTERVAL_HOURS: int = 8
 
     # =========================
     # AFFILIATE / VIP
