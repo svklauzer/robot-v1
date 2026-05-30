@@ -7,6 +7,7 @@ const items = [
   { href: "/", label: "Dashboard" },
   { href: "/clients", label: "Clients" },
   { href: "/payments", label: "Payments" },
+  { href: "/funding", label: "Funding Arb" },
   { href: "/signals", label: "Signals" },
   { href: "/positions", label: "Positions" },
   { href: "/analytics", label: "Analytics" },

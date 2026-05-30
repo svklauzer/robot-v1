@@ -59,6 +59,7 @@ export default function HealthPage() {
   const production = readiness || health?.production_readiness || {};
   const liveSafety = readiness?.live_safety || health?.live_safety || {};
   const mlOutcomes = readiness?.ml_outcomes || health?.ml_outcomes || {};
+  const fundingArb = readiness?.funding_arb || health?.funding_arb || {};
   const blockers = readiness?.blockers || health?.production_readiness?.blockers || [];
 
   return (
@@ -108,11 +109,12 @@ export default function HealthPage() {
         <HealthCard icon={<ShieldAlert size={18} />} title="Live safety" value={liveSafety?.blocked ? "blocked" : "clear"} status={liveSafety?.blocked ? "bad" : "good"} subtitle={`day loss ${liveSafety?.daily_loss_pct ?? 0}% / max ${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Panel title="Background loops">
           <LoopRow title="Robot Loop" enabled={loops?.robot_loop?.enabled} created={loops?.robot_loop?.task_created} done={loops?.robot_loop?.task_done} />
           <LoopRow title="Subscription Loop" enabled={loops?.subscription_loop?.enabled} created={loops?.subscription_loop?.task_created} done={loops?.subscription_loop?.task_done} />
           <LoopRow title="Telegram Delivery Loop" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
+          <LoopRow title="Funding Arb Loop" enabled={loops?.funding_arb_loop?.enabled} created={loops?.funding_arb_loop?.task_created} done={loops?.funding_arb_loop?.task_done} />
         </Panel>
 
         <Panel title="Live safety">
@@ -137,6 +139,15 @@ export default function HealthPage() {
           <InfoRow label="Retryable" value={delivery?.retryable ?? 0} danger={(delivery?.retryable ?? 0) > 0} />
           <InfoRow label="Failed" value={delivery?.failed ?? 0} danger={(delivery?.failed ?? 0) > 0} />
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
+        </Panel>
+
+        <Panel title="HTX funding arb">
+          <InfoRow label="Status" value={fundingArb?.enabled ? "enabled" : "disabled"} danger={!fundingArb?.enabled} />
+          <InfoRow label="Symbols" value={(fundingArb?.symbols || []).join(", ") || "-"} />
+          <InfoRow label="Open hedges" value={fundingArb?.open_positions ?? 0} danger={(fundingArb?.open_positions ?? 0) > 0} />
+          <InfoRow label="Closed hedges" value={fundingArb?.closed_positions ?? 0} />
+          <InfoRow label="Realized P&L" value={`${fundingArb?.realized_pnl ?? 0} USDT`} danger={(fundingArb?.realized_pnl ?? 0) < 0} />
+          <InfoRow label="Latest scans" value={(fundingArb?.latest_opportunities || []).length} />
         </Panel>
 
         <Panel title="Market connectivity">

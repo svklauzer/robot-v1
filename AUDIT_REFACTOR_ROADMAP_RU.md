@@ -504,8 +504,9 @@ Hard controls:
    - `services/analytics_service.py`, `services/ml_outcome_stats.py`, `models/analytics.py`.
 6. Web UI:
    - `apps/web/app/clients/page.tsx` -> add payments/revenue/funnel;
-   - `apps/web/app/health/page.tsx` -> delivery/payment/live safety metrics;
-   - new `apps/web/app/payments/page.tsx`.
+   - `apps/web/app/health/page.tsx` -> delivery/payment/live safety/funding-arb metrics;
+   - new `apps/web/app/payments/page.tsx`;
+   - new `apps/web/app/funding/page.tsx` -> HTX funding scan, candidates, paper hedge open and P&L positions.
 
 ## 8. Acceptance checklist перед публичным запуском
 
@@ -521,6 +522,7 @@ Hard controls:
 - [ ] Exchange reconnect/reconciliation tested.
 - [ ] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread.
 - [ ] HTX funding-rate arbitrage is paper-tested: 8h scan -> hedge open -> funding/P&L log -> close when funding compresses.
+- [ ] Owner UI exposes HTX funding arb: readiness loop status, scan button, candidate table, paper hedge open and position P&L.
 
 ### Telegram
 
