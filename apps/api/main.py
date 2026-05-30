@@ -43,6 +43,7 @@ from services.telegram_delivery_log import TelegramDeliveryLog, ensure_telegram_
 from services.telegram_delivery_worker import TelegramDeliveryWorker
 from services.billing_service import BillingService
 from services.revenue_metrics import RevenueMetricsService
+from services.customer_notifications import CustomerNotificationService
 from services.cost_engine import CostEngine
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
@@ -1707,12 +1708,13 @@ async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentR
                 payment_id=payment_id,
                 raw_payload=payload.raw_payload if payload else None,
             )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
         AuditLogService().record(
             db,
             action="payment_manual_confirm",
             resource_type="payment",
             resource_id=payment.id,
-            details={"activated": activated, "subscriber_id": subscriber.id},
+            details={"activated": activated, "subscriber_id": subscriber.id, "customer_notification": notification},
         )
         db.commit()
         await TelegramRouter().owner_alert(
@@ -1731,6 +1733,7 @@ async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentR
             "payment": service.serialize_payment(payment),
             "subscriber_id": subscriber.id,
             "expires_at": str(subscriber.expires_at),
+            "customer_notification": notification,
             "payment_event": service.serialize_payment_event(event) if event else None,
         }
     except Exception as e:
@@ -1768,12 +1771,13 @@ def process_payment_event(payload: PaymentEventRequest):
             status=payload.status,
             raw_payload=payload.raw_payload,
         )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
         AuditLogService().record(
             db,
             action="payment_event_processed",
             resource_type="payment",
             resource_id=payment.id,
-            details={"event_id": event.id, "status": event.status, "activated": activated},
+            details={"event_id": event.id, "status": event.status, "activated": activated, "customer_notification": notification},
         )
         db.commit()
         db.refresh(payment)
@@ -1783,6 +1787,7 @@ def process_payment_event(payload: PaymentEventRequest):
             "activated": activated,
             "payment": service.serialize_payment(payment),
             "subscriber_id": subscriber.id if subscriber else None,
+            "customer_notification": notification,
             "payment_event": service.serialize_payment_event(event),
         }
     except Exception as e:
