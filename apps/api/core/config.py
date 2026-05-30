@@ -226,6 +226,19 @@ class Settings(BaseSettings):
     TRAILING_CALLBACK_PCT: float = 0.4
 
     # =========================
+    # HTX FUNDING RATE ARBITRAGE
+    # =========================
+    ENABLE_FUNDING_ARB: bool = False
+    FUNDING_ARB_SYMBOLS: str = "BTC/USDT,ETH/USDT"
+    FUNDING_ARB_MIN_RATE_PCT: float = 0.03
+    FUNDING_ARB_MIN_EDGE_PCT: float = 0.01
+    FUNDING_ARB_MAX_BASIS_PCT: float = 0.35
+    FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0
+    FUNDING_ARB_MAX_NOTIONAL_USDT: float = 500.0
+    FUNDING_ARB_CLOSE_RATE_PCT: float = 0.005
+    FUNDING_ARB_MAX_HOLD_HOURS: int = 72
+
+    # =========================
     # AFFILIATE / VIP
     # =========================
     HTX_AFFILIATE_LINK: str = ""
@@ -267,6 +280,8 @@ class Settings(BaseSettings):
             blockers.append("ENABLE_LIVE_ORDERS cannot run with ROBOT_MODE=paper")
         if self.ENABLE_LIVE_ORDERS and not self.TELEGRAM_BOT_TOKEN:
             blockers.append("live orders require Telegram owner alerts")
+        if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
+            blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
 
         return blockers
 
@@ -288,5 +303,9 @@ class Settings(BaseSettings):
     @property
     def symbols(self) -> List[str]:
         return [s.strip() for s in self.HTX_SYMBOLS.split(",") if s.strip()]
+
+    @property
+    def funding_arb_symbols(self) -> List[str]:
+        return [s.strip() for s in self.FUNDING_ARB_SYMBOLS.split(",") if s.strip()]
 
 settings = Settings()

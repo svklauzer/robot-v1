@@ -15,6 +15,7 @@ from models.telegram_delivery import TelegramDelivery
 from models.telegram_profile import TelegramProfile
 from models.audit_event import AuditEvent
 from models.payment import BillingPlan, Payment, PaymentEvent
+from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
 
 config = context.config
 

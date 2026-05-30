@@ -477,7 +477,8 @@ Hard controls:
 5. MFE capture analytics and adaptive exit experiments (`adaptive_mfe_capture` before TP1, configurable thresholds).
 6. Structured logs + health checks (JSON events for background loops and Telegram delivery, secret redaction).
 7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
-7. Alembic migrations for new billing/telegram/audit tables (baseline runtime + operational domains migration added; production create_all disabled by schema bootstrap gate).
+8. HTX funding-rate arbitrage: single HTX ccxt client, spot-long/perp-short hedge, FundingMonitorService, HedgeBuilder, ArbExitEngine, P&L DB log; gated by ENABLE_FUNDING_ARB + ENABLE_FUTURES.
+9. Alembic migrations for new billing/telegram/audit tables (baseline runtime + operational domains migration added; production create_all disabled by schema bootstrap gate).
 
 ### P2 — масштабирование
 
@@ -519,6 +520,7 @@ Hard controls:
 - [ ] Live kill switch tested.
 - [ ] Exchange reconnect/reconciliation tested.
 - [ ] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread.
+- [ ] HTX funding-rate arbitrage is paper-tested: scan -> hedge open -> funding/P&L log -> close when funding compresses.
 
 ### Telegram
 

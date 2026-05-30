@@ -30,6 +30,7 @@ from models.telegram_delivery import TelegramDelivery
 from models.telegram_profile import TelegramProfile
 from models.audit_event import AuditEvent
 from models.payment import BillingPlan, Payment, PaymentEvent
+from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
 
 from workers.robot_loop import RobotLoop
 from services.signal_broadcaster import SignalBroadcaster
@@ -65,6 +66,7 @@ from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
 from services.live_safety import LiveSafetyService
+from services.funding_arbitrage import FundingMonitorService, FundingArbEngine
 
 from pydantic import BaseModel
 
@@ -245,6 +247,23 @@ class PaymentReconcileRequest(BaseModel):
 class KillSwitchRequest(BaseModel):
     enabled: bool = True
     reason: str | None = "owner_request"
+
+
+class FundingArbScanRequest(BaseModel):
+    symbols: list[str] | None = None
+
+
+class FundingArbOpenRequest(BaseModel):
+    opportunity_id: int
+    notional_usdt: float | None = None
+    mode: str = "paper"
+
+
+class FundingArbCloseRequest(BaseModel):
+    spot_exit_price: float
+    swap_exit_price: float
+    funding_periods: int = 1
+    exit_funding_rate: float | None = None
 
 async def background_robot_loop():
     global robot_loop_enabled
@@ -1613,6 +1632,7 @@ def system_health():
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
         revenue = RevenueMetricsService().summary(db)
+        funding_arb = FundingArbEngine().summary(db)
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
         production_blockers = settings.production_blockers()
@@ -1665,6 +1685,7 @@ def system_health():
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
             "revenue": revenue,
+            "funding_arb": funding_arb,
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
             "production_readiness": {
@@ -1898,6 +1919,115 @@ def payments_revenue(window_days: int = 30):
     finally:
         db.close()
 
+@app.get("/funding-arb/summary")
+def funding_arb_summary():
+    db = SessionLocal()
+    try:
+        return FundingArbEngine().summary(db)
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/scan", dependencies=[Depends(require_owner_action)])
+def funding_arb_scan(payload: FundingArbScanRequest | None = None):
+    db = SessionLocal()
+    try:
+        result = FundingMonitorService().scan(db, symbols=payload.symbols if payload else None)
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/funding-arb/opportunities")
+def funding_arb_opportunities(limit: int = 50, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 200)
+        query = db.query(FundingArbOpportunity)
+        if status:
+            query = query.filter(FundingArbOpportunity.status == status)
+        items = query.order_by(FundingArbOpportunity.id.desc()).limit(limit).all()
+        monitor = FundingMonitorService()
+        return {"items": [monitor.serialize_opportunity(item) for item in items]}
+    finally:
+        db.close()
+
+
+@app.get("/funding-arb/positions")
+def funding_arb_positions(limit: int = 50, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 200)
+        query = db.query(FundingArbPosition)
+        if status:
+            query = query.filter(FundingArbPosition.status == status)
+        items = query.order_by(FundingArbPosition.id.desc()).limit(limit).all()
+        engine = FundingArbEngine()
+        return {"items": [engine.serialize_position(item) for item in items]}
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/open", dependencies=[Depends(require_owner_action)])
+def funding_arb_open(payload: FundingArbOpenRequest):
+    db = SessionLocal()
+    try:
+        position = FundingArbEngine().open_hedge(
+            db,
+            opportunity_id=payload.opportunity_id,
+            notional_usdt=payload.notional_usdt,
+            mode=payload.mode,
+        )
+        AuditLogService().record(
+            db,
+            action="funding_arb_opened",
+            resource_type="funding_arb_position",
+            resource_id=position.id,
+            details={"symbol": position.symbol, "notional_usdt": position.notional_usdt, "mode": position.mode},
+        )
+        db.commit()
+        db.refresh(position)
+        return {"status": "ok", "position": FundingArbEngine().serialize_position(position)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/{position_id}/close", dependencies=[Depends(require_owner_action)])
+def funding_arb_close(position_id: int, payload: FundingArbCloseRequest):
+    db = SessionLocal()
+    try:
+        position = FundingArbEngine().close_paper(
+            db,
+            position_id=position_id,
+            spot_exit_price=payload.spot_exit_price,
+            swap_exit_price=payload.swap_exit_price,
+            funding_periods=payload.funding_periods,
+            exit_funding_rate=payload.exit_funding_rate,
+        )
+        AuditLogService().record(
+            db,
+            action="funding_arb_closed",
+            resource_type="funding_arb_position",
+            resource_id=position.id,
+            details={"symbol": position.symbol, "realized_pnl": position.realized_pnl},
+        )
+        db.commit()
+        db.refresh(position)
+        return {"status": "ok", "position": FundingArbEngine().serialize_position(position)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
 @app.get("/system/live-safety")
 def system_live_safety():
     db = SessionLocal()
@@ -1945,6 +2075,7 @@ def system_readiness():
         telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
         payments_summary = BillingService().summary(db)
         revenue = RevenueMetricsService().summary(db)
+        funding_arb = FundingArbEngine().summary(db)
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
@@ -1962,6 +2093,8 @@ def system_readiness():
             blockers.append("ML outcomes summary is degraded")
         if market_connectivity.get("breaker_blocked"):
             blockers.extend(market_connectivity.get("blockers") or ["market connectivity breaker is blocked"])
+        if settings.ENABLE_FUNDING_ARB and not settings.ENABLE_FUTURES:
+            blockers.append("funding arbitrage requires ENABLE_FUTURES=true")
 
         return {
             "status": "ready" if not blockers else "blocked",
@@ -1971,6 +2104,7 @@ def system_readiness():
             "telegram_delivery": telegram_delivery,
             "payments": payments_summary,
             "revenue": revenue,
+            "funding_arb": funding_arb,
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
             "market_connectivity": market_connectivity,
