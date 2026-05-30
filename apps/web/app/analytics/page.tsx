@@ -10,21 +10,24 @@ export default function AnalyticsPage() {
   const [quality, setQuality] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
   const [rootCause, setRootCause] = useState<any>(null);
+  const [symbolPerf, setSymbolPerf] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [summaryData, qualityData, readinessData, rootCauseData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
         apiGet("/analytics/outcome-root-cause?reason=failed_setup_exit&limit=500"),
+        apiGet("/analytics/symbol-performance?lookback=12"),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
       setReadiness(readinessData);
       setRootCause(rootCauseData);
+      setSymbolPerf(symbolPerfData);
     } finally {
       setLoading(false);
     }
@@ -104,6 +107,38 @@ export default function AnalyticsPage() {
               <div key={reason} className="rounded-xl border border-emerald-950 bg-black/20 p-4">
                 <div className="text-sm text-emerald-100/50">{reason}</div>
                 <div className="mt-1 text-2xl font-bold text-emerald-200">{String(count)}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-yellow-900/70 bg-yellow-950/10 p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-yellow-200">Per-symbol profitability guard</h2>
+              <p className="text-sm text-yellow-100/60">Roadmap P1: какие монеты блокируются или идут с пониженным риском.</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-sm">
+              <div className="rounded-lg border border-red-900/50 px-3 py-2 text-red-200">Blocked<br />{symbolPerf?.blocked_count ?? 0}</div>
+              <div className="rounded-lg border border-yellow-900/50 px-3 py-2 text-yellow-200">Reduced<br />{symbolPerf?.reduced_count ?? 0}</div>
+              <div className="rounded-lg border border-emerald-900/50 px-3 py-2 text-emerald-200">OK<br />{symbolPerf?.ok_count ?? 0}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            {(symbolPerf?.items || []).slice(0, 9).map((item: any) => (
+              <div key={item.symbol} className="rounded-xl border border-yellow-900/50 bg-black/20 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-semibold text-yellow-100">{item.symbol}</h3>
+                  <span className={item.classification === "blocked" ? "text-red-300" : item.classification === "reduced" ? "text-yellow-300" : "text-emerald-300"}>
+                    {item.classification}
+                  </span>
+                </div>
+                <Metric label="Reason" value={item.reason} />
+                <Metric label="Risk x" value={item.risk_multiplier} />
+                <Metric label="Net PnL" value={`${item.total_net_pnl} USDT`} />
+                <Metric label="Failed setup" value={item.failed_setup_count} />
+                <p className="mt-3 text-xs text-yellow-50/70">{item.action}</p>
               </div>
             ))}
           </div>

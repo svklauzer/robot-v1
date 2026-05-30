@@ -50,6 +50,7 @@ from services.market_intelligence import MarketIntelligenceEngine
 from services.intelligence_memory import IntelligenceMemory
 from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
+from services.symbol_performance_summary import SymbolPerformanceSummaryService
 from services.ml_outcome_stats import MLOutcomeStatsService
 from services.candidate_priority import CandidatePriorityService
 from services.reentry_cooldown import ReEntryCooldownGuard
@@ -931,6 +932,18 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
 
     try:
         return OutcomeDiagnosticsService().root_cause(db, reason=reason, limit=limit)
+    finally:
+        db.close()
+
+
+@app.get("/analytics/symbol-performance")
+def analytics_symbol_performance(lookback: int = 12):
+    """Per-symbol profitability guard report for roadmap P1 operations."""
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        return SymbolPerformanceSummaryService().summarize(db, bot=bot, lookback=lookback)
     finally:
         db.close()
 

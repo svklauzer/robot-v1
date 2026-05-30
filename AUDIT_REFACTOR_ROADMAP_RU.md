@@ -472,7 +472,7 @@ Hard controls:
 2. VIP access automation.
 3. HTX affiliate free-VIP funnel: `/htx` в Telegram, tracking stage, trial activation на 30 дней, анти-дублирование и последующая верификация регистрации.
 3. Payment webhook idempotency.
-4. Per-symbol profitability guard.
+4. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
 5. MFE capture analytics and adaptive exit experiments.
 6. Structured logs + health checks.
 7. Alembic migrations for new billing/telegram tables.
@@ -511,6 +511,7 @@ Hard controls:
 - [ ] Rolling net PnL positive after all costs.
 - [ ] `failed_setup_exit < 35%`.
 - [ ] `positive_then_negative_rate < 25%`.
+- [ ] Per-symbol profitability guard виден owner-у и блокирует/снижает риск по убыточным символам.
 - [ ] At least 200 closed paper/live_shadow outcomes.
 - [ ] Live kill switch tested.
 - [ ] Exchange reconnect/reconciliation tested.
