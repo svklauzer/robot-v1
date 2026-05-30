@@ -1669,6 +1669,19 @@ def system_health():
             },
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
