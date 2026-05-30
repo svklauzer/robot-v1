@@ -14,14 +14,26 @@ class MLOutcomeStatsService:
     - где net pnl отрицательный
     """
 
-    def __init__(self):
-        self.file_path = Path("storage/ml/trade_outcomes.jsonl")
+    def __init__(self, path: str | Path | None = None):
+        self.file_path = Path(path) if path is not None else Path("storage/ml/trade_outcomes.jsonl")
+
+    def safe_summary(self) -> dict:
+        try:
+            return self.summary()
+        except Exception as e:
+            return {
+                "status": "degraded",
+                "reason": "ml_outcome_stats_failed",
+                "error": f"{type(e).__name__}: {e}",
+                "source_path": str(self.file_path),
+            }
 
     def _load_rows(self) -> list[dict]:
         if not self.file_path.exists():
             return []
 
         rows = []
+        self._parse_errors = 0
 
         with self.file_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -31,8 +43,13 @@ class MLOutcomeStatsService:
                     continue
 
                 try:
-                    rows.append(json.loads(line))
+                    payload = json.loads(line)
+                    if isinstance(payload, dict):
+                        rows.append(payload)
+                    else:
+                        self._parse_errors = getattr(self, "_parse_errors", 0) + 1
                 except Exception:
+                    self._parse_errors = getattr(self, "_parse_errors", 0) + 1
                     continue
 
         return rows
@@ -46,6 +63,8 @@ class MLOutcomeStatsService:
             return {
                 "status": "empty",
                 "total": 0,
+                "parse_errors": getattr(self, "_parse_errors", 0),
+                "source_path": str(self.file_path),
                 "groups": [],
             }
 
@@ -191,6 +210,8 @@ class MLOutcomeStatsService:
         return {
             "status": "ok",
             "total": total,
+            "parse_errors": getattr(self, "_parse_errors", 0),
+            "source_path": str(self.file_path),
             "groups": result_groups,
         }
 
