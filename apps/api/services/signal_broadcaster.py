@@ -66,6 +66,18 @@ class SignalBroadcaster:
                 reply_markup=reply_markup,
             )
 
+            self.delivery_log.record(
+                chat_id=chat_id,
+                text=text,
+                status="failed_retryable",
+                message_type=message_type,
+                error=f"{type(e).__name__}: {repr(e)}",
+                attempts=1,
+                max_attempts=3,
+                next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+                reply_markup=reply_markup,
+            )
+
             return {
                 "ok": False,
                 "chat_id": chat_id,
