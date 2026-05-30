@@ -63,6 +63,15 @@ class HTXClient:
             return self._retry(self.exchange.fetch_positions)
         return []
 
+    def fetch_funding_rate(self, symbol: str):
+        if hasattr(self.exchange, "fetch_funding_rate"):
+            return self._retry(self.exchange.fetch_funding_rate, symbol)
+        raise RuntimeError("HTX/CCXT fetch_funding_rate is not available")
+
+    def fetch_mark_price(self, symbol: str) -> float:
+        ticker = self.fetch_ticker(symbol)
+        return float(ticker.get("mark") or ticker.get("last") or ticker.get("close") or ticker.get("bid") or ticker.get("ask"))
+
     def create_market_order(self, symbol: str, side: str, amount: float, params: dict | None = None):
         return self._retry(
             self.exchange.create_order,
