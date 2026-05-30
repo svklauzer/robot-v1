@@ -476,6 +476,7 @@ Hard controls:
 5. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
 5. MFE capture analytics and adaptive exit experiments.
 6. Structured logs + health checks.
+7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
 7. Alembic migrations for new billing/telegram tables.
 
 ### P2 — масштабирование
@@ -516,6 +517,7 @@ Hard controls:
 - [ ] At least 200 closed paper/live_shadow outcomes.
 - [ ] Live kill switch tested.
 - [ ] Exchange reconnect/reconciliation tested.
+- [ ] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread.
 
 ### Telegram
 

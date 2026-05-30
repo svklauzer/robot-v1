@@ -51,7 +51,7 @@ export default function HealthPage() {
   }, []);
 
   const bot = health?.bot;
-  const market = health?.market;
+  const market = readiness?.market_connectivity || health?.market;
   const loops = health?.loops;
   const delivery = readiness?.telegram_delivery || health?.telegram_delivery || {};
   // /system/readiness is the product go-live source of truth: it includes
@@ -139,11 +139,16 @@ export default function HealthPage() {
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
         </Panel>
 
-        <Panel title="Market status">
-          <InfoRow label="Status" value={market?.ok ? "ok" : "error"} danger={!market?.ok} />
+        <Panel title="Market connectivity">
+          <InfoRow label="Status" value={market?.ok ? "ok" : "blocked"} danger={!market?.ok} />
           <InfoRow label="Symbol" value={market?.symbol || "-"} />
           <InfoRow label="Last" value={formatNumber(market?.last)} />
-          <InfoRow label="Source" value={market?.source || "-"} />
+          <InfoRow label="Spread" value={market?.spread_pct == null ? "-" : `${market.spread_pct}%`} danger={(market?.spread_pct ?? 0) > 0.75} />
+          <InfoRow label="Latency" value={market?.latency_ms == null ? "-" : `${market.latency_ms} ms`} danger={(market?.latency_ms ?? 0) > 5000} />
+          <InfoRow label="Source" value={market?.source || "-"} danger={market?.source === "mock"} />
+          {(market?.blockers || []).map((blocker: string, idx: number) => (
+            <InfoRow key={idx} label="Breaker" value={blocker} danger />
+          ))}
           {market?.error && <InfoRow label="Error" value={market.error} danger />}
         </Panel>
       </section>

@@ -34,6 +34,7 @@ from services.signal_broadcaster import SignalBroadcaster
 from services.signal_lifecycle import SignalLifecycleManager
 from services.signal_quality import SignalQualityService
 from services.market_data import MarketDataService
+from services.market_connectivity import MarketConnectivityService
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
@@ -1597,22 +1598,7 @@ def system_health():
         ml_outcomes = MLOutcomeStatsService().safe_summary()
         production_blockers = settings.production_blockers()
 
-        market_status = {}
-
-        try:
-            market = MarketDataService()
-            snap = market.snapshot("BTC/USDT")
-            market_status = {
-                "ok": True,
-                "symbol": "BTC/USDT",
-                "last": snap.get("last"),
-                "source": snap.get("source"),
-            }
-        except Exception as e:
-            market_status = {
-                "ok": False,
-                "error": str(e),
-            }
+        market_status = MarketConnectivityService().check("BTC/USDT")
 
         return {
             "api": {
@@ -1669,19 +1655,6 @@ def system_health():
             },
         }
 
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
-
-    finally:
-        db.close()
-
-
-@app.get("/telegram/deliveries/summary")
-def telegram_deliveries_summary(hours: int = 24):
-    db = SessionLocal()
-    try:
-        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
@@ -1956,6 +1929,7 @@ def system_readiness():
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
+        market_connectivity = MarketConnectivityService().check("BTC/USDT")
         blockers = list(settings.production_blockers())
 
         if analytics.get("total_net_pnl_usdt", 0) < 0:
@@ -1967,6 +1941,8 @@ def system_readiness():
         blockers.extend(live_safety.get("blockers", []))
         if ml_outcomes.get("status") not in ["ok", "empty"]:
             blockers.append("ML outcomes summary is degraded")
+        if market_connectivity.get("breaker_blocked"):
+            blockers.extend(market_connectivity.get("blockers") or ["market connectivity breaker is blocked"])
 
         return {
             "status": "ready" if not blockers else "blocked",
@@ -1978,11 +1954,14 @@ def system_readiness():
             "revenue": revenue,
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
+            "market_connectivity": market_connectivity,
             "required_gates": {
                 "closed_validation_signals": 200,
                 "failed_setup_exit_share_max_pct": 35.0,
                 "positive_then_negative_max_pct": 25.0,
                 "telegram_delivery_sla_min_pct": 99.0,
+                "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
+                "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
 

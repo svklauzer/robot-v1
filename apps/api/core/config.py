@@ -229,6 +229,12 @@ class Settings(BaseSettings):
     # =========================
     PAYMENT_PENDING_EXPIRE_HOURS: int = 48
 
+    # =========================
+    # MARKET CONNECTIVITY
+    # =========================
+    MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 5000
+    MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
+
 
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []
