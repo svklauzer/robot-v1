@@ -12,40 +12,41 @@ class Settings(BaseSettings):
     # APP
     # =========================
     APP_ENV: str = "development"
-    JWT_SECRET: str
-    NEXT_PUBLIC_API_URL: str
+    JWT_SECRET: str = "dev-jwt-secret-change-me"
+    NEXT_PUBLIC_API_URL: str = "http://localhost:8000"
 
-    OWNER_EMAIL: str
-    OWNER_PASSWORD: str
+    OWNER_EMAIL: str = "owner@example.com"
+    OWNER_PASSWORD: str = "owner-password-change-me"
+    OWNER_API_TOKEN: str = ""
 
     # =========================
     # DATABASE
     # =========================
-    POSTGRES_DB: str
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-    POSTGRES_HOST: str
-    POSTGRES_PORT: int
+    POSTGRES_DB: str = "robot"
+    POSTGRES_USER: str = "robot"
+    POSTGRES_PASSWORD: str = "robot"
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
 
-    REDIS_URL: str
+    REDIS_URL: str = "redis://localhost:6379"
 
     # =========================
     # HTX API
     # =========================
-    HTX_API_KEY: str
-    HTX_API_SECRET: str
+    HTX_API_KEY: str = ""
+    HTX_API_SECRET: str = ""
     HTX_MARKET_TYPE: str = "spot"
-    HTX_SYMBOLS: str
+    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT"
     ALLOW_MARKET_MOCK: bool = False
 
     # =========================
     # TELEGRAM
     # =========================
-    TELEGRAM_BOT_TOKEN: str
-    TELEGRAM_OWNER_CHAT_ID: int
-    TELEGRAM_SIGNALS_CHAT_ID: int
-    TELEGRAM_FREE_SIGNALS_CHAT_ID: int
-    TELEGRAM_VIP_SIGNALS_CHAT_ID: int
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_OWNER_CHAT_ID: int = 0
+    TELEGRAM_SIGNALS_CHAT_ID: int = 0
+    TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
+    TELEGRAM_VIP_SIGNALS_CHAT_ID: int = 0
 
     MAX_ACTIVE_SIGNALS: int = 4
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
@@ -75,8 +76,6 @@ class Settings(BaseSettings):
     EXECUTION_MARKET: str = "spot"
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
 
-    MIN_NET_PNL_TP1_USDT: float = 2.5
-    MIN_NET_PNL_TP2_USDT: float = 5.5
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
 
@@ -84,7 +83,7 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = -0.25
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
     FAILED_SETUP_MFE_MID_PCT: float = 0.45
     FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
@@ -110,6 +109,7 @@ class Settings(BaseSettings):
     SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
+    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -223,6 +223,40 @@ class Settings(BaseSettings):
     HTX_AFFILIATE_LINK: str = ""
     AFFILIATE_FREE_VIP_DAYS: int = 30
     VIP_INVITE_LINK: str = ""
+
+    # =========================
+    # PAYMENTS / CHECKOUTS
+    # =========================
+    PAYMENT_PENDING_EXPIRE_HOURS: int = 48
+
+
+    def production_blockers(self) -> list[str]:
+        blockers: list[str] = []
+
+        if self.APP_ENV == "production":
+            if self.JWT_SECRET == "dev-jwt-secret-change-me":
+                blockers.append("JWT_SECRET uses development default")
+            if self.OWNER_PASSWORD == "owner-password-change-me":
+                blockers.append("OWNER_PASSWORD uses development default")
+            if not self.OWNER_API_TOKEN:
+                blockers.append("OWNER_API_TOKEN is not configured")
+            if not self.TELEGRAM_BOT_TOKEN:
+                blockers.append("TELEGRAM_BOT_TOKEN is not configured")
+            if not self.HTX_API_KEY or not self.HTX_API_SECRET:
+                blockers.append("HTX API credentials are not configured")
+
+        if self.ENABLE_LIVE_ORDERS and self.TRADING_MODE not in ["live", "live_limited"]:
+            blockers.append("ENABLE_LIVE_ORDERS requires TRADING_MODE=live or live_limited")
+        if self.ENABLE_LIVE_ORDERS and self.ROBOT_MODE == "paper":
+            blockers.append("ENABLE_LIVE_ORDERS cannot run with ROBOT_MODE=paper")
+        if self.ENABLE_LIVE_ORDERS and not self.TELEGRAM_BOT_TOKEN:
+            blockers.append("live orders require Telegram owner alerts")
+
+        return blockers
+
+    @property
+    def is_live_enabled(self) -> bool:
+        return bool(self.ENABLE_LIVE_ORDERS or self.TRADING_MODE in ["live", "live_limited"])
 
     @property
     def database_url(self) -> str:
