@@ -544,7 +544,7 @@ Hard controls:
 - [ ] Secrets not logged.
 - [ ] Background loops emit structured JSON logs with Telegram/owner secrets redacted.
 - [ ] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations.
-- [ ] Docker production profile documented.
+- [ ] Docker production profile documented (`docker-compose.prod.yml`, `docs/PRODUCTION_RUNBOOK_RU.md`).
 - [ ] Backup/restore tested.
 
 ## 9. Финальная рекомендация
