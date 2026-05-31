@@ -84,19 +84,19 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
-    FAILED_SETUP_MFE_MID_PCT: float = 0.45
-    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.55
+    FAILED_SETUP_MFE_MID_PCT: float = 0.85
+    FAILED_SETUP_MFE_DEEP_PCT: float = 1.20
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.25
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.45
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.70
-    FAILED_SETUP_MIN_AGE_SEC: int = 180
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.35
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.55
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.80
+    FAILED_SETUP_MIN_AGE_SEC: int = 300
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.30
-    PROTECTIVE_DRAWDOWN_SHARE: float = 0.50
+    PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
     ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.80
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.45
 
@@ -151,14 +151,14 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_SETUP: float = 76.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 70.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90
-    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.78
+    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.55
     PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.20
     PROD_GATE_A_MIN_RR_TP2: float = 1.35
 
     PROD_GATE_B_MIN_SETUP: float = 70.0
     PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
     PROD_GATE_B_MIN_RR_TP1: float = 0.85
-    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.75
+    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.35
     PROD_GATE_B_MIN_RR_TP2: float = 1.30
     PROD_GATE_B_MIN_RR_TP2_PAPER: float = 1.15
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
@@ -171,14 +171,14 @@ class Settings(BaseSettings):
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
     MAX_POSITION_MARGIN_PCT: float = 0.35
-    MIN_NET_PNL_TP1_USDT: float = 2.5
-    MIN_NET_PNL_TP2_USDT: float = 5.5
+    MIN_NET_PNL_TP1_USDT: float = 1.5
+    MIN_NET_PNL_TP2_USDT: float = 3.5
 
     # Таймфрейм и буферы для построения уровней входа/стопа/тейков.
     LEVELS_ENTRY_TF: str = "5m"
     LEVELS_SIGNAL_TF: str = "15m"
     LEVELS_CONTEXT_TF: str = "1h"
-    LEVELS_STOP_ATR_MULT: float = 1.6
+    LEVELS_STOP_ATR_MULT: float = 2.8
     LEVELS_MIN_STOP_PCT: float = 0.30
 
     # Дополнительные фильтры качества setup в learning/paper.
