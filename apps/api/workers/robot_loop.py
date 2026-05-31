@@ -583,23 +583,28 @@ class RobotLoop:
             live_delivery_required = bool(getattr(settings, "is_live_enabled", False)) or str(
                 getattr(settings, "TRADING_MODE", "paper_signal")
             ).lower().startswith("live")
+            vip_delivery_required = bool(is_public)
+            delivery_required = live_delivery_required or vip_delivery_required
 
             plan_json = sig.plan_json or {}
             plan_json["telegram_delivery"] = {
                 "ok": False,
                 "error": error_text,
-                "mode": "required" if live_delivery_required else "non_blocking_paper",
+                "mode": "required" if delivery_required else "non_blocking_paper",
+                "vip_delivery_required": vip_delivery_required,
+                "live_delivery_required": live_delivery_required,
             }
             sig.plan_json = plan_json
 
-            if live_delivery_required:
+            if delivery_required:
                 sig.status = "telegram_failed"
-                sig.closed_reason = "initial_telegram_publish_failed"
+                sig.closed_reason = "initial_vip_telegram_publish_failed" if vip_delivery_required else "initial_telegram_publish_failed"
                 event_status = "telegram_failed"
-                event_decision = "initial_telegram_publish_failed"
+                event_decision = sig.closed_reason
             else:
-                # Paper testing should continue: keep the signal active so the
-                # lifecycle can open/track a paper position when entry is reached.
+                # Private/owner-only paper diagnostics should continue even if an
+                # optional Telegram alert fails. Public/VIP signals are different:
+                # if the full VIP delivery fails, the signal must not become active.
                 event_status = "warning"
                 event_decision = "telegram_delivery_failed_signal_kept_published"
 
@@ -622,6 +627,8 @@ class RobotLoop:
                         "grade": grade,
                         "is_public": is_public,
                         "telegram_error": error_text,
+                        "delivery_required": delivery_required,
+                        "vip_delivery_required": vip_delivery_required,
                         "live_delivery_required": live_delivery_required,
                     },
                 )

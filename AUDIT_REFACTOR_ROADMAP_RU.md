@@ -529,7 +529,7 @@ Hard controls:
 - [ ] `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/help`, `/support` implemented.
 - [ ] VIP signal delivery queue with retries.
 - [ ] Delivery SLA dashboard.
-- [ ] Undelivered VIP full signal does not become active.
+- [x] Undelivered VIP full signal does not become active (`telegram_failed` gate on public/VIP publish failure).
 
 ### Payments/subscriptions
 
