@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 
 from core.db import Base, engine, SessionLocal
 from core.config import settings
-from core.security import hash_password, require_owner_action
+from core.security import hash_password, require_owner_action, require_non_production_debug
 from core.logging import get_logger, log_event
 
 from models.user import User
@@ -759,7 +759,7 @@ async def telegram_test_owner():
     )
     return {"status": "sent"}
 
-@app.get("/robot/debug-signals", dependencies=[Depends(require_owner_action)])
+@app.get("/robot/debug-signals", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 def debug_signals():
     db = SessionLocal()
 
@@ -800,7 +800,7 @@ def debug_signals():
     finally:
         db.close()
 
-@app.post("/robot/force-paper-signal", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/force-paper-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_paper_signal():
     db = SessionLocal()
 
@@ -1113,7 +1113,7 @@ async def close_signal(signal_id: int, payload: CloseSignalRequest):
     finally:
         db.close()
 
-@app.post("/robot/force-live-near-signal", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/force-live-near-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_live_near_signal():
     db = SessionLocal()
 
@@ -1235,7 +1235,7 @@ async def run_lifecycle_once():
     finally:
         db.close()
 
-@app.post("/robot/force-scalp-signal", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/force-scalp-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_scalp_signal():
     db = SessionLocal()
 
@@ -1392,7 +1392,7 @@ async def force_scalp_signal():
     finally:
         db.close()
 
-@app.post("/robot/test-lifecycle-price", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/test-lifecycle-price", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def test_lifecycle_price(payload: TestLifecyclePriceRequest):
     db = SessionLocal()
 
@@ -2381,7 +2381,7 @@ def build_trade_plan(payload: TradePlanRequest):
     )
     return {"status": "ok", "trade_plan": plan.__dict__}
 
-@app.post("/robot/force-valid-trade-signal", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/force-valid-trade-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_valid_trade_signal():
     db = SessionLocal()
 
@@ -2592,7 +2592,7 @@ def intelligence_analyze(symbol: str = "BTC/USDT"):
             "error": str(e),
         }
 
-@app.post("/robot/force-intelligence-signal", dependencies=[Depends(require_owner_action)])
+@app.post("/robot/force-intelligence-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_intelligence_signal(symbol: str = "BTC/USDT"):
     db = SessionLocal()
 
@@ -4170,7 +4170,7 @@ def find_active_signal_for_symbol(db: Session, bot_id: int, symbol: str):
     )
 
 
-@app.post("/debug/exposure", dependencies=[Depends(require_owner_action)])
+@app.post("/debug/exposure", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 def debug_exposure(payload: ExposureDebugRequest):
     db = SessionLocal()
 

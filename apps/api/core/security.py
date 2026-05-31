@@ -34,3 +34,9 @@ def require_owner_action(x_owner_token: str | None = Header(default=None, alias=
         raise HTTPException(status_code=401, detail="owner_auth_required")
 
     return True
+
+
+def require_non_production_debug() -> bool:
+    if settings.APP_ENV == "production":
+        raise HTTPException(status_code=403, detail="debug_endpoints_disabled_in_production")
+    return True

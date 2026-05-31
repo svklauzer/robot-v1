@@ -395,6 +395,34 @@ class ExitPolicyService:
                     ),
                 )
 
+        # 0. Adaptive MFE capture experiment:
+        # если сделка уже дала умеренный плюс, но быстро отдает часть MFE,
+        # фиксируем net-safe profit раньше классического trailing.
+        if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)):
+            capture_start = float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.65))
+            capture_drawdown = float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30))
+            capture_share = float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.35))
+
+            if mfe >= capture_start and current_pct > net_safe_pct and drawdown_from_mfe >= capture_drawdown:
+                protected_pct = max(mfe * capture_share, net_safe_pct, min_protective_exit_pct)
+                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+                if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
+                    return ExitDecision(exit=False)
+
+                exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+
+                return ExitDecision(
+                    exit=True,
+                    reason="adaptive_mfe_capture",
+                    exit_price=round(exit_price, 8),
+                    note=(
+                        f"mfe={round(mfe, 4)} current={round(current_pct, 4)} "
+                        f"drawdown={round(drawdown_from_mfe, 4)} "
+                        f"protected={round(protected_pct, 4)} "
+                        f"net_safe={round(net_safe_pct, 4)} fee_source={fee_source}"
+                    ),
+                )
+
         # 1. Жёсткая NET-защита:
         # сделка дала >= 0.45%, но возвращается к зоне, где после комиссий уже опасно.
         # Выходим не по +0.05%, а по net_safe_pct.

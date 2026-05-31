@@ -544,7 +544,7 @@ Hard controls:
 ### Security/ops
 
 - [ ] Owner endpoints authenticated.
-- [ ] Debug endpoints disabled in production.
+- [x] Debug endpoints disabled in production (`require_non_production_debug` blocks `/debug/*` and force/test robot endpoints).
 - [ ] Secrets not logged.
 - [ ] Background loops emit structured JSON logs with Telegram/owner secrets redacted.
 - [ ] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations.
