@@ -12,6 +12,7 @@ def test_funding_arb_owner_page_wires_api_contracts():
     assert "/funding-arb/positions?limit=50" in page
     assert "/funding-arb/scan" in page
     assert "/funding-arb/open" in page
+    assert "/funding-arb/evaluate-exits" in page
     assert "mode: \"paper\"" in page
 
 

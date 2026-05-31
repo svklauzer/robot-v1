@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.55
-    FAILED_SETUP_MFE_MID_PCT: float = 0.85
-    FAILED_SETUP_MFE_DEEP_PCT: float = 1.20
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_MID_PCT: float = 0.45
+    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.35

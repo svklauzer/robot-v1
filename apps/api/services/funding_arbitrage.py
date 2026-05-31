@@ -269,6 +269,76 @@ class FundingArbEngine:
         position.closed_at = datetime.now(timezone.utc)
         return position
 
+
+    def _estimate_funding_periods(self, position: FundingArbPosition, now: datetime | None = None) -> int:
+        now = now or datetime.now(timezone.utc)
+        opened_at = position.opened_at
+        if opened_at is not None and opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        if not opened_at:
+            return 1
+        held_hours = max((now - opened_at).total_seconds() / 3600, 0)
+        return max(int(held_hours // 8), 1)
+
+    def evaluate_exits(self, db: Session) -> dict:
+        """Evaluate open funding hedges and auto-close paper positions.
+
+        Live positions are deliberately not closed by this helper yet: the method
+        returns them as ``close_required`` so the owner can review/reconcile before
+        sending reduce-only orders. Paper positions can be closed deterministically
+        with current spot/swap marks to keep the P&L log complete.
+        """
+        positions = db.query(FundingArbPosition).filter(FundingArbPosition.status == "open").all()
+        closed: list[dict[str, Any]] = []
+        close_required: list[dict[str, Any]] = []
+        held: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+
+        for position in positions:
+            try:
+                funding = self.client.fetch_funding_rate(position.swap_symbol) or {}
+                current_rate = float(funding.get("fundingRate") or funding.get("rate") or 0.0)
+                decision = self.exit_engine.should_close(position, current_funding_rate=current_rate)
+                decision["position_id"] = position.id
+                decision["symbol"] = position.symbol
+                decision["current_funding_rate_pct"] = round(current_rate * 100, 6)
+
+                if not decision.get("close"):
+                    held.append(decision)
+                    continue
+
+                if position.mode == "paper":
+                    spot_exit = float(self.client.fetch_mark_price(position.spot_symbol))
+                    swap_exit = float(self.client.fetch_mark_price(position.swap_symbol))
+                    closed_position = self.close_paper(
+                        db,
+                        position.id,
+                        spot_exit_price=spot_exit,
+                        swap_exit_price=swap_exit,
+                        funding_periods=self._estimate_funding_periods(position),
+                        exit_funding_rate=current_rate,
+                    )
+                    closed.append({
+                        "decision": decision,
+                        "position": self.serialize_position(closed_position),
+                    })
+                else:
+                    close_required.append(decision)
+            except Exception as exc:
+                errors.append({
+                    "position_id": position.id,
+                    "symbol": position.symbol,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
+        return {
+            "evaluated": len(positions),
+            "closed": closed,
+            "close_required": close_required,
+            "held": held,
+            "errors": errors,
+        }
+
     def serialize_position(self, item: FundingArbPosition) -> dict:
         return {
             "id": item.id,

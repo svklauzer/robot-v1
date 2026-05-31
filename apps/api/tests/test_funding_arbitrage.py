@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -16,6 +18,17 @@ class FakeHTXFundingClient:
         return {
             "BTC/USDT": 100.0,
             "BTC/USDT:USDT": 100.02,
+        }[symbol]
+
+
+class FakeClosingHTXFundingClient:
+    def fetch_funding_rate(self, symbol: str):
+        return {"fundingRate": 0.00001}
+
+    def fetch_mark_price(self, symbol: str) -> float:
+        return {
+            "BTC/USDT": 101.0,
+            "BTC/USDT:USDT": 99.0,
         }[symbol]
 
 
@@ -155,3 +168,35 @@ def test_monitor_scan_interval_defaults_to_eight_hours():
         assert FundingMonitorService(client=FakeHTXFundingClient()).scan_interval_seconds() == 8 * 60 * 60
     finally:
         settings.FUNDING_ARB_SCAN_INTERVAL_HOURS = old_interval
+
+
+def test_evaluate_exits_auto_closes_paper_when_funding_compresses():
+    db = _db_session()
+    try:
+        opportunity = FundingArbOpportunity(
+            symbol="BTC/USDT",
+            spot_symbol="BTC/USDT",
+            swap_symbol="BTC/USDT:USDT",
+            funding_rate=0.001,
+            annualized_rate_pct=109.5,
+            spot_price=100.0,
+            swap_price=100.0,
+            basis_pct=0.0,
+            estimated_edge_pct=0.1,
+            status="candidate",
+        )
+        db.add(opportunity)
+        db.flush()
+        position = FundingArbEngine().open_paper(db, opportunity.id, notional_usdt=100)
+        position.opened_at = datetime.now(timezone.utc) - timedelta(hours=16)
+
+        result = FundingArbEngine(client=FakeClosingHTXFundingClient()).evaluate_exits(db)
+
+        assert result["evaluated"] == 1
+        assert len(result["closed"]) == 1
+        assert result["close_required"] == []
+        assert result["closed"][0]["decision"]["reason"] == "funding_rate_compressed"
+        assert result["closed"][0]["position"]["funding_periods"] == 2
+        assert db.query(FundingArbPosition).filter(FundingArbPosition.status == "closed").count() == 1
+    finally:
+        db.close()

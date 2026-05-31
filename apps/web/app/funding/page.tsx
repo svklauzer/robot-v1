@@ -49,6 +49,20 @@ export default function FundingArbPage() {
     }
   }
 
+
+  async function evaluateExits() {
+    setAction("exits");
+    try {
+      const res = await apiPost("/funding-arb/evaluate-exits", {});
+      if (res?.status === "error") {
+        alert(`Exit evaluation failed: ${res.error}`);
+      }
+      await loadAll();
+    } finally {
+      setAction(null);
+    }
+  }
+
   async function openPaper(opportunityId: number) {
     const amount = Number(notional);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -94,6 +108,10 @@ export default function FundingArbPage() {
           <button onClick={scanNow} className="flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2 font-semibold hover:bg-cyan-600">
             <PlayCircle size={16} />
             {action === "scan" ? "Сканирование..." : "Scan HTX funding"}
+          </button>
+          <button onClick={evaluateExits} className="flex items-center gap-2 rounded-xl bg-yellow-700 px-4 py-2 font-semibold hover:bg-yellow-600">
+            <ShieldCheck size={16} />
+            {action === "exits" ? "Проверка exits..." : "Evaluate exits"}
           </button>
         </div>
       </header>

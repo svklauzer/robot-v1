@@ -171,6 +171,7 @@ async def background_funding_arb_loop():
 
     await asyncio.sleep(30)
     monitor = FundingMonitorService()
+    arb_engine = FundingArbEngine(client=monitor.client)
 
     while funding_arb_loop_enabled:
         db = SessionLocal()
@@ -178,13 +179,16 @@ async def background_funding_arb_loop():
         try:
             if settings.ENABLE_FUNDING_ARB:
                 result = monitor.scan(db)
+                exit_result = arb_engine.evaluate_exits(db)
                 db.commit()
                 log_event(
                     logger,
                     logging.INFO,
                     "funding_arb_scan",
                     opportunities=len(result.get("items", [])),
-                    errors=len(result.get("errors", [])),
+                    errors=len(result.get("errors", [])) + len(exit_result.get("errors", [])),
+                    exits_closed=len(exit_result.get("closed", [])),
+                    exits_required=len(exit_result.get("close_required", [])),
                 )
             else:
                 db.rollback()
@@ -1743,74 +1747,7 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
-    finally:
-        db.close()
 
-
-@app.get("/audit/events")
-def list_audit_events(limit: int = 100, action: str | None = None):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        query = db.query(AuditEvent)
-        if action:
-            query = query.filter(AuditEvent.action == action)
-        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
-        service = AuditLogService()
-        return {"items": [service.serialize(event) for event in events]}
-    finally:
-        db.close()
-
-@app.get("/payments/plans")
-def list_payment_plans():
-    db = SessionLocal()
-    try:
-        service = BillingService()
-        plans = service.list_plans(db)
-        db.commit()
-        return [service.serialize_plan(plan) for plan in plans]
-    finally:
-        db.close()
-
-
-@app.post("/payments/checkout", dependencies=[Depends(require_owner_action)])
-def create_payment_checkout(payload: CreateCheckoutRequest):
-    db = SessionLocal()
-    try:
-        service = BillingService()
-        payment = service.create_checkout(
-            db=db,
-            telegram_user_id=payload.telegram_user_id,
-            plan_code=payload.plan_code,
-            username=payload.username,
-            full_name=payload.full_name,
-            provider=payload.provider,
-            notes=payload.notes,
-        )
-        db.commit()
-        db.refresh(payment)
-        return {"status": "ok", "payment": service.serialize_payment(payment)}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": str(e)}
-    finally:
-        db.close()
-
-
-@app.get("/payments")
-def list_payments(limit: int = 100, status: str | None = None):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        query = db.query(Payment)
-        if status:
-            query = query.filter(Payment.status == status)
-        payments = query.order_by(Payment.id.desc()).limit(limit).all()
-        service = BillingService()
-        return {
-            "summary": service.summary(db),
-            "items": [service.serialize_payment(payment) for payment in payments],
-        }
     finally:
         db.close()
 
@@ -2108,6 +2045,31 @@ def funding_arb_open(payload: FundingArbOpenRequest):
         db.commit()
         db.refresh(position)
         return {"status": "ok", "position": FundingArbEngine().serialize_position(position)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/evaluate-exits", dependencies=[Depends(require_owner_action)])
+def funding_arb_evaluate_exits():
+    db = SessionLocal()
+    try:
+        result = FundingArbEngine().evaluate_exits(db)
+        if result.get("closed") or result.get("close_required"):
+            AuditLogService().record(
+                db,
+                action="funding_arb_exit_evaluated",
+                resource_type="funding_arb_position",
+                details={
+                    "closed": len(result.get("closed", [])),
+                    "close_required": len(result.get("close_required", [])),
+                    "errors": len(result.get("errors", [])),
+                },
+            )
+        db.commit()
+        return result
     except Exception as e:
         db.rollback()
         return {"status": "error", "error": str(e)}
