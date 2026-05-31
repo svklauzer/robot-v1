@@ -537,7 +537,7 @@ Hard controls:
 - [ ] Stale pending checkout expires automatically and is audit-visible.
 - [ ] Webhook is idempotent.
 - [ ] Success activates/extends subscription.
-- [ ] Expiry revokes or flags VIP access.
+- [x] Expiry revokes or flags VIP access (`SubscriptionWatchdog` sets `expired` and records marker).
 - [ ] Revenue dashboard exists.
 - [ ] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion.
 
