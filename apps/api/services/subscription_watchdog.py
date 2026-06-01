@@ -26,11 +26,14 @@ class SubscriptionWatchdog:
             if not sub.expires_at:
                 continue
 
-            seconds_left = (sub.expires_at - now).total_seconds()
+            expires_at = self._as_aware(sub.expires_at)
+            seconds_left = (expires_at - now).total_seconds()
             days_left = int(seconds_left // 86400)
 
             if seconds_left <= 0:
                 sub.status = "expired"
+                marker = f"subscription_watchdog_expired_at={now.isoformat()}"
+                sub.notes = f"{sub.notes}; {marker}" if sub.notes else marker
                 expired.append(sub)
                 await self.telegram.owner_alert(
                     "SUBSCRIPTION EXPIRED",
@@ -61,9 +64,15 @@ class SubscriptionWatchdog:
         return {
             "checked": len(subscribers),
             "expired": len(expired),
+            "expired_ids": [sub.id for sub in expired],
             "warning_3d": len(warning_3d),
             "warning_1d": len(warning_1d),
         }
+
+    def _as_aware(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _sub_text(self, sub: Subscriber) -> str:
         return (
