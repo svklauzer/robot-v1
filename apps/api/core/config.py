@@ -89,6 +89,7 @@ class Settings(BaseSettings):
 
     # Failed setup: loss пороги (абсолютные, не динамические)
     # Используются как floor — не закрывать раньше этого убытка
+ 
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.35
     FAILED_SETUP_LOSS_MID_PCT: float = -0.55
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.80
@@ -100,7 +101,9 @@ class Settings(BaseSettings):
     # Менять здесь не нужно — правятся в exit_policy.py напрямую
 
     # Защитный trailing — доля MFE которую отдаём при откате
+    PROTECTIVE_MFE_START_PCT: float = 0.30
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.80
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
     # Минимальные ограничения на выход — не фиксировать мелочь
