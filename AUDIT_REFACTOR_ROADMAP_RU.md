@@ -538,8 +538,8 @@ Hard controls:
 - [x] Webhook is idempotent (`BillingService.process_payment_event` deduplicates provider event IDs).
 - [x] Success activates/extends subscription (`confirm_payment` activates/extends `Subscriber`).
 - [x] Expiry revokes or flags VIP access (`SubscriptionWatchdog` sets `expired` and records marker).
-- [ ] Revenue dashboard exists.
-- [ ] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion.
+- [x] Revenue dashboard exists (`/payments` owner page consumes `/payments/revenue`).
+- [x] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion (`TelegramProfile.funnel_stage` reaches `affiliate_paid_conversion`).
 
 ### Security/ops
 

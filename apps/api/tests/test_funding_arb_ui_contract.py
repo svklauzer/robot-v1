@@ -25,3 +25,13 @@ def test_owner_nav_and_health_surface_funding_arbitrage():
     assert "Funding Arb Loop" in health
     assert "HTX funding arb" in health
     assert "funding_arb_loop" in health
+
+
+def test_payments_owner_page_exposes_revenue_dashboard_contract():
+    page = (ROOT / "apps/web/app/payments/page.tsx").read_text()
+
+    assert "/payments/revenue?window_days=30" in page
+    assert "MRR est." in page
+    assert "30d cash" in page
+    assert "Revenue funnel" in page
+    assert "Trial→Paid" in page

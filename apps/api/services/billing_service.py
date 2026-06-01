@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.payment import BillingPlan, Payment, PaymentEvent
 from models.subscriber import Subscriber
+from models.telegram_profile import TelegramProfile
 
 
 DEFAULT_BILLING_PLANS = [
@@ -125,7 +127,8 @@ class BillingService:
             subscriber.plan = payment.plan_code
             subscriber.status = "active"
             subscriber.is_trial = False
-            base = subscriber.expires_at if subscriber.expires_at and subscriber.expires_at > now else now
+            current_expiry = self._as_aware(subscriber.expires_at)
+            base = current_expiry if current_expiry and current_expiry > now else now
             subscriber.expires_at = base + timedelta(days=payment.duration_days)
         else:
             subscriber = Subscriber(
@@ -149,8 +152,43 @@ class BillingService:
         if provider_event_id:
             payment.provider_payment_id = payment.provider_payment_id or provider_event_id
 
+        self._mark_affiliate_paid_conversion(db, payment.telegram_user_id, subscriber)
+
         db.flush()
         return payment, subscriber, True
+
+    def _as_aware(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _mark_affiliate_paid_conversion(self, db: Session, telegram_user_id: str, subscriber: Subscriber) -> None:
+        with db.no_autoflush:
+            connection = db.connection()
+            if not inspect(connection).has_table("telegram_profiles"):
+                return
+
+            profile = (
+                db.query(TelegramProfile)
+                .filter(TelegramProfile.telegram_user_id == str(telegram_user_id))
+                .first()
+            )
+        if not profile:
+            return
+
+        stage = profile.funnel_stage or ""
+        affiliate_trial = "affiliate_htx_trial" in (subscriber.notes or "")
+        affiliate_stage = stage in {
+            "htx_affiliate_clicked",
+            "affiliate_trial_active",
+            "affiliate_trial_blocked",
+        }
+
+        if affiliate_trial or affiliate_stage:
+            profile.funnel_stage = "affiliate_paid_conversion"
+            profile.last_command = "paid_conversion"
 
     def process_payment_event(
         self,
