@@ -85,7 +85,9 @@ export default function AnalyticsPage() {
 
           <Panel title="Telegram delivery 24h" icon={<Activity size={18} />}>
             <Metric label="SLA" value={`${readiness?.telegram_delivery?.sla_pct ?? 100}%`} />
+            <Metric label="VIP SLA" value={`${readiness?.telegram_delivery?.vip_sla_pct ?? 100}%`} />
             <Metric label="Sent" value={readiness?.telegram_delivery?.sent ?? 0} />
+            <Metric label="VIP queued" value={readiness?.telegram_delivery?.vip_queued ?? 0} />
             <Metric label="Failed" value={readiness?.telegram_delivery?.failed ?? 0} />
             {readiness?.telegram_delivery?.last_error && (
               <p className="mt-3 text-xs text-red-200">{readiness.telegram_delivery.last_error}</p>

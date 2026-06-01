@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     JWT_SECRET: str = "dev-jwt-secret-change-me"
     NEXT_PUBLIC_API_URL: str = "http://localhost:8000"
+
     OWNER_EMAIL: str = "owner@example.com"
     OWNER_PASSWORD: str = "owner-password-change-me"
     OWNER_API_TOKEN: str = ""
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     DB_AUTO_CREATE_SCHEMA: bool = True
+
     REDIS_URL: str = "redis://localhost:6379"
 
     # =========================
@@ -71,6 +73,7 @@ class Settings(BaseSettings):
     SIGNAL_PROFILE: str = "learning"
     EXECUTION_MARKET: str = "spot"
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
+
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
     # =========================
@@ -79,6 +82,10 @@ class Settings(BaseSettings):
     # как доля от stop_distance_pct.
     # Здесь хранятся только loss-пороги и минимальные ограничения.
     # =========================
+    # Минимальный MFE до применения early-failed-setup блока.
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    FAILED_SETUP_MFE_MID_PCT: float = 0.45
+    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Failed setup: loss пороги (абсолютные, не динамические)
     # Используются как floor — не закрывать раньше этого убытка
@@ -106,6 +113,13 @@ class Settings(BaseSettings):
     MIN_POST_TP1_EXIT_PCT: float = 0.45
     MIN_PROTECTIVE_NET_USDT: float = 1.50
     MIN_PROTECTIVE_R_MULT: float = 0.30
+
+    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
+    # fresh paper data shows positive->negative giveback.
+    MFE_CAPTURE_ENABLED: bool = True
+    MFE_CAPTURE_START_PCT: float = 0.65
+    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
+    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
@@ -261,17 +275,23 @@ class Settings(BaseSettings):
     VIP_INVITE_LINK: str = ""
 
     # =========================
-    # PAYMENTS / CONNECTIVITY
+    # PAYMENTS / CHECKOUTS
     # =========================
     PAYMENT_PENDING_EXPIRE_HOURS: int = 48
+
+    # =========================
+    # MARKET CONNECTIVITY
+    # =========================
     MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 5000
     MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
 
+
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []
+
         if self.APP_ENV == "production":
             if self.DB_AUTO_CREATE_SCHEMA:
-                blockers.append("DB_AUTO_CREATE_SCHEMA must be disabled in production")
+                blockers.append("DB_AUTO_CREATE_SCHEMA must be disabled in production; run Alembic migrations")
             if self.JWT_SECRET == "dev-jwt-secret-change-me":
                 blockers.append("JWT_SECRET uses development default")
             if self.OWNER_PASSWORD == "owner-password-change-me":
@@ -282,6 +302,7 @@ class Settings(BaseSettings):
                 blockers.append("TELEGRAM_BOT_TOKEN is not configured")
             if not self.HTX_API_KEY or not self.HTX_API_SECRET:
                 blockers.append("HTX API credentials are not configured")
+
         if self.ENABLE_LIVE_ORDERS and self.TRADING_MODE not in ["live", "live_limited"]:
             blockers.append("ENABLE_LIVE_ORDERS requires TRADING_MODE=live or live_limited")
         if self.ENABLE_LIVE_ORDERS and self.ROBOT_MODE == "paper":
@@ -289,7 +310,8 @@ class Settings(BaseSettings):
         if self.ENABLE_LIVE_ORDERS and not self.TELEGRAM_BOT_TOKEN:
             blockers.append("live orders require Telegram owner alerts")
         if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
-            blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true")
+            blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
+
         return blockers
 
     @property

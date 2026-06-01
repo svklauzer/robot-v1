@@ -14,6 +14,7 @@ logger = get_logger(__name__)
 
 RETRYABLE_STATUSES = {"queued", "failed_retryable"}
 FAILED_STATUSES = {"failed", "failed_retryable", "failed_final"}
+VIP_DELIVERY_TYPES = {"vip_full_signal", "legacy_vip_signal"}
 
 
 class TelegramDeliveryLog:
@@ -156,6 +157,11 @@ class TelegramDeliveryLog:
                 bucket["retryable"] += 1
 
         delivered_or_failed = sent + failed
+        vip_rows = [row for row in rows if row.message_type in VIP_DELIVERY_TYPES]
+        vip_sent = sum(1 for row in vip_rows if row.status == "sent")
+        vip_failed = sum(1 for row in vip_rows if row.status in FAILED_STATUSES)
+        vip_queued = sum(1 for row in vip_rows if row.status == "queued")
+        vip_delivered_or_failed = vip_sent + vip_failed
 
         return {
             "hours": hours,
@@ -166,6 +172,11 @@ class TelegramDeliveryLog:
             "retryable": retryable,
             "failed_final": failed_final,
             "sla_pct": round((sent / delivered_or_failed * 100), 2) if delivered_or_failed else 100.0,
+            "vip_total": len(vip_rows),
+            "vip_sent": vip_sent,
+            "vip_failed": vip_failed,
+            "vip_queued": vip_queued,
+            "vip_sla_pct": round((vip_sent / vip_delivered_or_failed * 100), 2) if vip_delivered_or_failed else 100.0,
             "by_status": by_status,
             "by_type": by_type,
             "last_error": last_error,

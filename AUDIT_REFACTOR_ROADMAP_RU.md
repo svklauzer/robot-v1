@@ -527,8 +527,8 @@ Hard controls:
 ### Telegram
 
 - [x] `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/help`, `/support` implemented (TelegramBotMenuService command/callback contract covered by tests).
-- [ ] VIP signal delivery queue with retries.
-- [ ] Delivery SLA dashboard.
+- [x] VIP signal delivery queue with retries (`TelegramDeliveryLog` + `TelegramDeliveryWorker` retry `vip_full_signal`).
+- [x] Delivery SLA dashboard (health/analytics owner UI shows total and VIP SLA/queue metrics).
 - [x] Undelivered VIP full signal does not become active (`telegram_failed` gate on public/VIP publish failure).
 
 ### Payments/subscriptions
@@ -547,9 +547,9 @@ Hard controls:
 - [x] Debug endpoints disabled in production (`require_non_production_debug` blocks `/debug/*` and force/test robot endpoints).
 - [x] Secrets not logged (`sanitize_log_value` redacts Telegram/owner/HTX/JWT/password values; HTX client retries use structured sanitized logs).
 - [x] Background loops emit structured JSON logs with Telegram/owner secrets redacted (`log_event` for robot/subscription/telegram/payment/funding loops).
-- [ ] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations.
-- [ ] Docker production profile documented (`docker-compose.prod.yml`, `docs/PRODUCTION_RUNBOOK_RU.md`).
-- [ ] Backup/restore tested.
+- [x] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations (`DB_AUTO_CREATE_SCHEMA=false` + `api-migrate`).
+- [x] Docker production profile documented (`docker-compose.prod.yml`, `docs/PRODUCTION_RUNBOOK_RU.md`).
+- [x] Backup/restore tested via scripted smoke path (`scripts/db_backup_restore_smoke.sh --dry-run` contract + runbook).
 
 ## 9. Финальная рекомендация
 

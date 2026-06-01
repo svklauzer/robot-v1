@@ -35,3 +35,17 @@ def test_payments_owner_page_exposes_revenue_dashboard_contract():
     assert "30d cash" in page
     assert "Revenue funnel" in page
     assert "Trial→Paid" in page
+
+
+def test_owner_health_and_analytics_surface_vip_delivery_sla():
+    health = (ROOT / "apps/web/app/health/page.tsx").read_text()
+    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+
+    assert "Telegram delivery 24h" in health
+    assert "VIP SLA" in health
+    assert "vip_sla_pct" in health
+    assert "VIP queued" in health
+    assert "vip_queued" in health
+    assert "VIP SLA" in analytics
+    assert "vip_sla_pct" in analytics
+    assert "VIP queued" in analytics

@@ -88,6 +88,11 @@ def test_summary_counts_retryable_and_final_failures_as_failed():
     assert summary["failed"] == 2
     assert summary["retryable"] == 1
     assert summary["failed_final"] == 1
+    assert summary["vip_total"] == 1
+    assert summary["vip_sent"] == 0
+    assert summary["vip_failed"] == 1
+    assert summary["vip_queued"] == 0
+    assert summary["vip_sla_pct"] == 0.0
     assert summary["by_status"]["failed_retryable"] == 1
     assert summary["by_status"]["failed_final"] == 1
     assert "bot<redacted>" in summary["last_error"]

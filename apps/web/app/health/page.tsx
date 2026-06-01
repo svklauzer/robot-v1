@@ -134,8 +134,11 @@ export default function HealthPage() {
 
         <Panel title="Telegram delivery 24h">
           <InfoRow label="SLA" value={`${delivery?.sla_pct ?? 100}%`} />
+          <InfoRow label="VIP SLA" value={`${delivery?.vip_sla_pct ?? 100}%`} danger={(delivery?.vip_failed ?? 0) > 0} />
           <InfoRow label="Sent" value={delivery?.sent ?? 0} />
+          <InfoRow label="VIP sent" value={delivery?.vip_sent ?? 0} />
           <InfoRow label="Queued" value={delivery?.queued ?? 0} danger={(delivery?.queued ?? 0) > 0} />
+          <InfoRow label="VIP queued" value={delivery?.vip_queued ?? 0} danger={(delivery?.vip_queued ?? 0) > 0} />
           <InfoRow label="Retryable" value={delivery?.retryable ?? 0} danger={(delivery?.retryable ?? 0) > 0} />
           <InfoRow label="Failed" value={delivery?.failed ?? 0} danger={(delivery?.failed ?? 0) > 0} />
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}

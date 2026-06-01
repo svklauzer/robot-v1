@@ -59,6 +59,23 @@ curl -s http://localhost:8000/system/health
 - market connectivity не блокирует запуск;
 - rolling PnL и closed validation sample проходят требования roadmap.
 
+
+## Backup / restore smoke
+
+Перед Alembic downgrade, крупным deploy или включением live-режима выполнить backup и проверку восстановления в временную БД:
+
+```bash
+./scripts/db_backup_restore_smoke.sh
+```
+
+Для CI/runbook-проверки без доступа к Docker/Postgres доступен dry-run, который печатает те же `pg_dump`, `createdb`, `pg_restore`, `psql` и `dropdb` команды без выполнения:
+
+```bash
+./scripts/db_backup_restore_smoke.sh --dry-run
+```
+
+Ожидаемый финальный маркер: `backup_restore_smoke_status=ok`.
+
 ## Rollback
 
 1. Включить kill switch через owner endpoint.
