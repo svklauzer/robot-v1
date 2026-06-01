@@ -374,15 +374,9 @@ class RobotLoop:
                 db.flush()
                 continue
 
-            adjusted_qty = float(plan.qty) * float(performance.risk_multiplier or 1.0)
-            if adjusted_qty <= 0:
+            performance_adjustment = self._apply_symbol_performance_adjustment(plan, performance)
+            if float(plan.qty or 0) <= 0:
                 continue
-
-            plan.qty = round(adjusted_qty, 6)
-            plan.required_margin = round(float(plan.required_margin) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_tp1 = round(float(plan.net_pnl_tp1) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_tp2 = round(float(plan.net_pnl_tp2) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_stop = round(float(plan.net_pnl_stop) * float(performance.risk_multiplier or 1.0), 6)
 
             exposure_result = self.exposure_guard.check_before_publish(
                 db=db,
@@ -532,6 +526,7 @@ class RobotLoop:
                     "net_rr_tp2": plan.net_rr_tp2,
                     "is_valid": plan.is_valid,
                     "reject_reason": plan.reject_reason,
+                    "performance_guard": performance_adjustment,
                 },
             )
 
@@ -548,6 +543,39 @@ class RobotLoop:
                 is_public=should_publish,
                 result=result,
             )
+
+
+    def _apply_symbol_performance_adjustment(self, plan, performance) -> dict:
+        multiplier = float(getattr(performance, "risk_multiplier", 1.0) or 1.0)
+        original = {
+            "qty": float(plan.qty or 0),
+            "required_margin": float(plan.required_margin or 0),
+            "net_pnl_tp1": float(plan.net_pnl_tp1 or 0),
+            "net_pnl_tp2": float(plan.net_pnl_tp2 or 0),
+            "net_pnl_stop": float(plan.net_pnl_stop or 0),
+        }
+
+        plan.qty = round(original["qty"] * multiplier, 6)
+        plan.required_margin = round(original["required_margin"] * multiplier, 6)
+        plan.net_pnl_tp1 = round(original["net_pnl_tp1"] * multiplier, 6)
+        plan.net_pnl_tp2 = round(original["net_pnl_tp2"] * multiplier, 6)
+        plan.net_pnl_stop = round(original["net_pnl_stop"] * multiplier, 6)
+
+        return {
+            "allowed": bool(getattr(performance, "allowed", True)),
+            "reason": getattr(performance, "reason", "symbol_performance_ok"),
+            "risk_multiplier": multiplier,
+            "symbol": getattr(performance, "symbol", None),
+            "classification": "reduced" if multiplier < 1.0 else "ok",
+            "original": original,
+            "adjusted": {
+                "qty": plan.qty,
+                "required_margin": plan.required_margin,
+                "net_pnl_tp1": plan.net_pnl_tp1,
+                "net_pnl_tp2": plan.net_pnl_tp2,
+                "net_pnl_stop": plan.net_pnl_stop,
+            },
+        }
 
     async def _publish_new_signal_safely(
         self,

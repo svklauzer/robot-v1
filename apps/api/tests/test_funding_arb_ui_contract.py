@@ -49,3 +49,14 @@ def test_owner_health_and_analytics_surface_vip_delivery_sla():
     assert "VIP SLA" in analytics
     assert "vip_sla_pct" in analytics
     assert "VIP queued" in analytics
+
+
+def test_analytics_page_surfaces_symbol_profitability_guard():
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+
+    assert "/analytics/symbol-performance?lookback=12" in page
+    assert "Per-symbol profitability guard" in page
+    assert "Risk x" in page
+    assert "Failed setup" in page
+    assert "symbolPerf?.blocked_count" in page
+    assert "symbolPerf?.reduced_count" in page
