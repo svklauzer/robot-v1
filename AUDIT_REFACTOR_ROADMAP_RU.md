@@ -545,7 +545,7 @@ Hard controls:
 
 - [ ] Owner endpoints authenticated.
 - [x] Debug endpoints disabled in production (`require_non_production_debug` blocks `/debug/*` and force/test robot endpoints).
-- [ ] Secrets not logged.
+- [x] Secrets not logged (`sanitize_log_value` redacts Telegram/owner/HTX/JWT/password values; HTX client retries use structured sanitized logs).
 - [ ] Background loops emit structured JSON logs with Telegram/owner secrets redacted.
 - [ ] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations.
 - [ ] Docker production profile documented (`docker-compose.prod.yml`, `docs/PRODUCTION_RUNBOOK_RU.md`).

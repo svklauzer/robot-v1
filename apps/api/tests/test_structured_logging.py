@@ -30,3 +30,25 @@ def test_log_event_emits_json_and_redacts_secrets(caplog):
     assert payload["event"] == "telegram_send_error"
     assert payload["chat_id"] == "1832004802"
     assert "SECRET" not in payload["error"]
+
+
+def test_sanitize_log_value_redacts_configured_secrets():
+    from core.config import settings
+
+    old_owner_token = settings.OWNER_API_TOKEN
+    old_htx_secret = settings.HTX_API_SECRET
+    try:
+        settings.OWNER_API_TOKEN = "owner-token-123"
+        settings.HTX_API_SECRET = "htx-secret-456"
+
+        sanitized = sanitize_log_value({
+            "header": "x-owner-token: owner-token-123",
+            "error": "exchange auth failed with htx-secret-456 secret=htx-secret-456",
+        })
+
+        assert "owner-token-123" not in sanitized["header"]
+        assert "htx-secret-456" not in sanitized["error"]
+        assert "<redacted>" in sanitized["error"]
+    finally:
+        settings.OWNER_API_TOKEN = old_owner_token
+        settings.HTX_API_SECRET = old_htx_secret
