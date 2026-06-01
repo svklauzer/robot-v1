@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     ENABLE_FUTURES: bool = False
     FUTURES_MARGIN_MODE: str = "isolated"
     FUTURES_LEVERAGE: int = 1
-    ALLOW_SHORTS: bool = False
+    ALLOW_SHORTS: bool = True
     SIGNAL_PROFILE: str = "learning"
     EXECUTION_MARKET: str = "spot"
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
@@ -103,37 +103,11 @@ class Settings(BaseSettings):
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
-    # MFE Capture — ранняя фиксация до TP1
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
     # Минимальные ограничения на выход — не фиксировать мелочь
     MIN_PROTECTIVE_EXIT_PCT: float = 0.60
     MIN_POST_TP1_EXIT_PCT: float = 0.45
     MIN_PROTECTIVE_NET_USDT: float = 1.50
     MIN_PROTECTIVE_R_MULT: float = 0.30
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
