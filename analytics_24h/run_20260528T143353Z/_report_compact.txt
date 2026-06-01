@@ -1,0 +1,22 @@
+RUN_DIR=/c/Users/svk/robot-v1/analytics_24h/run_20260528T143353Z
+UTC_TS=20260528T143353Z
+
+=== git_meta.txt ===
+# CMD: git rev-parse --short HEAD
+1ffb1e4
+=== git_branch.txt ===
+# CMD: git branch --show-current
+main
+=== compose_ps.txt ===
+# CMD: docker compose ps
+NAME               IMAGE          COMMAND                  SERVICE   CREATED          STATUS          PORTS
+robot-v1-api-1     robot-v1-api   "uvicorn main:app --…"   api       17 minutes ago   Up 17 minutes   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+robot-v1-db-1      postgres:16    "docker-entrypoint.s…"   db        17 minutes ago   Up 17 minutes   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+robot-v1-redis-1   redis:7        "docker-entrypoint.s…"   redis     17 minutes ago   Up 17 minutes   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+robot-v1-web-1     robot-v1-web   "docker-entrypoint.s…"   web       17 minutes ago   Up 17 minutes   0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+=== analytics_summary.json ===
+# GET http://localhost:8000/analytics/summary
+{"total_signals":39,"active_signals":0,"closed_signals":36,"expired_signals":3,"rejected_signals":0,"wins":11,"losses":25,"winrate":30.56,"total_result_pct":-19.5279,"total_net_pnl_usdt":-24.159891,"avg_net_pnl_usdt":-0.671108,"total_costs_usdt":22.053502,"exposure":{"used_margin":0.0,"max_allowed_margin":760.0,"free_margin":760.0,"active_signals_count":0}}=== analytics_reason_breakdown.json ===
+# GET http://localhost:8000/analytics/reason-breakdown
+{"status":"ok","sample_closed_signals":36,"total_net_pnl_usdt":-24.159891,"items":[{"reason":"failed_setup_exit","count":25,"share_pct":69.44,"wins":0,"losses":25,"avg_result_pct":-0.8034,"sum_net_pnl_usdt":-25.05804,"avg_net_pnl_usdt":-1.002322,"sum_costs_usdt":14.021797,"pnl_share_pct":103.72},{"reason":"protective_trailing_stop","count":1,"share_pct":2.78,"wins":1,"losses":0,"avg_result_pct":0.051,"sum_net_pnl_usdt":0.028371,"avg_net_pnl_usdt":0.028371,"sum_costs_usdt":0.249772,"pnl_share_pct":-0.12},{"reason":"protective_breakeven_profit_guard","count":10,"share_pct":27.78,"wins":10,"losses":0,"avg_result_pct":0.0506,"sum_net_pnl_usdt":0.869778,"avg_net_pnl_usdt":0.086978,"sum_costs_usdt":7.781933,"pnl_share_pct":-3.6}]}=== ml_outcomes_summary.json ===
+{"status": "degraded", "fallback_used": false, "reason": "ml_summary_python_failed", "python_bin": "python3"}
