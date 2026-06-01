@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     # EXECUTION PLAN V1 TUNING
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
-    FAILED_SETUP_MFE_MID_PCT: float = 0.45
-    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
+    # FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
+    # FAILED_SETUP_MFE_MID_PCT: float = 0.45
+    # FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.35
@@ -95,15 +95,15 @@ class Settings(BaseSettings):
     FAILED_SETUP_MIN_AGE_SEC: int = 300
 
     # MFE-протекция и частичная фиксация в процентах.
-    PROTECTIVE_MFE_START_PCT: float = 0.30
+    # PROTECTIVE_MFE_START_PCT: float = 0.30
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.80
+    # ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.80
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.45
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
+    # MFE_CAPTURE_START_PCT: float = 0.65
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.35
 
