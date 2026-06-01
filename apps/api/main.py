@@ -2205,6 +2205,10 @@ def system_readiness():
             },
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
     finally:
         db.close()
 
