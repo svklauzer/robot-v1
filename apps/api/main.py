@@ -1084,7 +1084,7 @@ def analytics_symbol_performance(lookback: int = 12):
         db.close()
 
 
-@app.post("/signals/{signal_id}/close")
+@app.post("/signals/{signal_id}/close", dependencies=[Depends(require_owner_action)])
 async def close_signal(signal_id: int, payload: CloseSignalRequest):
     db = SessionLocal()
 
@@ -1198,7 +1198,7 @@ async def force_live_near_signal():
     finally:
         db.close()
 
-@app.post("/signals/maintenance/queued-to-published")
+@app.post("/signals/maintenance/queued-to-published", dependencies=[Depends(require_owner_action)])
 def queued_to_published():
     db = SessionLocal()
 
@@ -1443,7 +1443,7 @@ def report_summary(hours: int = 24):
         db.close()
 
 
-@app.post("/reports/send-owner")
+@app.post("/reports/send-owner", dependencies=[Depends(require_owner_action)])
 async def send_owner_report(hours: int = 24):
     db = SessionLocal()
 
@@ -1456,7 +1456,7 @@ async def send_owner_report(hours: int = 24):
         db.close()
 
 
-@app.post("/reports/send-free")
+@app.post("/reports/send-free", dependencies=[Depends(require_owner_action)])
 async def send_free_report(hours: int = 24):
     db = SessionLocal()
 
@@ -1469,7 +1469,7 @@ async def send_free_report(hours: int = 24):
         db.close()
 
 
-@app.post("/reports/send-vip")
+@app.post("/reports/send-vip", dependencies=[Depends(require_owner_action)])
 async def send_vip_report(hours: int = 24):
     db = SessionLocal()
 
@@ -1482,7 +1482,7 @@ async def send_vip_report(hours: int = 24):
         db.close()
 
 
-@app.post("/reports/send-all")
+@app.post("/reports/send-all", dependencies=[Depends(require_owner_action)])
 async def send_all_reports(hours: int = 24):
     db = SessionLocal()
 
@@ -2204,11 +2204,77 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
+    finally:
+        db.close()
 
+
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        event = None
+        if payload and payload.provider_event_id:
+            payment, subscriber, activated, event = service.process_payment_event(
+                db=db,
+                payment_id=payment_id,
+                provider="manual",
+                provider_event_id=payload.provider_event_id,
+                status="paid",
+                raw_payload=payload.raw_payload,
+            )
+        else:
+            payment, subscriber, activated = service.confirm_payment(
+                db=db,
+                payment_id=payment_id,
+                raw_payload=payload.raw_payload if payload else None,
+            )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id, "customer_notification": notification},
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+            "customer_notification": notification,
+            "payment_event": service.serialize_payment_event(event) if event else None,
+        }
     except Exception as e:
         db.rollback()
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
     finally:
         db.close()
 
@@ -2337,7 +2403,7 @@ async def test_telegram_vip():
     )
     return {"status": "sent"}
 
-@app.post("/trade/cost-preview")
+@app.post("/trade/cost-preview", dependencies=[Depends(require_owner_action)])
 def trade_cost_preview(payload: CostPreviewRequest):
     try:
         engine = CostEngine()
@@ -2380,7 +2446,7 @@ def trade_cost_preview(payload: CostPreviewRequest):
             "error": str(e),
         }
 
-@app.post("/trade/build-plan")
+@app.post("/trade/build-plan", dependencies=[Depends(require_owner_action)])
 def build_trade_plan(payload: TradePlanRequest):
     builder = TradePlanBuilder()
     plan = builder.build_plan(
@@ -3275,7 +3341,7 @@ def intelligence_scan_readonly():
         db.close()
 
 
-@app.post("/intelligence/scan/run")
+@app.post("/intelligence/scan/run", dependencies=[Depends(require_owner_action)])
 async def intelligence_scan_run():
     if not INTELLIGENCE_PUBLISH_LOCK.acquire(blocking=False):
         return {

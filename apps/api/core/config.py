@@ -102,7 +102,7 @@ class Settings(BaseSettings):
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = False
+    MFE_CAPTURE_ENABLED: bool = True
     MFE_CAPTURE_START_PCT: float = 0.65
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.35

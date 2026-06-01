@@ -543,7 +543,7 @@ Hard controls:
 
 ### Security/ops
 
-- [ ] Owner endpoints authenticated.
+- [x] Owner endpoints authenticated (`require_owner_action` protects mutating owner/admin routes; Telegram webhook remains public).
 - [x] Debug endpoints disabled in production (`require_non_production_debug` blocks `/debug/*` and force/test robot endpoints).
 - [x] Secrets not logged (`sanitize_log_value` redacts Telegram/owner/HTX/JWT/password values; HTX client retries use structured sanitized logs).
 - [x] Background loops emit structured JSON logs with Telegram/owner secrets redacted (`log_event` for robot/subscription/telegram/payment/funding loops).
