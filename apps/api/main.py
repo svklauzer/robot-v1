@@ -101,8 +101,9 @@ async def background_subscription_loop():
 
         try:
             service = SubscriptionWatchdog()
-            await service.check_subscriptions(db)
+            result = await service.check_subscriptions(db)
             db.commit()
+            log_event(logger, logging.INFO, "subscription_watchdog_check", **result)
 
         except Exception as e:
             db.rollback()
@@ -334,6 +335,14 @@ async def background_robot_loop():
                         drawdown_pct=0,
                     )
                     db.commit()
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "robot_loop_step_completed",
+                        bot_id=bot.id,
+                        mode=bot.mode,
+                        daily_loss_pct=safety.get("daily_loss_pct", 0),
+                    )
 
         except Exception as e:
             db.rollback()
@@ -2195,6 +2204,10 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
     finally:
         db.close()
