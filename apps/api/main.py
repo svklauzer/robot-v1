@@ -2204,59 +2204,6 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
-    finally:
-        db.close()
-
-
-@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
-async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
-    db = SessionLocal()
-    try:
-        service = BillingService()
-        event = None
-        if payload and payload.provider_event_id:
-            payment, subscriber, activated, event = service.process_payment_event(
-                db=db,
-                payment_id=payment_id,
-                provider="manual",
-                provider_event_id=payload.provider_event_id,
-                status="paid",
-                raw_payload=payload.raw_payload,
-            )
-        else:
-            payment, subscriber, activated = service.confirm_payment(
-                db=db,
-                payment_id=payment_id,
-                raw_payload=payload.raw_payload if payload else None,
-            )
-        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
-        AuditLogService().record(
-            db,
-            action="payment_manual_confirm",
-            resource_type="payment",
-            resource_id=payment.id,
-            details={"activated": activated, "subscriber_id": subscriber.id, "customer_notification": notification},
-        )
-        db.commit()
-        await TelegramRouter().owner_alert(
-            "PAYMENT CONFIRMED",
-            (
-                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
-                f"User: {subscriber.telegram_user_id}\n"
-                f"Plan: {subscriber.plan}\n"
-                f"Expires: {subscriber.expires_at}\n"
-                f"Activated now: {activated}"
-            ),
-        )
-        return {
-            "status": "ok",
-            "activated": activated,
-            "payment": service.serialize_payment(payment),
-            "subscriber_id": subscriber.id,
-            "expires_at": str(subscriber.expires_at),
-            "customer_notification": notification,
-            "payment_event": service.serialize_payment_event(event) if event else None,
-        }
     except Exception as e:
         db.rollback()
         return {"status": "error", "error": str(e)}

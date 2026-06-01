@@ -223,14 +223,22 @@ class TelegramBotMenuService:
             return "📌 Статус: подписка не найдена. Нажмите /plans или /pay."
 
         now = datetime.now(timezone.utc)
-        active = subscriber.status == "active" and subscriber.expires_at and subscriber.expires_at > now
+        expires_at = self._as_aware_datetime(subscriber.expires_at)
+        active = subscriber.status == "active" and expires_at and expires_at > now
         return (
             "📌 Статус подписки\n\n"
             f"Plan: {subscriber.plan}\n"
             f"Status: {subscriber.status}\n"
             f"Active now: {'yes' if active else 'no'}\n"
-            f"Expires: {subscriber.expires_at}"
+            f"Expires: {expires_at}"
         )
+
+    def _as_aware_datetime(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _htx_affiliate_text(self) -> str:
         days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)

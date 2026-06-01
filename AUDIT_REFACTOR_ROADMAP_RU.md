@@ -526,7 +526,7 @@ Hard controls:
 
 ### Telegram
 
-- [ ] `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/help`, `/support` implemented.
+- [x] `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/help`, `/support` implemented (TelegramBotMenuService command/callback contract covered by tests).
 - [ ] VIP signal delivery queue with retries.
 - [ ] Delivery SLA dashboard.
 - [x] Undelivered VIP full signal does not become active (`telegram_failed` gate on public/VIP publish failure).
