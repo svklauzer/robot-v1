@@ -4,14 +4,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.db import Base
+from models.audit_event import AuditEvent
 from models.payment import Payment, PaymentEvent
 from services.billing_service import BillingService
+from services.audit_log import AuditLogService
 from services.payment_reconciliation import PaymentReconciliationService
 
 
 def _db_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(bind=engine, tables=[Payment.__table__, PaymentEvent.__table__])
+    Base.metadata.create_all(bind=engine, tables=[Payment.__table__, PaymentEvent.__table__, AuditEvent.__table__])
     return sessionmaker(bind=engine)()
 
 
@@ -76,5 +78,32 @@ def test_billing_summary_counts_expired_as_failed_not_pending():
 
         assert summary["pending"] == 1
         assert summary["failed"] == 1
+    finally:
+        db.close()
+
+
+def test_reconciliation_records_audit_event_when_requested():
+    db = _db_session()
+    now = datetime.now(timezone.utc)
+
+    try:
+        stale = _payment("pending", now - timedelta(hours=72), telegram_user_id="audit-old")
+        db.add(stale)
+        db.commit()
+
+        result = PaymentReconciliationService().reconcile_pending(
+            db,
+            older_than_hours=48,
+            audit_log=AuditLogService(),
+        )
+        db.commit()
+
+        audit = db.query(AuditEvent).one()
+
+        assert result["expired"] == 1
+        assert audit.action == "payment_reconciliation"
+        assert audit.resource_type == "payment"
+        assert audit.details_json["expired_payment_ids"] == [stale.id]
+        assert audit.details_json["expired"] == 1
     finally:
         db.close()

@@ -20,7 +20,7 @@ class PaymentReconciliationService:
 
     marker = "auto_expired_pending_checkout"
 
-    def reconcile_pending(self, db: Session, older_than_hours: int | None = None) -> dict[str, Any]:
+    def reconcile_pending(self, db: Session, older_than_hours: int | None = None, audit_log: Any | None = None) -> dict[str, Any]:
         ttl_hours = int(older_than_hours or getattr(settings, "PAYMENT_PENDING_EXPIRE_HOURS", 48) or 48)
         ttl_hours = max(ttl_hours, 1)
         now = datetime.now(timezone.utc)
@@ -55,13 +55,24 @@ class PaymentReconciliationService:
                 )
             )
 
-        return {
+        result = {
             "status": "ok",
             "ttl_hours": ttl_hours,
             "pending_scanned": len(pending),
             "expired": len(expired),
             "expired_payment_ids": [payment.id for payment in expired],
         }
+
+        if expired and audit_log is not None:
+            audit_log.record(
+                db,
+                action="payment_reconciliation",
+                resource_type="payment",
+                status="ok",
+                details=result,
+            )
+
+        return result
 
     def _as_aware(self, value: datetime | None) -> datetime | None:
         if value is None:

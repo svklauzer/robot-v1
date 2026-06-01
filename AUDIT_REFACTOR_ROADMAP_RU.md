@@ -533,10 +533,10 @@ Hard controls:
 
 ### Payments/subscriptions
 
-- [ ] Checkout creates payment.
-- [ ] Stale pending checkout expires automatically and is audit-visible.
-- [ ] Webhook is idempotent.
-- [ ] Success activates/extends subscription.
+- [x] Checkout creates payment (`BillingService.create_checkout` is covered by billing tests).
+- [x] Stale pending checkout expires automatically and is audit-visible (`PaymentReconciliationService` records `PaymentEvent` + `AuditEvent`).
+- [x] Webhook is idempotent (`BillingService.process_payment_event` deduplicates provider event IDs).
+- [x] Success activates/extends subscription (`confirm_payment` activates/extends `Subscriber`).
 - [x] Expiry revokes or flags VIP access (`SubscriptionWatchdog` sets `expired` and records marker).
 - [ ] Revenue dashboard exists.
 - [ ] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion.

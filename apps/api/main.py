@@ -151,7 +151,7 @@ async def background_payment_reconciliation_loop():
         db = SessionLocal()
 
         try:
-            result = service.reconcile_pending(db)
+            result = service.reconcile_pending(db, audit_log=AuditLogService())
             db.commit()
 
             if result.get("expired", 0) > 0:
@@ -1756,7 +1756,24 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
     finally:
         db.close()
 
@@ -1955,14 +1972,8 @@ def reconcile_payments(payload: PaymentReconcileRequest | None = None):
         result = PaymentReconciliationService().reconcile_pending(
             db,
             older_than_hours=payload.older_than_hours if payload else None,
+            audit_log=AuditLogService(),
         )
-        if result.get("expired", 0) > 0:
-            AuditLogService().record(
-                db,
-                action="payment_reconciliation",
-                resource_type="payment",
-                details=result,
-            )
         db.commit()
         return result
     except Exception as e:
@@ -2204,24 +2215,7 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": str(e)}
-    finally:
-        db.close()
 
-
-@app.get("/payments/events")
-def list_payment_events(limit: int = 100):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        service = BillingService()
-        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
-        return {
-            "items": [service.serialize_payment_event(event) for event in events],
-            "summary": service.summary(db),
-        }
     finally:
         db.close()
 
