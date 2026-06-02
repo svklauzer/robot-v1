@@ -38,6 +38,7 @@ from services.signal_lifecycle import SignalLifecycleManager
 from services.signal_quality import SignalQualityService
 from services.market_data import MarketDataService
 from services.market_connectivity import MarketConnectivityService
+from services.exchange_reconciliation import ExchangeReconciliationService
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
@@ -1694,6 +1695,7 @@ def system_health():
         production_blockers = settings.production_blockers()
 
         market_status = MarketConnectivityService().check("BTC/USDT")
+        exchange_reconciliation = ExchangeReconciliationService().check(db)
 
         return {
             "api": {
@@ -1731,6 +1733,7 @@ def system_health():
                 },
             },
             "market": market_status,
+            "exchange_reconciliation": exchange_reconciliation,
             "signals": {
                 "total": total_signals,
                 "published": published_signals,
@@ -1756,10 +1759,89 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
-
     finally:
         db.close()
 
+
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        event = None
+        if payload and payload.provider_event_id:
+            payment, subscriber, activated, event = service.process_payment_event(
+                db=db,
+                payment_id=payment_id,
+                provider="manual",
+                provider_event_id=payload.provider_event_id,
+                status="paid",
+                raw_payload=payload.raw_payload,
+            )
+        else:
+            payment, subscriber, activated = service.confirm_payment(
+                db=db,
+                payment_id=payment_id,
+                raw_payload=payload.raw_payload if payload else None,
+            )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id, "customer_notification": notification},
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+            "customer_notification": notification,
+            "payment_event": service.serialize_payment_event(event) if event else None,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+
+@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
+def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
+    db = SessionLocal()
+    try:
+        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
+    finally:
+        db.close()
 
 @app.get("/audit/events")
 def list_audit_events(limit: int = 100, action: str | None = None):
@@ -2161,6 +2243,7 @@ def system_readiness():
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
         ml_outcomes = MLOutcomeStatsService().safe_summary()
         market_connectivity = MarketConnectivityService().check("BTC/USDT")
+        exchange_reconciliation = ExchangeReconciliationService().check(db)
         blockers = list(settings.production_blockers())
 
         if analytics.get("total_net_pnl_usdt", 0) < 0:
@@ -2179,6 +2262,8 @@ def system_readiness():
             blockers.append("ML outcomes summary is degraded")
         if market_connectivity.get("breaker_blocked"):
             blockers.extend(market_connectivity.get("blockers") or ["market connectivity breaker is blocked"])
+        if exchange_reconciliation.get("blockers"):
+            blockers.extend(exchange_reconciliation.get("blockers") or [])
         if settings.ENABLE_FUNDING_ARB and not settings.ENABLE_FUTURES:
             blockers.append("funding arbitrage requires ENABLE_FUTURES=true")
 
@@ -2194,6 +2279,7 @@ def system_readiness():
             "live_safety": live_safety,
             "ml_outcomes": ml_outcomes,
             "market_connectivity": market_connectivity,
+            "exchange_reconciliation": exchange_reconciliation,
             "required_gates": {
                 "closed_validation_signals": 200,
                 "failed_setup_exit_share_max_pct": 35.0,

@@ -44,6 +44,7 @@ def test_ml_outcome_stats_safe_summary_degrades_on_unreadable_path(tmp_path):
     assert summary["status"] == "degraded"
     assert summary["reason"] == "ml_outcome_stats_failed"
 
+
 def test_ml_trade_logger_labels_adaptive_mfe_capture_as_protected_profit(tmp_path):
     from types import SimpleNamespace
 

@@ -78,3 +78,12 @@ def test_health_page_surfaces_ml_outcome_freshness_contract():
     assert "latest_age_hours" in page
     assert "stale_after_hours" in page
     assert "freshness_status" in page
+
+
+def test_health_page_surfaces_exchange_reconciliation_contract():
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+
+    assert "Exchange reconciliation" in page
+    assert "exchange_reconciliation" in page
+    assert "local_open_orders" in page
+    assert "exchange_positions" in page

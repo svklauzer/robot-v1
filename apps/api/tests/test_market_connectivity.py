@@ -48,3 +48,17 @@ def test_market_connectivity_reports_snapshot_failure():
     assert result["breaker_blocked"] is True
     assert result["blockers"] == ["market data snapshot failed"]
     assert "TimeoutError" in result["error"]
+
+
+def test_market_connectivity_blocks_high_spread(monkeypatch):
+    monkeypatch.setattr("services.market_connectivity.settings.MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.5)
+    monkeypatch.setattr("services.market_connectivity.settings.ENABLE_LIVE_ORDERS", False)
+    monkeypatch.setattr("services.market_connectivity.settings.TRADING_MODE", "paper_signal")
+
+    result = MarketConnectivityService(
+        FakeMarket({"last": 100, "bid": 99.0, "ask": 101.0, "source": "htx"})
+    ).check("BTC/USDT")
+
+    assert result["ok"] is False
+    assert result["breaker_blocked"] is True
+    assert "market spread is above threshold" in result["blockers"]

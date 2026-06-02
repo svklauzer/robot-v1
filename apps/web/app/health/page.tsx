@@ -52,6 +52,7 @@ export default function HealthPage() {
 
   const bot = health?.bot;
   const market = readiness?.market_connectivity || health?.market;
+  const exchangeReconciliation = readiness?.exchange_reconciliation || health?.exchange_reconciliation || {};
   const loops = health?.loops;
   const delivery = readiness?.telegram_delivery || health?.telegram_delivery || {};
   // /system/readiness is the product go-live source of truth: it includes
@@ -167,6 +168,19 @@ export default function HealthPage() {
             <InfoRow key={idx} label="Breaker" value={blocker} danger />
           ))}
           {market?.error && <InfoRow label="Error" value={market.error} danger />}
+        </Panel>
+
+        <Panel title="Exchange reconciliation">
+          <InfoRow label="Status" value={exchangeReconciliation?.status || "unknown"} danger={!exchangeReconciliation?.ok && exchangeReconciliation?.status !== "disabled"} />
+          <InfoRow label="Enabled" value={String(Boolean(exchangeReconciliation?.enabled))} danger={Boolean(exchangeReconciliation?.live_enabled) && !exchangeReconciliation?.enabled} />
+          <InfoRow label="Local orders" value={exchangeReconciliation?.counts?.local_open_orders ?? 0} />
+          <InfoRow label="Exchange orders" value={exchangeReconciliation?.counts?.exchange_open_orders ?? 0} />
+          <InfoRow label="Local positions" value={exchangeReconciliation?.counts?.local_live_positions ?? 0} />
+          <InfoRow label="Exchange positions" value={exchangeReconciliation?.counts?.exchange_positions ?? 0} />
+          {(exchangeReconciliation?.blockers || []).map((blocker: string, idx: number) => (
+            <InfoRow key={idx} label="Breaker" value={blocker} danger />
+          ))}
+          {exchangeReconciliation?.error && <InfoRow label="Error" value={exchangeReconciliation.error} danger />}
         </Panel>
       </section>
 
