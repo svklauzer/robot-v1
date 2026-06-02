@@ -1537,7 +1537,7 @@ async def send_all_reports(hours: int = 24):
     finally:
         db.close()
 
-@app.get("/subscribers")
+@app.get("/subscribers", dependencies=[Depends(require_owner_action)])
 def list_subscribers():
     db = SessionLocal()
 
@@ -1711,7 +1711,7 @@ async def check_subscriber_expirations():
     finally:
         db.close()
 
-@app.get("/system/health")
+@app.get("/system/health", dependencies=[Depends(require_owner_action)])
 def system_health():
     db = SessionLocal()
 
@@ -1799,7 +1799,7 @@ def create_payment_checkout(payload: CreateCheckoutRequest):
         db.close()
 
 
-@app.get("/payments")
+@app.get("/payments", dependencies=[Depends(require_owner_action)])
 def list_payments(limit: int = 100, status: str | None = None):
     db = SessionLocal()
     try:
@@ -1873,7 +1873,7 @@ async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentR
         db.close()
 
 
-@app.get("/payments/events")
+@app.get("/payments/events", dependencies=[Depends(require_owner_action)])
 def list_payment_events(limit: int = 100):
     db = SessionLocal()
     try:
@@ -1927,7 +1927,7 @@ def process_payment_event(payload: PaymentEventRequest):
         db.close()
 
 
-@app.get("/payments/summary")
+@app.get("/payments/summary", dependencies=[Depends(require_owner_action)])
 def payments_summary():
     db = SessionLocal()
     try:
@@ -1954,7 +1954,7 @@ def reconcile_payments(payload: PaymentReconcileRequest | None = None):
         db.close()
 
 
-@app.get("/payments/revenue")
+@app.get("/payments/revenue", dependencies=[Depends(require_owner_action)])
 def payments_revenue(window_days: int = 30):
     db = SessionLocal()
     try:
@@ -1963,7 +1963,7 @@ def payments_revenue(window_days: int = 30):
     finally:
         db.close()
 
-@app.get("/funding-arb/summary")
+@app.get("/funding-arb/summary", dependencies=[Depends(require_owner_action)])
 def funding_arb_summary():
     db = SessionLocal()
     try:
@@ -1986,7 +1986,7 @@ def funding_arb_scan(payload: FundingArbScanRequest | None = None):
         db.close()
 
 
-@app.get("/funding-arb/opportunities")
+@app.get("/funding-arb/opportunities", dependencies=[Depends(require_owner_action)])
 def funding_arb_opportunities(limit: int = 50, status: str | None = None):
     db = SessionLocal()
     try:
@@ -2001,7 +2001,7 @@ def funding_arb_opportunities(limit: int = 50, status: str | None = None):
         db.close()
 
 
-@app.get("/funding-arb/positions")
+@app.get("/funding-arb/positions", dependencies=[Depends(require_owner_action)])
 def funding_arb_positions(limit: int = 50, status: str | None = None):
     db = SessionLocal()
     try:
@@ -2127,7 +2127,7 @@ def funding_arb_close(position_id: int, payload: FundingArbCloseRequest):
         db.close()
 
 
-@app.get("/system/live-safety")
+@app.get("/system/live-safety", dependencies=[Depends(require_owner_action)])
 def system_live_safety():
     db = SessionLocal()
 
@@ -2187,7 +2187,7 @@ def system_kill_switch_smoke(payload: KillSwitchSmokeRequest | None = None):
     finally:
         db.close()
 
-@app.get("/system/readiness")
+@app.get("/system/readiness", dependencies=[Depends(require_owner_action)])
 def system_readiness():
     db = SessionLocal()
 
@@ -2250,34 +2250,11 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
+
     except Exception as e:
         db.rollback()
-        return {"status": "error", "error": str(e)}
-    finally:
-        db.close()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
-
-@app.get("/payments/events")
-def list_payment_events(limit: int = 100):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        service = BillingService()
-        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
-        return {
-            "items": [service.serialize_payment_event(event) for event in events],
-            "summary": service.summary(db),
-        }
-    finally:
-        db.close()
-
-
-
-@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
-def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
-    db = SessionLocal()
-    try:
-        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
     finally:
         db.close()
 
@@ -2369,7 +2346,7 @@ async def telegram_webhook(payload: TelegramWebhookRequest):
         db.close()
 
 
-@app.get("/telegram/deliveries/summary")
+@app.get("/telegram/deliveries/summary", dependencies=[Depends(require_owner_action)])
 def telegram_deliveries_summary(hours: int = 24):
     db = SessionLocal()
     try:

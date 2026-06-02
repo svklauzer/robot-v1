@@ -40,7 +40,23 @@ def test_sensitive_owner_endpoints_require_owner_auth():
 def test_owner_read_endpoints_require_owner_auth():
     main = (ROOT / "apps/api/main.py").read_text()
 
-    for route in ["/system/exchange-reconciliation", "/audit/events"]:
+    owner_read_routes = [
+        "/subscribers",
+        "/system/health",
+        "/system/exchange-reconciliation",
+        "/system/live-safety",
+        "/system/readiness",
+        "/audit/events",
+        "/payments",
+        "/payments/events",
+        "/payments/summary",
+        "/payments/revenue",
+        "/funding-arb/summary",
+        "/funding-arb/opportunities",
+        "/funding-arb/positions",
+        "/telegram/deliveries/summary",
+    ]
+    for route in owner_read_routes:
         line = next(line for line in main.splitlines() if line.startswith(f'@app.get("{route}"'))
         assert 'Depends(require_owner_action)' in line, route
 
