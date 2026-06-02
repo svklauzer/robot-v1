@@ -7,7 +7,7 @@ class TelegramRouter:
         self.sender = SignalBroadcaster()
 
     async def _send_required(self, chat_id, text: str, label: str):
-        result = await self.sender.send_message(chat_id, text)
+        result = await self.sender.send_message(chat_id, text, message_type=label)
 
         if not result or not result.get("ok"):
             raise RuntimeError(
@@ -18,7 +18,7 @@ class TelegramRouter:
         return result
 
     async def _send_optional(self, chat_id, text: str, label: str):
-        result = await self.sender.send_message(chat_id, text)
+        result = await self.sender.send_message(chat_id, text, message_type=label)
 
         if not result or not result.get("ok"):
             await self.sender.send_owner_alert(
