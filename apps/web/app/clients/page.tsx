@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../../lib/api";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { RefreshCw, UserPlus, ShieldCheck, Ban, Clock, CheckCircle2 } from "lucide-react";
 
 export default function ClientsPage() {
@@ -138,9 +138,7 @@ export default function ClientsPage() {
   }, [subscribers, filters]);
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <Nav />
+    <AppShell>
 
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -319,8 +317,7 @@ export default function ClientsPage() {
             )}
           </div>
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
 
