@@ -52,6 +52,15 @@ export default function HealthPage() {
     await loadAll();
   }
 
+  async function setKillSwitch(enabled: boolean) {
+    const text = enabled
+      ? "⚠️ Включить kill switch и остановить робота до ручного отключения?"
+      : "Отключить kill switch и разрешить запуск при прохождении safety gates?";
+    if (!window.confirm(text)) return;
+    await apiPost("/system/kill-switch", { enabled, reason: enabled ? "owner_health_page" : "owner_resume" });
+    await loadAll();
+  }
+
   useEffect(() => {
     loadAll();
     const timer = setInterval(loadAll, 5000);
