@@ -65,6 +65,7 @@ from services.signal_replacement import SignalReplacementPolicy
 from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.validation_gates import ValidationGateService
+from services.system_health import SystemHealthService
 from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
 from services.live_safety import LiveSafetyService
@@ -1716,111 +1717,34 @@ def system_health():
     db = SessionLocal()
 
     try:
-        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
-
-        total_signals = db.query(Signal).count()
-        published_signals = db.query(Signal).filter(Signal.status == "published").count()
-        opened_signals = db.query(Signal).filter(Signal.status == "opened").count()
-        tp1_signals = db.query(Signal).filter(Signal.status == "tp1").count()
-        closed_signals = db.query(Signal).filter(Signal.status == "closed").count()
-        expired_signals = db.query(Signal).filter(Signal.status == "expired").count()
-
-        active_subscribers = db.query(Subscriber).filter(Subscriber.status == "active").count()
-        expired_subscribers = db.query(Subscriber).filter(Subscriber.status == "expired").count()
-        blocked_subscribers = db.query(Subscriber).filter(Subscriber.status == "blocked").count()
-        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
-        payments_summary = BillingService().summary(db)
-        revenue = RevenueMetricsService().summary(db)
-        funding_arb = FundingArbEngine().summary(db)
-        live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
-        ml_outcomes = MLOutcomeStatsService().safe_summary()
-        production_blockers = settings.production_blockers()
-
-        market_status = MarketConnectivityService().check("BTC/USDT")
-        exchange_reconciliation = ExchangeReconciliationService().check(db)
-
-        return {
-            "api": {
-                "ok": True,
-                "env": settings.APP_ENV,
-                "mode": settings.ROBOT_MODE,
+        loops = {
+            "robot_loop": {
+                "enabled": robot_loop_enabled,
+                "task_created": robot_task is not None,
+                "task_done": robot_task.done() if robot_task else None,
             },
-            "bot": {
-                "id": bot.id if bot else None,
-                "name": bot.name if bot else None,
-                "status": bot.status if bot else None,
-                "mode": bot.mode if bot else None,
+            "subscription_loop": {
+                "enabled": subscription_loop_enabled,
+                "task_created": subscription_task is not None,
+                "task_done": subscription_task.done() if subscription_task else None,
             },
-            "loops": {
-                "robot_loop": {
-                    "enabled": robot_loop_enabled,
-                    "task_created": robot_task is not None,
-                    "task_done": robot_task.done() if robot_task else None,
-                },
-                "subscription_loop": {
-                    "enabled": subscription_loop_enabled,
-                    "task_created": subscription_task is not None,
-                    "task_done": subscription_task.done() if subscription_task else None,
-                },
-                "telegram_delivery_loop": {
-                    "enabled": telegram_delivery_loop_enabled,
-                    "task_created": telegram_delivery_task is not None,
-                    "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
-                },
-                "funding_arb_loop": {
-                    "enabled": funding_arb_loop_enabled and settings.ENABLE_FUNDING_ARB,
-                    "task_created": funding_arb_task is not None,
-                    "task_done": funding_arb_task.done() if funding_arb_task else None,
-                    "scan_interval_hours": settings.FUNDING_ARB_SCAN_INTERVAL_HOURS,
-                },
+            "telegram_delivery_loop": {
+                "enabled": telegram_delivery_loop_enabled,
+                "task_created": telegram_delivery_task is not None,
+                "task_done": telegram_delivery_task.done() if telegram_delivery_task else None,
             },
-            "market": market_status,
-            "exchange_reconciliation": exchange_reconciliation,
-            "signals": {
-                "total": total_signals,
-                "published": published_signals,
-                "opened": opened_signals,
-                "tp1": tp1_signals,
-                "closed": closed_signals,
-                "expired": expired_signals,
-            },
-            "subscribers": {
-                "active": active_subscribers,
-                "expired": expired_subscribers,
-                "blocked": blocked_subscribers,
-            },
-            "telegram_delivery": telegram_delivery,
-            "payments": payments_summary,
-            "revenue": revenue,
-            "funding_arb": funding_arb,
-            "live_safety": live_safety,
-            "ml_outcomes": ml_outcomes,
-            "production_readiness": {
-                "ready": len(production_blockers) == 0,
-                "blockers": production_blockers,
-                "live_enabled": settings.is_live_enabled,
+            "funding_arb_loop": {
+                "enabled": funding_arb_loop_enabled and settings.ENABLE_FUNDING_ARB,
+                "task_created": funding_arb_task is not None,
+                "task_done": funding_arb_task.done() if funding_arb_task else None,
+                "scan_interval_hours": settings.FUNDING_ARB_SCAN_INTERVAL_HOURS,
             },
         }
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": str(e)}
+        return SystemHealthService().summary(db, loops=loops)
+
     finally:
         db.close()
 
-
-@app.get("/payments/events")
-def list_payment_events(limit: int = 100):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        service = BillingService()
-        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
-        return {
-            "items": [service.serialize_payment_event(event) for event in events],
-            "summary": service.summary(db),
-        }
-    finally:
-        db.close()
 
 
 
@@ -2332,8 +2256,60 @@ def system_readiness():
                 "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
+            "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
+            "revenue": revenue,
+            "funding_arb": funding_arb,
+            "live_safety": live_safety,
+            "ml_outcomes": ml_outcomes,
+            "production_readiness": {
+                "ready": len(production_blockers) == 0,
+                "blockers": production_blockers,
+                "live_enabled": settings.is_live_enabled,
+            },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+
+@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
+def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
+    db = SessionLocal()
+    try:
+        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
+    finally:
+        db.close()
+
+@app.get("/audit/events")
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        service = AuditLogService()
+        return {"items": [service.serialize(event) for event in events]}
     finally:
         db.close()
 
