@@ -2256,8 +2256,60 @@ def system_readiness():
                 "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
+            "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
+            "revenue": revenue,
+            "funding_arb": funding_arb,
+            "live_safety": live_safety,
+            "ml_outcomes": ml_outcomes,
+            "production_readiness": {
+                "ready": len(production_blockers) == 0,
+                "blockers": production_blockers,
+                "live_enabled": settings.is_live_enabled,
+            },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+
+@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
+def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
+    db = SessionLocal()
+    try:
+        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
+    finally:
+        db.close()
+
+@app.get("/audit/events")
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        service = AuditLogService()
+        return {"items": [service.serialize(event) for event in events]}
     finally:
         db.close()
 
