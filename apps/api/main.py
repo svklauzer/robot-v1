@@ -2250,7 +2250,34 @@ def system_readiness():
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+
+@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
+def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
+    db = SessionLocal()
+    try:
+        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
     finally:
         db.close()
 
