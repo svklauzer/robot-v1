@@ -332,29 +332,34 @@ async def background_robot_loop():
             bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
 
             if bot and bot.status == "running":
-                safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+                validation_gates = ValidationGateService().live_blockers(db)
 
-                if safety.get("blocked"):
-                    db.commit()
-                    log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
+                if validation_gates.get("live_blockers"):
+                    log_event(logger, logging.WARNING, "robot_loop_validation_skip", **validation_gates)
                 else:
-                    await loop.step(
-                        db=db,
-                        bot=bot,
-                        headlines=[],
-                        balance_usdt=1000,
-                        daily_loss_pct=safety.get("daily_loss_pct", 0),
-                        drawdown_pct=0,
-                    )
-                    db.commit()
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "robot_loop_step_completed",
-                        bot_id=bot.id,
-                        mode=bot.mode,
-                        daily_loss_pct=safety.get("daily_loss_pct", 0),
-                    )
+                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+
+                    if safety.get("blocked"):
+                        db.commit()
+                        log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
+                    else:
+                        await loop.step(
+                            db=db,
+                            bot=bot,
+                            headlines=[],
+                            balance_usdt=1000,
+                            daily_loss_pct=safety.get("daily_loss_pct", 0),
+                            drawdown_pct=0,
+                        )
+                        db.commit()
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "robot_loop_step_completed",
+                            bot_id=bot.id,
+                            mode=bot.mode,
+                            daily_loss_pct=safety.get("daily_loss_pct", 0),
+                        )
 
         except Exception as e:
             db.rollback()
@@ -559,6 +564,19 @@ def start_bot():
             return {"status": "error", "error": "bot_not_found"}
 
         live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
+        validation_gates = ValidationGateService().live_blockers(db)
+        if validation_gates.get("live_blockers"):
+            AuditLogService().record(
+                db,
+                action="bot_start_blocked_by_validation_gates",
+                resource_type="bot",
+                resource_id=bot.id,
+                status="blocked",
+                details=validation_gates,
+            )
+            db.commit()
+            return {"status": "blocked", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
+
         if live_safety.get("blocked"):
             AuditLogService().record(
                 db,
@@ -574,7 +592,7 @@ def start_bot():
         bot.status = "running"
         AuditLogService().record(db, action="bot_start", resource_type="bot", resource_id=bot.id, details={"name": bot.name})
         db.commit()
-        return {"status": "running", "live_safety": live_safety}
+        return {"status": "running", "live_safety": live_safety, "validation_gates": validation_gates}
 
     finally:
         db.close()
@@ -722,6 +740,10 @@ async def run_robot_once():
             return {"status": "skipped", "reason": "bot_not_found"}
         if bot.status != "running":
             return {"status": "skipped", "reason": "bot_stopped"}
+
+        validation_gates = ValidationGateService().live_blockers(db)
+        if validation_gates.get("live_blockers"):
+            return {"status": "skipped", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
 
         safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
         if safety.get("blocked"):
@@ -1779,7 +1801,24 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.get("/payments/events")
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
     finally:
         db.close()
 
@@ -2295,19 +2334,6 @@ def system_readiness():
             },
         }
 
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
-
-    finally:
-        db.close()
-
-
-@app.get("/telegram/deliveries/summary")
-def telegram_deliveries_summary(hours: int = 24):
-    db = SessionLocal()
-    try:
-        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 

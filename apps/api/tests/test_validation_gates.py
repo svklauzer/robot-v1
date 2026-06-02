@@ -69,3 +69,25 @@ def test_validation_gates_block_negative_pnl_bad_reasons_and_small_sample():
         assert "validation requires at least 200 closed paper/live_shadow outcomes" in result["blockers"]
     finally:
         db.close()
+
+
+def test_validation_gates_only_block_runtime_when_live_enabled(monkeypatch):
+    db = _db_session()
+    try:
+        db.add(_signal(1, pnl=-5.0, reason="failed_setup_exit", positive_then_negative=True))
+        db.flush()
+
+        monkeypatch.setattr("services.validation_gates.settings.ENABLE_LIVE_ORDERS", False)
+        monkeypatch.setattr("services.validation_gates.settings.TRADING_MODE", "paper_signal")
+        paper_state = ValidationGateService(min_closed=5).live_blockers(db)
+        assert paper_state["enforced"] is False
+        assert paper_state["live_blockers"] == []
+
+        monkeypatch.setattr("services.validation_gates.settings.ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr("services.validation_gates.settings.TRADING_MODE", "live_limited")
+        live_state = ValidationGateService(min_closed=5).live_blockers(db)
+        assert live_state["enforced"] is True
+        assert live_state["live_blockers"]
+        assert "validation rolling net PnL is not positive after costs" in live_state["live_blockers"]
+    finally:
+        db.close()

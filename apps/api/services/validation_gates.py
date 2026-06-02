@@ -85,3 +85,15 @@ class ValidationGateService:
             "positive_then_negative_max_pct": self.positive_then_negative_max_pct,
             "gates": gates,
         }
+
+    def live_blockers(self, db: Session, limit: int | None = None) -> dict[str, Any]:
+        """Return validation readiness only when live trading is enabled.
+
+        Paper mode can keep collecting data, but live/live_limited must not start
+        or run while the profit gates fail.
+        """
+        state = self.evaluate(db, limit=limit)
+        state["live_enabled"] = bool(settings.is_live_enabled)
+        state["enforced"] = bool(settings.is_live_enabled)
+        state["live_blockers"] = state.get("blockers", []) if settings.is_live_enabled else []
+        return state
