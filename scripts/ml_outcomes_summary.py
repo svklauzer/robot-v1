@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -19,6 +20,47 @@ def _root_dir() -> Path:
     if len(sys.argv) > 1:
         return Path(sys.argv[1]).resolve()
     return Path(os.environ.get("ROOT_DIR", ".")).resolve()
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _freshness(rows: list[dict], stale_hours: int = 72) -> dict:
+    latest = None
+    for row in rows:
+        logged_at = _parse_datetime(row.get("logged_at"))
+        if logged_at is not None and (latest is None or logged_at > latest):
+            latest = logged_at
+
+    if latest is None:
+        return {
+            "latest_logged_at": None,
+            "latest_age_hours": None,
+            "latest_age_days": None,
+            "stale": False,
+            "freshness_status": "empty" if not rows else "missing_logged_at",
+            "stale_after_hours": stale_hours,
+        }
+
+    age_hours = max(round((datetime.now(timezone.utc) - latest).total_seconds() / 3600, 2), 0.0)
+    stale = age_hours > stale_hours
+    return {
+        "latest_logged_at": latest.isoformat(),
+        "latest_age_hours": age_hours,
+        "latest_age_days": round(age_hours / 24, 2),
+        "stale": stale,
+        "freshness_status": "stale" if stale else "fresh",
+        "stale_after_hours": stale_hours,
+    }
 
 
 def build_summary(root: Path) -> dict:
@@ -31,6 +73,7 @@ def build_summary(root: Path) -> dict:
             "source_path": str(path),
             "total_rows": 0,
             "closed_rows": 0,
+            **_freshness([]),
         }
 
     rows: list[dict] = []
@@ -50,12 +93,14 @@ def build_summary(root: Path) -> dict:
             parse_errors += 1
 
     closed = [row for row in rows if str(row.get("status")) == "closed"]
+    freshness = _freshness(rows)
     result = {
-        "status": "ok" if rows else "empty",
+        "status": "stale" if freshness["stale"] else ("ok" if rows else "empty"),
         "source_path": str(path),
         "total_rows": len(rows),
         "closed_rows": len(closed),
         "parse_errors": parse_errors,
+        **freshness,
     }
 
     if not closed:

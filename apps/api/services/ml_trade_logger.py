@@ -99,6 +99,7 @@ class MLTradeLogger:
                 "hit_tp2": closed_reason == "tp2_reached",
                 "protected_profit": closed_reason in [
                     "protective_breakeven_profit_guard",
+                    "adaptive_mfe_capture",
                     "protective_trailing_stop",
                     "adaptive_trailing_stop",
                     "adaptive_post_tp1_stop",

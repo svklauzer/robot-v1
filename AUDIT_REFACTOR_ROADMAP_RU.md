@@ -515,7 +515,7 @@ Hard controls:
 - [ ] Rolling net PnL positive after all costs.
 - [ ] `failed_setup_exit < 35%`.
 - [ ] `positive_then_negative_rate < 25%`.
-- [ ] Adaptive MFE capture experiment is enabled/configurable and measured by close reason.
+- [x] Adaptive MFE capture experiment is enabled/configurable and measured by close reason (`adaptive_mfe_capture` in exit policy, ML labels and analytics).
 - [x] Per-symbol profitability guard виден owner-у и блокирует/снижает риск по убыточным символам (analytics page + `SymbolPerformanceGuard` adjusts TradePlan risk).
 - [ ] At least 200 closed paper/live_shadow outcomes.
 - [ ] Live kill switch tested.

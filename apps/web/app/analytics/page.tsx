@@ -66,6 +66,7 @@ export default function AnalyticsPage() {
           <StatCard title="Winrate" value={`${summary?.winrate ?? 0}%`} warn={(summary?.winrate ?? 0) < 45} good={(summary?.winrate ?? 0) >= 50} />
           <StatCard title="Failed setup" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0} />
           <StatCard title="Positive→Negative" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
+          <StatCard title="MFE capture" value={`${quality?.mfe_capture_rate ?? 0}%`} good={(quality?.mfe_capture_count ?? 0) > 0} />
         </section>
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -98,6 +99,7 @@ export default function AnalyticsPage() {
             <Metric label="Closed validation signals" value={readiness?.required_gates?.closed_validation_signals ?? 200} />
             <Metric label="Failed setup max" value={`${readiness?.required_gates?.failed_setup_exit_share_max_pct ?? 35}%`} />
             <Metric label="Positive→Negative max" value={`${readiness?.required_gates?.positive_then_negative_max_pct ?? 25}%`} />
+            <Metric label="MFE capture enabled" value={readiness?.required_gates?.adaptive_mfe_capture_enabled ? "yes" : "no"} />
             <Metric label="Telegram SLA min" value={`${readiness?.required_gates?.telegram_delivery_sla_min_pct ?? 99}%`} />
           </Panel>
         </section>

@@ -60,3 +60,21 @@ def test_analytics_page_surfaces_symbol_profitability_guard():
     assert "Failed setup" in page
     assert "symbolPerf?.blocked_count" in page
     assert "symbolPerf?.reduced_count" in page
+
+
+def test_analytics_page_surfaces_adaptive_mfe_capture_metrics():
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+
+    assert "MFE capture" in page
+    assert "mfe_capture_rate" in page
+    assert "adaptive_mfe_capture_enabled" in page
+
+
+def test_health_page_surfaces_ml_outcome_freshness_contract():
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+
+    assert "Latest logged" in page
+    assert "latest_logged_at" in page
+    assert "latest_age_hours" in page
+    assert "stale_after_hours" in page
+    assert "freshness_status" in page

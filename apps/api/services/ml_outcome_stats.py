@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 from collections import defaultdict
+from datetime import datetime, timezone
+
+from core.config import settings
 
 
 class MLOutcomeStatsService:
@@ -14,8 +17,9 @@ class MLOutcomeStatsService:
     - где net pnl отрицательный
     """
 
-    def __init__(self, path: str | Path | None = None):
+    def __init__(self, path: str | Path | None = None, stale_hours: int | None = None):
         self.file_path = Path(path) if path is not None else Path("storage/ml/trade_outcomes.jsonl")
+        self.stale_hours = int(stale_hours or getattr(settings, "ML_OUTCOMES_STALE_HOURS", 72) or 72)
 
     def safe_summary(self) -> dict:
         try:
@@ -66,7 +70,10 @@ class MLOutcomeStatsService:
                 "parse_errors": getattr(self, "_parse_errors", 0),
                 "source_path": str(self.file_path),
                 "groups": [],
+                **self._freshness_payload(rows),
             }
+
+        freshness = self._freshness_payload(rows)
 
         groups = defaultdict(lambda: {
             "count": 0,
@@ -208,12 +215,55 @@ class MLOutcomeStatsService:
         )
 
         return {
-            "status": "ok",
+            "status": "stale" if freshness["stale"] else "ok",
             "total": total,
             "parse_errors": getattr(self, "_parse_errors", 0),
             "source_path": str(self.file_path),
             "groups": result_groups,
+            **freshness,
         }
+
+
+    def _freshness_payload(self, rows: list[dict]) -> dict:
+        latest = None
+        for row in rows:
+            logged_at = self._parse_datetime(row.get("logged_at"))
+            if logged_at is not None and (latest is None or logged_at > latest):
+                latest = logged_at
+
+        if latest is None:
+            return {
+                "latest_logged_at": None,
+                "latest_age_hours": None,
+                "latest_age_days": None,
+                "stale": False,
+                "is_stale": False,
+                "freshness_status": "empty" if not rows else "missing_logged_at",
+                "stale_after_hours": self.stale_hours,
+            }
+
+        age_hours = max(round((datetime.now(timezone.utc) - latest).total_seconds() / 3600, 2), 0.0)
+        stale = age_hours > self.stale_hours
+        return {
+            "latest_logged_at": latest.isoformat(),
+            "latest_age_hours": age_hours,
+            "latest_age_days": round(age_hours / 24, 2),
+            "stale": stale,
+            "is_stale": stale,
+            "freshness_status": "stale" if stale else "fresh",
+            "stale_after_hours": self.stale_hours,
+        }
+
+    def _parse_datetime(self, value) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def penalty_for(self, symbol: str, side: str) -> dict:
         stats = self.summary()

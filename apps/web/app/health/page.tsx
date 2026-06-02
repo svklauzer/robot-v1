@@ -126,8 +126,11 @@ export default function HealthPage() {
         </Panel>
 
         <Panel title="ML outcomes">
-          <InfoRow label="Status" value={mlOutcomes?.status || "unknown"} danger={!["ok", "empty"].includes(mlOutcomes?.status)} />
+          <InfoRow label="Status" value={mlOutcomes?.freshness_status || mlOutcomes?.status || "unknown"} danger={Boolean(mlOutcomes?.stale) || !["ok", "empty"].includes(mlOutcomes?.status)} />
           <InfoRow label="Rows" value={mlOutcomes?.total ?? 0} />
+          <InfoRow label="Latest logged" value={formatDate(mlOutcomes?.latest_logged_at)} danger={Boolean(mlOutcomes?.stale)} />
+          <InfoRow label="Age" value={mlOutcomes?.latest_age_hours == null ? "-" : `${mlOutcomes.latest_age_hours}h / ${mlOutcomes.latest_age_days ?? "-"}d`} danger={Boolean(mlOutcomes?.stale)} />
+          <InfoRow label="Stale after" value={`${mlOutcomes?.stale_after_hours ?? 72}h`} />
           <InfoRow label="Parse errors" value={mlOutcomes?.parse_errors ?? 0} danger={(mlOutcomes?.parse_errors ?? 0) > 0} />
           <InfoRow label="Source" value={shortPath(mlOutcomes?.source_path)} />
         </Panel>
@@ -238,6 +241,13 @@ function formatNumber(value: any) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "-";
   return num.toFixed(4);
+}
+
+function formatDate(value: any) {
+  if (!value) return "-";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().replace("T", " ").replace(".000Z", "Z");
 }
 
 function shortPath(value: any) {

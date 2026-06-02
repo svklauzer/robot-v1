@@ -1756,24 +1756,7 @@ def system_health():
                 "live_enabled": settings.is_live_enabled,
             },
         }
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "error": str(e)}
-    finally:
-        db.close()
 
-
-@app.get("/payments/events")
-def list_payment_events(limit: int = 100):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        service = BillingService()
-        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
-        return {
-            "items": [service.serialize_payment_event(event) for event in events],
-            "summary": service.summary(db),
-        }
     finally:
         db.close()
 
@@ -2187,7 +2170,12 @@ def system_readiness():
         if telegram_delivery.get("failed", 0) > 0:
             blockers.append("telegram delivery has failures in the last 24h")
         blockers.extend(live_safety.get("blockers", []))
-        if ml_outcomes.get("status") not in ["ok", "empty"]:
+        if ml_outcomes.get("stale"):
+            blockers.append(
+                f"ML outcomes log is stale: latest_logged_at={ml_outcomes.get('latest_logged_at')} "
+                f"age_hours={ml_outcomes.get('latest_age_hours')}"
+            )
+        elif ml_outcomes.get("status") not in ["ok", "empty"]:
             blockers.append("ML outcomes summary is degraded")
         if market_connectivity.get("breaker_blocked"):
             blockers.extend(market_connectivity.get("blockers") or ["market connectivity breaker is blocked"])
@@ -2211,6 +2199,10 @@ def system_readiness():
                 "failed_setup_exit_share_max_pct": 35.0,
                 "positive_then_negative_max_pct": 25.0,
                 "telegram_delivery_sla_min_pct": 99.0,
+                "adaptive_mfe_capture_enabled": bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)),
+                "adaptive_mfe_capture_start_pct": getattr(settings, "MFE_CAPTURE_START_PCT", 0.65),
+                "adaptive_mfe_capture_drawdown_pct": getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30),
+                "adaptive_mfe_capture_protect_share": getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.35),
                 "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
@@ -4258,6 +4250,7 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
         breakeven_count = 0
         trailing_count = 0
         post_tp1_stop_count = 0
+        mfe_capture_count = 0
         tp2_count = 0
 
         mfe_values = []
@@ -4280,6 +4273,10 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
 
         post_tp1_reasons = {
             "adaptive_post_tp1_stop",
+        }
+
+        mfe_capture_reasons = {
+            "adaptive_mfe_capture",
         }
 
         for s in signals:
@@ -4336,6 +4333,9 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
 
             if reason in post_tp1_reasons:
                 post_tp1_stop_count += 1
+
+            if reason in mfe_capture_reasons:
+                mfe_capture_count += 1
 
             if reason == "tp2_reached":
                 tp2_count += 1
@@ -4410,11 +4410,13 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
             "breakeven_count": breakeven_count,
             "trailing_count": trailing_count,
             "post_tp1_stop_count": post_tp1_stop_count,
+            "mfe_capture_count": mfe_capture_count,
             "tp2_count": tp2_count,
 
             "tp2_rate": round((tp2_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
             "trailing_rate": round((trailing_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
             "post_tp1_stop_rate": round((post_tp1_stop_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
+            "mfe_capture_rate": round((mfe_capture_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
 
             "avg_mfe_pct": avg(mfe_values),
             "avg_mae_pct": avg(mae_values),
