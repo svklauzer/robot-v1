@@ -41,6 +41,23 @@ def test_owner_read_endpoints_require_owner_auth():
     main = (ROOT / "apps/api/main.py").read_text()
 
     owner_read_routes = [
+        "/bot/state",
+        "/signals",
+        "/positions",
+        "/orders",
+        "/robot/loop-state",
+        "/analytics/summary",
+        "/analytics/validation-gates",
+        "/analytics/reason-breakdown",
+        "/analytics/outcome-root-cause",
+        "/analytics/symbol-performance",
+        "/analytics/signal-quality",
+        "/analytics/grade-c-audit",
+        "/ml/outcomes/summary",
+        "/reports/summary",
+        "/intelligence/scan",
+        "/intelligence/funnel",
+        "/intelligence/events",
         "/subscribers",
         "/system/health",
         "/system/exchange-reconciliation",

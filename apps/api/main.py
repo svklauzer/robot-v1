@@ -527,7 +527,7 @@ def health():
     }
 
 
-@app.get("/bot/state")
+@app.get("/bot/state", dependencies=[Depends(require_owner_action)])
 def bot_state():
     db = SessionLocal()
 
@@ -613,7 +613,7 @@ def stop_bot():
         db.close()
 
 
-@app.get("/signals")
+@app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()
 
@@ -675,7 +675,7 @@ def list_signals(limit: int = 50, offset: int = 0):
         db.close()
 
 
-@app.get("/positions")
+@app.get("/positions", dependencies=[Depends(require_owner_action)])
 def list_positions():
     db = SessionLocal()
 
@@ -701,7 +701,7 @@ def list_positions():
         db.close()
 
 
-@app.get("/orders")
+@app.get("/orders", dependencies=[Depends(require_owner_action)])
 def list_orders():
     db = SessionLocal()
 
@@ -772,7 +772,7 @@ async def run_robot_once():
     finally:
         db.close()
 
-@app.get("/robot/loop-state")
+@app.get("/robot/loop-state", dependencies=[Depends(require_owner_action)])
 def robot_loop_state():
     return {
         "robot_loop": {
@@ -901,7 +901,7 @@ async def force_paper_signal():
     finally:
         db.close()
 
-@app.get("/analytics/summary")
+@app.get("/analytics/summary", dependencies=[Depends(require_owner_action)])
 def analytics_summary():
     db = SessionLocal()
 
@@ -1010,7 +1010,7 @@ def analytics_summary():
 
 
 
-@app.get("/analytics/validation-gates")
+@app.get("/analytics/validation-gates", dependencies=[Depends(require_owner_action)])
 def analytics_validation_gates(limit: int | None = None):
     db = SessionLocal()
     try:
@@ -1018,7 +1018,7 @@ def analytics_validation_gates(limit: int | None = None):
     finally:
         db.close()
 
-@app.get("/analytics/reason-breakdown")
+@app.get("/analytics/reason-breakdown", dependencies=[Depends(require_owner_action)])
 def analytics_reason_breakdown(limit: int = 500):
     """
     Причины закрытия сделок с деньгами/метриками.
@@ -1104,7 +1104,7 @@ def analytics_reason_breakdown(limit: int = 500):
     finally:
         db.close()
 
-@app.get("/analytics/outcome-root-cause")
+@app.get("/analytics/outcome-root-cause", dependencies=[Depends(require_owner_action)])
 def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int = 500):
     """Root-cause report for repeated losing exit reasons (roadmap Phase 1)."""
     db = SessionLocal()
@@ -1115,7 +1115,7 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
         db.close()
 
 
-@app.get("/analytics/symbol-performance")
+@app.get("/analytics/symbol-performance", dependencies=[Depends(require_owner_action)])
 def analytics_symbol_performance(lookback: int = 12):
     """Per-symbol profitability guard report for roadmap P1 operations."""
     db = SessionLocal()
@@ -1474,7 +1474,7 @@ async def test_lifecycle_price(payload: TestLifecyclePriceRequest):
     finally:
         db.close()
 
-@app.get("/reports/summary")
+@app.get("/reports/summary", dependencies=[Depends(require_owner_action)])
 def report_summary(hours: int = 24):
     db = SessionLocal()
 
@@ -3064,7 +3064,7 @@ def _intelligence_effective_confidence(result) -> float:
 
     return round(base, 2)
 
-@app.get("/intelligence/scan")
+@app.get("/intelligence/scan", dependencies=[Depends(require_owner_action)])
 def intelligence_scan_readonly():
     """
     READONLY live scan.
@@ -4126,7 +4126,7 @@ async def intelligence_scan_run():
         db.close()
         INTELLIGENCE_PUBLISH_LOCK.release()
 
-@app.get("/intelligence/funnel")
+@app.get("/intelligence/funnel", dependencies=[Depends(require_owner_action)])
 def intelligence_funnel(limit: int = 120):
     """
     Operator diagnostics for the candidate -> published -> open path.
@@ -4142,7 +4142,7 @@ def intelligence_funnel(limit: int = 120):
         db.close()
 
 
-@app.get("/intelligence/events")
+@app.get("/intelligence/events", dependencies=[Depends(require_owner_action)])
 def intelligence_events(
     symbol: str | None = None,
     limit: int = 50,
@@ -4270,7 +4270,7 @@ def debug_exposure(payload: ExposureDebugRequest):
     finally:
         db.close()
 
-@app.get("/analytics/signal-quality")
+@app.get("/analytics/signal-quality", dependencies=[Depends(require_owner_action)])
 def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
     db = SessionLocal()
 
@@ -4484,13 +4484,13 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
     finally:
         db.close()
 
-@app.get("/ml/outcomes/summary")
+@app.get("/ml/outcomes/summary", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_summary():
     service = MLOutcomeStatsService()
     return service.safe_summary()
 
 
-@app.get("/analytics/grade-c-audit")
+@app.get("/analytics/grade-c-audit", dependencies=[Depends(require_owner_action)])
 def analytics_grade_c_audit(date_from: str | None = None):
     """Count new Grade C trades/signals after a date."""
     db = SessionLocal()
