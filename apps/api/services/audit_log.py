@@ -37,3 +37,11 @@ class AuditLogService:
             "details": event.details_json or {},
             "created_at": str(event.created_at),
         }
+
+    def list_events(self, db: Session, *, limit: int = 100, action: str | None = None) -> dict:
+        limit = min(max(int(limit), 1), 500)
+        query = db.query(AuditEvent)
+        if action:
+            query = query.filter(AuditEvent.action == action)
+        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
+        return {"items": [self.serialize(event) for event in events]}

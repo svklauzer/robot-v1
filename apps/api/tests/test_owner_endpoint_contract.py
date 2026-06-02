@@ -37,11 +37,12 @@ def test_sensitive_owner_endpoints_require_owner_auth():
         assert 'Depends(require_owner_action)' in line, route
 
 
-def test_exchange_reconciliation_endpoint_requires_owner_auth():
+def test_owner_read_endpoints_require_owner_auth():
     main = (ROOT / "apps/api/main.py").read_text()
 
-    line = next(line for line in main.splitlines() if line.startswith('@app.get("/system/exchange-reconciliation"'))
-    assert 'Depends(require_owner_action)' in line
+    for route in ["/system/exchange-reconciliation", "/audit/events"]:
+        line = next(line for line in main.splitlines() if line.startswith(f'@app.get("{route}"'))
+        assert 'Depends(require_owner_action)' in line, route
 
 
 def test_public_telegram_webhook_stays_public_for_telegram_callbacks():

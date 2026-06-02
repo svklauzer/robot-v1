@@ -28,7 +28,6 @@ from models.subscriber import Subscriber
 from models.intelligence_event import IntelligenceEvent
 from models.telegram_delivery import TelegramDelivery
 from models.telegram_profile import TelegramProfile
-from models.audit_event import AuditEvent
 from models.payment import BillingPlan, Payment, PaymentEvent
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
 
@@ -1756,17 +1755,11 @@ def exchange_reconciliation_status(symbol: str | None = None, force: bool = Fals
     finally:
         db.close()
 
-@app.get("/audit/events")
+@app.get("/audit/events", dependencies=[Depends(require_owner_action)])
 def list_audit_events(limit: int = 100, action: str | None = None):
     db = SessionLocal()
     try:
-        limit = min(max(limit, 1), 500)
-        query = db.query(AuditEvent)
-        if action:
-            query = query.filter(AuditEvent.action == action)
-        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
-        service = AuditLogService()
-        return {"items": [service.serialize(event) for event in events]}
+        return AuditLogService().list_events(db, limit=limit, action=action)
     finally:
         db.close()
 
@@ -2256,17 +2249,6 @@ def system_readiness():
                 "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
                 "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
             },
-            "telegram_delivery": telegram_delivery,
-            "payments": payments_summary,
-            "revenue": revenue,
-            "funding_arb": funding_arb,
-            "live_safety": live_safety,
-            "ml_outcomes": ml_outcomes,
-            "production_readiness": {
-                "ready": len(production_blockers) == 0,
-                "blockers": production_blockers,
-                "live_enabled": settings.is_live_enabled,
-            },
         }
     except Exception as e:
         db.rollback()
@@ -2296,20 +2278,6 @@ def exchange_reconciliation_status(symbol: str | None = None, force: bool = Fals
     db = SessionLocal()
     try:
         return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
-    finally:
-        db.close()
-
-@app.get("/audit/events")
-def list_audit_events(limit: int = 100, action: str | None = None):
-    db = SessionLocal()
-    try:
-        limit = min(max(limit, 1), 500)
-        query = db.query(AuditEvent)
-        if action:
-            query = query.filter(AuditEvent.action == action)
-        events = query.order_by(AuditEvent.id.desc()).limit(limit).all()
-        service = AuditLogService()
-        return {"items": [service.serialize(event) for event in events]}
     finally:
         db.close()
 
