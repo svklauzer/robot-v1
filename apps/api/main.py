@@ -2634,7 +2634,7 @@ async def force_valid_trade_signal():
     finally:
         db.close()
 
-@app.get("/intelligence/analyze")
+@app.get("/intelligence/analyze", dependencies=[Depends(require_owner_action)])
 def intelligence_analyze(symbol: str = "BTC/USDT"):
     try:
         engine = MarketIntelligenceEngine()

@@ -55,6 +55,7 @@ def test_owner_read_endpoints_require_owner_auth():
         "/analytics/grade-c-audit",
         "/ml/outcomes/summary",
         "/reports/summary",
+        "/intelligence/analyze",
         "/intelligence/scan",
         "/intelligence/funnel",
         "/intelligence/events",
@@ -83,3 +84,15 @@ def test_public_telegram_webhook_stays_public_for_telegram_callbacks():
 
     line = next(line for line in main.splitlines() if '"/telegram/webhook"' in line and line.startswith('@app.'))
     assert 'Depends(require_owner_action)' not in line
+
+
+def test_only_intended_get_routes_are_public():
+    main = (ROOT / "apps/api/main.py").read_text()
+    allowed_public = {'/', '/health', '/payments/plans'}
+
+    for line in main.splitlines():
+        if not line.startswith('@app.get("'):
+            continue
+        route = line.split('"', 2)[1]
+        if 'Depends(require_owner_action)' not in line and 'Depends(require_non_production_debug)' not in line:
+            assert route in allowed_public, route
