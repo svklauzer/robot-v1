@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from fastapi import Header, HTTPException
 from jose import jwt
 from passlib.context import CryptContext
 from core.config import settings
@@ -18,3 +19,24 @@ def create_access_token(subject: str, expires_minutes: int = 60 * 24) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(minutes=expires_minutes),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=ALGORITHM)
+
+
+def require_owner_action(x_owner_token: str | None = Header(default=None, alias="X-Owner-Token")) -> bool:
+    expected = settings.OWNER_API_TOKEN
+
+    if settings.APP_ENV != "production" and not expected:
+        return True
+
+    if not expected:
+        raise HTTPException(status_code=503, detail="owner_api_token_not_configured")
+
+    if x_owner_token != expected:
+        raise HTTPException(status_code=401, detail="owner_auth_required")
+
+    return True
+
+
+def require_non_production_debug() -> bool:
+    if settings.APP_ENV == "production":
+        raise HTTPException(status_code=403, detail="debug_endpoints_disabled_in_production")
+    return True

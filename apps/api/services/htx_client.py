@@ -1,6 +1,11 @@
+import logging
 import time
+
 import ccxt
 from core.config import settings
+from core.logging import get_logger, log_event
+
+logger = get_logger(__name__)
 
 
 class HTXClient:
@@ -26,7 +31,7 @@ class HTXClient:
                 return fn(*args, **kwargs)
             except Exception as e:
                 last_error = e
-                print(f"[HTX RETRY] attempt={attempt}/{retries} error={e}")
+                log_event(logger, logging.WARNING, "htx_retry", attempt=attempt, retries=retries, error=str(e))
 
                 if attempt < retries:
                     time.sleep(delay * attempt)
@@ -63,6 +68,15 @@ class HTXClient:
             return self._retry(self.exchange.fetch_positions)
         return []
 
+    def fetch_funding_rate(self, symbol: str):
+        if hasattr(self.exchange, "fetch_funding_rate"):
+            return self._retry(self.exchange.fetch_funding_rate, symbol)
+        raise RuntimeError("HTX/CCXT fetch_funding_rate is not available")
+
+    def fetch_mark_price(self, symbol: str) -> float:
+        ticker = self.fetch_ticker(symbol)
+        return float(ticker.get("mark") or ticker.get("last") or ticker.get("close") or ticker.get("bid") or ticker.get("ask"))
+
     def create_market_order(self, symbol: str, side: str, amount: float, params: dict | None = None):
         return self._retry(
             self.exchange.create_order,
@@ -95,7 +109,7 @@ class HTXClient:
             self.load_markets()
             return float(self.exchange.price_to_precision(symbol, price))
         except Exception as e:
-            print(f"[HTX PRICE PRECISION FALLBACK] {symbol}: {e}")
+            log_event(logger, logging.WARNING, "htx_price_precision_fallback", symbol=symbol, error=str(e))
             return float(price)
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
@@ -111,7 +125,7 @@ class HTXClient:
             self.load_markets()
             return float(self.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
-            print(f"[HTX AMOUNT PRECISION FALLBACK] {symbol}: {e}")
+            log_event(logger, logging.WARNING, "htx_amount_precision_fallback", symbol=symbol, error=str(e))
             return float(amount)
 
     def market_limits(self, symbol: str) -> dict:
@@ -134,7 +148,7 @@ class HTXClient:
             }
 
         except Exception as e:
-            print(f"[HTX MARKET META ERROR] {symbol}: {e}")
+            log_event(logger, logging.WARNING, "htx_market_meta_error", symbol=symbol, error=str(e))
             return {
                 "min_amount": None,
                 "max_amount": None,
@@ -157,7 +171,7 @@ class HTXClient:
                 return fee or {}
 
         except Exception as e:
-            print(f"[HTX FEE ERROR] {symbol}: {e}")
+            log_event(logger, logging.WARNING, "htx_fee_error", symbol=symbol, error=str(e))
 
         return {}
 
@@ -199,7 +213,7 @@ class HTXClient:
                 source = "market_metadata"
 
         except Exception as e:
-            print(f"[HTX MARKET FEE META ERROR] {symbol}: {e}")
+            log_event(logger, logging.WARNING, "htx_market_fee_meta_error", symbol=symbol, error=str(e))
 
         if maker is None:
             maker = (
