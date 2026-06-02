@@ -200,3 +200,24 @@ def test_evaluate_exits_auto_closes_paper_when_funding_compresses():
         assert db.query(FundingArbPosition).filter(FundingArbPosition.status == "closed").count() == 1
     finally:
         db.close()
+
+
+def test_funding_arb_paper_cycle_smoke_logs_closed_pnl():
+    db = _db_session()
+    try:
+        result = FundingArbEngine().paper_cycle_smoke(db, notional_usdt=100, funding_periods=1)
+
+        assert result["status"] == "ok"
+        assert result["checks"]["scan_candidate_created"] is True
+        assert result["checks"]["paper_hedge_opened"] is True
+        assert result["checks"]["funding_periods_logged"] is True
+        assert result["checks"]["pnl_logged"] is True
+        assert result["checks"]["closed_on_compression"] is True
+        assert result["position"]["status"] == "closed"
+        assert result["position"]["mode"] == "paper"
+        assert result["position"]["funding_periods"] == 1
+        assert result["position"]["realized_pnl"] is not None
+        assert db.query(FundingArbOpportunity).count() == 1
+        assert db.query(FundingArbPosition).filter(FundingArbPosition.status == "closed").count() == 1
+    finally:
+        db.close()

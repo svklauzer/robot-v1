@@ -521,8 +521,8 @@ Hard controls:
 - [ ] Live kill switch tested.
 - [x] Exchange reconnect/reconciliation tested (`ExchangeReconciliationService` dry-run checks HTX reconnect, open orders and live positions; readiness/UI surface blockers).
 - [x] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread (`MarketConnectivityService` covers snapshot failures, mock live source and spread thresholds).
-- [ ] HTX funding-rate arbitrage is paper-tested: 8h scan -> hedge open -> funding/P&L log -> close when funding compresses.
-- [ ] Owner UI exposes HTX funding arb: readiness loop status, scan button, candidate table, paper hedge open, exit evaluation and position P&L.
+- [x] HTX funding-rate arbitrage is paper-tested: deterministic paper smoke creates candidate -> opens hedge -> logs funding/P&L -> closes on compression (`paper_cycle_smoke` + owner endpoint/UI).
+- [x] Owner UI exposes HTX funding arb: readiness loop status, scan button, candidate table, paper hedge open, exit evaluation, paper smoke and position P&L.
 
 ### Telegram
 

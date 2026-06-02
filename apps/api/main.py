@@ -307,6 +307,12 @@ class FundingArbCloseRequest(BaseModel):
     funding_periods: int = 1
     exit_funding_rate: float | None = None
 
+
+class FundingArbPaperSmokeRequest(BaseModel):
+    notional_usdt: float | None = None
+    funding_periods: int = 1
+    persist: bool = False
+
 async def background_robot_loop():
     global robot_loop_enabled
 
@@ -2066,6 +2072,36 @@ def funding_arb_open(payload: FundingArbOpenRequest):
     finally:
         db.close()
 
+
+
+@app.post("/funding-arb/paper-smoke", dependencies=[Depends(require_owner_action)])
+def funding_arb_paper_smoke(payload: FundingArbPaperSmokeRequest | None = None):
+    db = SessionLocal()
+    request = payload or FundingArbPaperSmokeRequest()
+    try:
+        result = FundingArbEngine().paper_cycle_smoke(
+            db,
+            notional_usdt=request.notional_usdt,
+            funding_periods=request.funding_periods,
+        )
+        result["persisted"] = bool(request.persist)
+        if request.persist:
+            AuditLogService().record(
+                db,
+                action="funding_arb_paper_smoke",
+                resource_type="funding_arb_position",
+                resource_id=result.get("position", {}).get("id"),
+                details={"realized_pnl": result.get("position", {}).get("realized_pnl")},
+            )
+            db.commit()
+        else:
+            db.rollback()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
 @app.post("/funding-arb/evaluate-exits", dependencies=[Depends(require_owner_action)])
 def funding_arb_evaluate_exits():

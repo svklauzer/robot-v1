@@ -366,6 +366,70 @@ class FundingArbEngine:
             "closed_at": item.closed_at.isoformat() if item.closed_at and hasattr(item.closed_at, "isoformat") else item.closed_at,
         }
 
+
+    def paper_cycle_smoke(
+        self,
+        db: Session,
+        notional_usdt: float | None = None,
+        funding_periods: int = 1,
+    ) -> dict:
+        """Run a deterministic paper funding-arb cycle in the DB session.
+
+        The caller controls commit/rollback.  This is intended for owner/runbook
+        smoke checks: create a candidate, open a paper hedge, simulate one or
+        more 8h funding windows, close the hedge when funding compresses, and
+        return the P&L log that would be visible in the owner UI.
+        """
+        notional = float(notional_usdt or settings.FUNDING_ARB_MAX_NOTIONAL_USDT or 100.0)
+        funding_rate = max(float(settings.FUNDING_ARB_MIN_RATE_PCT) / 100, 0.001)
+        spot_price = 100.0
+        swap_price = 100.05
+        basis_pct = ((swap_price - spot_price) / spot_price) * 100
+        now = datetime.now(timezone.utc)
+
+        opportunity = FundingArbOpportunity(
+            symbol="BTC/USDT",
+            spot_symbol="BTC/USDT",
+            swap_symbol="BTC/USDT:USDT",
+            funding_rate=funding_rate,
+            annualized_rate_pct=funding_rate * 3 * 365 * 100,
+            spot_price=spot_price,
+            swap_price=swap_price,
+            basis_pct=basis_pct,
+            estimated_edge_pct=round(funding_rate * 100 - abs(basis_pct), 6),
+            status="candidate",
+            next_funding_at=now + timedelta(hours=8),
+            raw_json={"smoke": True, "source": "paper_cycle_smoke"},
+        )
+        db.add(opportunity)
+        db.flush()
+
+        position = self.open_paper(db, opportunity.id, notional_usdt=notional)
+        position.opened_at = now - timedelta(hours=8 * max(int(funding_periods), 1))
+        db.flush()
+
+        closed = self.close_paper(
+            db,
+            position_id=position.id,
+            spot_exit_price=spot_price * 1.001,
+            swap_exit_price=swap_price * 0.999,
+            funding_periods=max(int(funding_periods), 1),
+            exit_funding_rate=float(settings.FUNDING_ARB_CLOSE_RATE_PCT) / 100,
+        )
+        return {
+            "status": "ok",
+            "smoke": "funding_arb_paper_cycle",
+            "opportunity": FundingMonitorService().serialize_opportunity(opportunity),
+            "position": self.serialize_position(closed),
+            "checks": {
+                "scan_candidate_created": opportunity.status == "candidate",
+                "paper_hedge_opened": position.mode == "paper",
+                "funding_periods_logged": int(closed.funding_periods or 0) >= 1,
+                "pnl_logged": closed.realized_pnl is not None,
+                "closed_on_compression": closed.status == "closed",
+            },
+        }
+
     def summary(self, db: Session) -> dict:
         open_count = db.query(FundingArbPosition).filter(FundingArbPosition.status == "open").count()
         closed = db.query(FundingArbPosition).filter(FundingArbPosition.status == "closed").all()

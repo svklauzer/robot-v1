@@ -12,6 +12,7 @@ export default function FundingArbPage() {
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [notional, setNotional] = useState("100");
+  const [lastSmoke, setLastSmoke] = useState<any>(null);
 
   async function loadAll() {
     setLoading(true);
@@ -56,6 +57,29 @@ export default function FundingArbPage() {
       const res = await apiPost("/funding-arb/evaluate-exits", {});
       if (res?.status === "error") {
         alert(`Exit evaluation failed: ${res.error}`);
+      }
+      await loadAll();
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function runPaperSmoke() {
+    const amount = Number(notional);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("Введите положительный notional USDT для paper smoke");
+      return;
+    }
+    setAction("smoke");
+    try {
+      const res = await apiPost("/funding-arb/paper-smoke", {
+        notional_usdt: amount,
+        funding_periods: 1,
+        persist: false,
+      });
+      setLastSmoke(res);
+      if (res?.status === "error") {
+        alert(`Paper smoke failed: ${res.error}`);
       }
       await loadAll();
     } finally {
@@ -113,6 +137,10 @@ export default function FundingArbPage() {
             <ShieldCheck size={16} />
             {action === "exits" ? "Проверка exits..." : "Evaluate exits"}
           </button>
+          <button onClick={runPaperSmoke} className="flex items-center gap-2 rounded-xl bg-purple-700 px-4 py-2 font-semibold hover:bg-purple-600">
+            <ShieldCheck size={16} />
+            {action === "smoke" ? "Paper smoke..." : "Paper smoke"}
+          </button>
         </div>
       </header>
 
@@ -123,6 +151,19 @@ export default function FundingArbPage() {
         <Stat title="Open hedges" value={summary?.open_positions ?? openPositions.length} warn={(summary?.open_positions ?? openPositions.length) > 0} />
         <Stat title="Realized P&L" value={`${formatNumber(summary?.realized_pnl)} USDT`} good={(summary?.realized_pnl ?? 0) > 0} warn={(summary?.realized_pnl ?? 0) < 0} />
       </section>
+
+      {lastSmoke && (
+        <section className="rounded-2xl border border-purple-900 bg-purple-950/20 p-5">
+          <h2 className="mb-3 flex items-center gap-2 text-xl font-semibold text-purple-200"><ShieldCheck size={18} /> Funding paper smoke</h2>
+          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+            <Metric label="Status" value={lastSmoke.status || "unknown"} good={lastSmoke.status === "ok"} warn={lastSmoke.status !== "ok"} />
+            <Metric label="Persisted" value={String(Boolean(lastSmoke.persisted))} />
+            <Metric label="Funding periods" value={lastSmoke.position?.funding_periods ?? "-"} />
+            <Metric label="Funding" value={`${formatNumber(lastSmoke.position?.funding_collected)} USDT`} good={(lastSmoke.position?.funding_collected ?? 0) > 0} />
+            <Metric label="Realized" value={`${formatNumber(lastSmoke.position?.realized_pnl)} USDT`} good={(lastSmoke.position?.realized_pnl ?? 0) > 0} warn={(lastSmoke.position?.realized_pnl ?? 0) < 0} />
+          </div>
+        </section>
+      )}
 
       <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

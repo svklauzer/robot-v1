@@ -23,6 +23,7 @@ def test_sensitive_owner_endpoints_require_owner_auth():
         ('post', '/payments/reconcile'),
         ('post', '/funding-arb/scan'),
         ('post', '/funding-arb/open'),
+        ('post', '/funding-arb/paper-smoke'),
         ('post', '/system/kill-switch'),
         ('post', '/trade/cost-preview'),
         ('post', '/trade/build-plan'),
