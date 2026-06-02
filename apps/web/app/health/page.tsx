@@ -9,6 +9,7 @@ export default function HealthPage() {
   const [health, setHealth] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [killSwitchSmoke, setKillSwitchSmoke] = useState<any>(null);
   const loadingRef = useRef(false);
 
   async function loadAll() {
@@ -33,6 +34,22 @@ export default function HealthPage() {
     await apiPost("/system/test-telegram-owner");
     await loadAll();
     alert("Owner Telegram test отправлен");
+  }
+
+  async function setKillSwitch(enabled: boolean) {
+    const text = enabled
+      ? "⚠️ Включить kill switch и остановить робота до ручного отключения?"
+      : "Отключить kill switch и разрешить запуск при прохождении safety gates?";
+    if (!window.confirm(text)) return;
+    await apiPost("/system/kill-switch", { enabled, reason: enabled ? "owner_health_page" : "owner_resume" });
+    await loadAll();
+  }
+
+  async function runKillSwitchSmoke() {
+    if (!window.confirm("Запустить dry-run проверку kill switch? Состояние будет откатано транзакцией.")) return;
+    const result = await apiPost("/system/kill-switch-smoke", { reason: "owner_health_page_smoke" });
+    setKillSwitchSmoke(result);
+    await loadAll();
   }
 
   async function setKillSwitch(enabled: boolean) {
@@ -99,6 +116,10 @@ export default function HealthPage() {
             <ShieldAlert size={16} />
             {liveSafety?.kill_switch_enabled ? "Resume" : "Kill switch"}
           </button>
+          <button onClick={runKillSwitchSmoke} className="flex items-center gap-2 rounded-xl bg-purple-700 px-4 py-2 font-semibold hover:bg-purple-600">
+            <ShieldCheck size={16} />
+            Kill smoke
+          </button>
         </div>
       </header>
 
@@ -124,6 +145,7 @@ export default function HealthPage() {
           <InfoRow label="Daily loss" value={`${liveSafety?.daily_loss_pct ?? 0}%`} danger={liveSafety?.daily_loss_blocked} />
           <InfoRow label="Max daily loss" value={`${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
           {liveSafety?.kill_switch_reason && <InfoRow label="Reason" value={liveSafety.kill_switch_reason} danger={liveSafety?.kill_switch_enabled} />}
+          {killSwitchSmoke && <InfoRow label="Smoke" value={killSwitchSmoke?.status === "ok" ? "passed dry-run" : (killSwitchSmoke?.error || "failed")} danger={killSwitchSmoke?.status !== "ok"} />}
         </Panel>
 
         <Panel title="ML outcomes">

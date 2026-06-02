@@ -25,6 +25,7 @@ def test_sensitive_owner_endpoints_require_owner_auth():
         ('post', '/funding-arb/open'),
         ('post', '/funding-arb/paper-smoke'),
         ('post', '/system/kill-switch'),
+        ('post', '/system/kill-switch-smoke'),
         ('post', '/trade/cost-preview'),
         ('post', '/trade/build-plan'),
         ('post', '/intelligence/scan/run'),

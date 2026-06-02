@@ -90,3 +90,11 @@ def test_health_page_surfaces_exchange_reconciliation_contract():
     assert "exchange_reconciliation" in page
     assert "local_open_orders" in page
     assert "exchange_positions" in page
+
+
+def test_health_page_exposes_kill_switch_smoke_contract():
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+
+    assert "/system/kill-switch-smoke" in page
+    assert "Kill smoke" in page
+    assert "passed dry-run" in page

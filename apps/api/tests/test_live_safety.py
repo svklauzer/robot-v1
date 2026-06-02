@@ -87,3 +87,30 @@ def test_owner_kill_switch_updates_bot_config_and_blocks_snapshot():
         assert db.query(AuditEvent).filter(AuditEvent.action == "kill_switch_enabled").count() == 1
     finally:
         db.close()
+
+
+def test_kill_switch_smoke_exercises_enable_disable_and_can_be_rolled_back():
+    db = _db_session()
+
+    try:
+        bot = _create_running_bot(db)
+        db.commit()
+        result = LiveSafetyService().kill_switch_smoke(db, bot, reason="smoke_test")
+
+        assert result["status"] == "ok"
+        assert result["dry_run"] is True
+        assert result["checks"]["enabled_blocks"] is True
+        assert result["checks"]["enabled_sets_flag"] is True
+        assert result["checks"]["running_bot_stopped"] is True
+        assert result["checks"]["disabled_clears_flag"] is True
+        assert result["checks"]["disabled_clears_blocker"] is True
+        assert db.query(AuditEvent).filter(AuditEvent.action == "kill_switch_enabled").count() == 1
+        assert db.query(AuditEvent).filter(AuditEvent.action == "kill_switch_disabled").count() == 1
+
+        db.rollback()
+        db.refresh(bot)
+        assert bot.status == "running"
+        assert bot.config_json == {}
+        assert db.query(AuditEvent).count() == 0
+    finally:
+        db.close()

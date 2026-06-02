@@ -518,7 +518,7 @@ Hard controls:
 - [x] Adaptive MFE capture experiment is enabled/configurable and measured by close reason (`adaptive_mfe_capture` in exit policy, ML labels and analytics).
 - [x] Per-symbol profitability guard виден owner-у и блокирует/снижает риск по убыточным символам (analytics page + `SymbolPerformanceGuard` adjusts TradePlan risk).
 - [ ] At least 200 closed paper/live_shadow outcomes.
-- [ ] Live kill switch tested.
+- [x] Live kill switch tested (`kill_switch_smoke` dry-run enables, blocks, stops running bot, disables, rolls back and is exposed in owner Health UI).
 - [x] Exchange reconnect/reconciliation tested (`ExchangeReconciliationService` dry-run checks HTX reconnect, open orders and live positions; readiness/UI surface blockers).
 - [x] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread (`MarketConnectivityService` covers snapshot failures, mock live source and spread thresholds).
 - [x] HTX funding-rate arbitrage is paper-tested: deterministic paper smoke creates candidate -> opens hedge -> logs funding/P&L -> closes on compression (`paper_cycle_smoke` + owner endpoint/UI).

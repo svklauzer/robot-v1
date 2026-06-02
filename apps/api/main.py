@@ -291,6 +291,10 @@ class KillSwitchRequest(BaseModel):
     reason: str | None = "owner_request"
 
 
+class KillSwitchSmokeRequest(BaseModel):
+    reason: str | None = "owner_smoke"
+
+
 class FundingArbScanRequest(BaseModel):
     symbols: list[str] | None = None
 
@@ -2194,6 +2198,28 @@ def system_kill_switch(payload: KillSwitchRequest):
     finally:
         db.close()
 
+
+
+@app.post("/system/kill-switch-smoke", dependencies=[Depends(require_owner_action)])
+def system_kill_switch_smoke(payload: KillSwitchSmokeRequest | None = None):
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        if not bot:
+            return {"status": "error", "error": "bot_not_found"}
+
+        request = payload or KillSwitchSmokeRequest()
+        result = LiveSafetyService().kill_switch_smoke(db=db, bot=bot, reason=request.reason)
+        db.rollback()
+        return result
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
 
 @app.get("/system/readiness")
 def system_readiness():

@@ -108,3 +108,37 @@ class LiveSafetyService:
             },
         )
         return self.snapshot(db=db, bot=bot)
+
+    def kill_switch_smoke(self, db: Session, bot: Bot, reason: str | None = "owner_smoke") -> dict:
+        """Exercise owner kill-switch enable/disable behavior inside caller transaction.
+
+        The endpoint using this method rolls back by default, so this is safe as a
+        production runbook smoke: it proves that enabling the switch blocks live
+        safety, stops a running bot, records audit events, and disabling clears
+        the blocker without leaving persistent state behind.
+        """
+        original_status = bot.status
+        original_config = dict(bot.config_json or {})
+
+        bot.status = "running"
+        enabled_state = self.set_kill_switch(db, bot, enabled=True, reason=reason or "owner_smoke")
+        enabled_status = bot.status
+        disabled_state = self.set_kill_switch(db, bot, enabled=False, reason="smoke_restore")
+
+        return {
+            "status": "ok",
+            "dry_run": True,
+            "initial": {
+                "bot_status": original_status,
+                "kill_switch_enabled": bool(original_config.get("kill_switch_enabled")),
+            },
+            "enabled_state": enabled_state,
+            "disabled_state": disabled_state,
+            "checks": {
+                "enabled_blocks": enabled_state.get("blocked") is True,
+                "enabled_sets_flag": enabled_state.get("kill_switch_enabled") is True,
+                "running_bot_stopped": enabled_status == "stopped_by_owner",
+                "disabled_clears_flag": disabled_state.get("kill_switch_enabled") is False,
+                "disabled_clears_blocker": "owner kill switch is enabled" not in (disabled_state.get("blockers") or []),
+            },
+        }
