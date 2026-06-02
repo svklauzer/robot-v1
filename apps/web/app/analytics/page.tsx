@@ -11,23 +11,26 @@ export default function AnalyticsPage() {
   const [readiness, setReadiness] = useState<any>(null);
   const [rootCause, setRootCause] = useState<any>(null);
   const [symbolPerf, setSymbolPerf] = useState<any>(null);
+  const [validationGates, setValidationGates] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
         apiGet("/analytics/outcome-root-cause?reason=failed_setup_exit&limit=500"),
         apiGet("/analytics/symbol-performance?lookback=12"),
+        apiGet("/analytics/validation-gates"),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
       setReadiness(readinessData);
       setRootCause(rootCauseData);
       setSymbolPerf(symbolPerfData);
+      setValidationGates(validationData);
     } finally {
       setLoading(false);
     }
@@ -96,9 +99,10 @@ export default function AnalyticsPage() {
           </Panel>
 
           <Panel title="Profit gates" icon={<AlertTriangle size={18} />}>
-            <Metric label="Closed validation signals" value={readiness?.required_gates?.closed_validation_signals ?? 200} />
-            <Metric label="Failed setup max" value={`${readiness?.required_gates?.failed_setup_exit_share_max_pct ?? 35}%`} />
-            <Metric label="Positive→Negative max" value={`${readiness?.required_gates?.positive_then_negative_max_pct ?? 25}%`} />
+            <Metric label="Closed validation signals" value={`${validationGates?.closed_count ?? 0} / ${validationGates?.min_closed ?? readiness?.required_gates?.closed_validation_signals ?? 200}`} warn={!validationGates?.gates?.min_closed_outcomes} />
+            <Metric label="Rolling net PnL" value={`${validationGates?.net_pnl_usdt ?? summary?.total_net_pnl_usdt ?? 0} USDT`} good={validationGates?.gates?.rolling_net_pnl_positive} warn={!validationGates?.gates?.rolling_net_pnl_positive} />
+            <Metric label="Failed setup" value={`${validationGates?.failed_setup_share_pct ?? 0}% / max ${validationGates?.failed_setup_max_pct ?? 35}%`} warn={!validationGates?.gates?.failed_setup_below_threshold} />
+            <Metric label="Positive→Negative" value={`${validationGates?.positive_then_negative_rate_pct ?? 0}% / max ${validationGates?.positive_then_negative_max_pct ?? 25}%`} warn={!validationGates?.gates?.positive_then_negative_below_threshold} />
             <Metric label="MFE capture enabled" value={readiness?.required_gates?.adaptive_mfe_capture_enabled ? "yes" : "no"} />
             <Metric label="Telegram SLA min" value={`${readiness?.required_gates?.telegram_delivery_sla_min_pct ?? 99}%`} />
           </Panel>
@@ -204,11 +208,12 @@ function Panel({ title, icon, children }: { title: string; icon: any; children: 
   );
 }
 
-function Metric({ label, value }: { label: string; value: any }) {
+function Metric({ label, value, good, warn }: { label: string; value: any; good?: boolean; warn?: boolean }) {
+  const valueClass = warn ? "text-yellow-300" : good ? "text-emerald-300" : "text-emerald-200";
   return (
     <div className="flex items-center justify-between border-b border-emerald-950 py-2 text-sm last:border-b-0">
       <span className="text-emerald-100/60">{label}</span>
-      <span className="font-semibold text-emerald-200">{value}</span>
+      <span className={`font-semibold ${valueClass}`}>{value}</span>
     </div>
   );
 }

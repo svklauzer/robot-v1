@@ -98,3 +98,12 @@ def test_health_page_exposes_kill_switch_smoke_contract():
     assert "/system/kill-switch-smoke" in page
     assert "Kill smoke" in page
     assert "passed dry-run" in page
+
+
+def test_analytics_page_surfaces_validation_gates_contract():
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+
+    assert "/analytics/validation-gates" in page
+    assert "validationGates?.closed_count" in page
+    assert "validationGates?.failed_setup_share_pct" in page
+    assert "validationGates?.positive_then_negative_rate_pct" in page

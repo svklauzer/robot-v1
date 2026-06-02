@@ -64,6 +64,7 @@ from services.production_entry_gate import ProductionEntryGate
 from services.signal_replacement import SignalReplacementPolicy
 from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
+from services.validation_gates import ValidationGateService
 from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
 from services.live_safety import LiveSafetyService
@@ -985,6 +986,15 @@ def analytics_summary():
     finally:
         db.close()
 
+
+
+@app.get("/analytics/validation-gates")
+def analytics_validation_gates(limit: int | None = None):
+    db = SessionLocal()
+    try:
+        return ValidationGateService().evaluate(db, limit=limit)
+    finally:
+        db.close()
 
 @app.get("/analytics/reason-breakdown")
 def analytics_reason_breakdown(limit: int = 500):
@@ -2236,12 +2246,10 @@ def system_readiness():
         ml_outcomes = MLOutcomeStatsService().safe_summary()
         market_connectivity = MarketConnectivityService().check("BTC/USDT")
         exchange_reconciliation = ExchangeReconciliationService().check(db)
+        validation_gates = ValidationGateService().evaluate(db)
         blockers = list(settings.production_blockers())
 
-        if analytics.get("total_net_pnl_usdt", 0) < 0:
-            blockers.append("rolling net PnL is negative")
-        if analytics.get("closed_signals", 0) < 200 and settings.is_live_enabled:
-            blockers.append("live mode requires at least 200 closed validation signals")
+        blockers.extend(validation_gates.get("blockers") or [])
         if telegram_delivery.get("failed", 0) > 0:
             blockers.append("telegram delivery has failures in the last 24h")
         blockers.extend(live_safety.get("blockers", []))
@@ -2272,10 +2280,11 @@ def system_readiness():
             "ml_outcomes": ml_outcomes,
             "market_connectivity": market_connectivity,
             "exchange_reconciliation": exchange_reconciliation,
+            "validation_gates": validation_gates,
             "required_gates": {
-                "closed_validation_signals": 200,
-                "failed_setup_exit_share_max_pct": 35.0,
-                "positive_then_negative_max_pct": 25.0,
+                "closed_validation_signals": validation_gates.get("min_closed", 200),
+                "failed_setup_exit_share_max_pct": validation_gates.get("failed_setup_max_pct", 35.0),
+                "positive_then_negative_max_pct": validation_gates.get("positive_then_negative_max_pct", 25.0),
                 "telegram_delivery_sla_min_pct": 99.0,
                 "adaptive_mfe_capture_enabled": bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)),
                 "adaptive_mfe_capture_start_pct": getattr(settings, "MFE_CAPTURE_START_PCT", 0.65),
@@ -2286,6 +2295,19 @@ def system_readiness():
             },
         }
 
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary")
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
