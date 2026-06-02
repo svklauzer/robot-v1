@@ -68,6 +68,7 @@ class TradeOutcomeLogger:
                 "hit_stop": signal.closed_reason == "stop_loss",
                 "hit_tp2": signal.closed_reason == "tp2_reached",
                 "protected_profit": signal.closed_reason in [
+                    "adaptive_mfe_capture",
                     "protective_trailing_stop",
                     "adaptive_trailing_stop",
                     "adaptive_post_tp1_stop",
