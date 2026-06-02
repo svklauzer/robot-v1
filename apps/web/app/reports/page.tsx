@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Nav from "../../components/Nav";
+import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
 import { Send, RefreshCw, Trophy, Flame, Clock, BarChart3 } from "lucide-react";
 
@@ -87,9 +87,7 @@ export default function ReportsPage() {
   }, [summary, period]);
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <Nav />
+    <AppShell>
 
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -247,8 +245,7 @@ export default function ReportsPage() {
             <InfoBox label="Период отчёта" value={`${stats.hours}ч`} />
           </div>
         </section>
-      </div>
-    </main>
+    </AppShell>
   );
 }
 
