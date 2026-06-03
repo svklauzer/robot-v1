@@ -75,6 +75,15 @@ class ProductionEntryGate:
         min_rr2 = 0.0
         min_priority = 0.0
 
+        def attach_thresholds() -> None:
+            payload["thresholds"] = {
+                "min_setup": min_setup,
+                "min_confidence": min_confidence,
+                "min_rr_tp1": min_rr1,
+                "min_rr_tp2": min_rr2,
+                "min_priority": min_priority,
+            }
+
         if grade_value == "C":
             return ProductionGateDecision(
                 allowed=False,
@@ -99,6 +108,7 @@ class ProductionEntryGate:
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1", 0.95))
             min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
+            attach_thresholds()
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "a_plus_setup_too_weak", payload)
@@ -120,6 +130,7 @@ class ProductionEntryGate:
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
             min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
+            attach_thresholds()
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "a_setup_too_weak", payload)
@@ -138,6 +149,7 @@ class ProductionEntryGate:
             min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.8))
             min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.25))
             min_priority = float(getattr(settings, "PROD_GATE_B_MIN_PRIORITY", 85.0))
+            attach_thresholds()
 
             if setup < min_setup:
                 return ProductionGateDecision(False, "b_setup_too_weak", payload)

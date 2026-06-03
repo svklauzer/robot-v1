@@ -374,15 +374,45 @@ class RobotLoop:
                 db.flush()
                 continue
 
-            adjusted_qty = float(plan.qty) * float(performance.risk_multiplier or 1.0)
-            if adjusted_qty <= 0:
+            policy_profile = self.symbol_performance_guard.policy_profile(performance)
+            policy_decision = self._check_symbol_policy_profile(policy_profile, production_decision.payload)
+            if not policy_decision["allowed"]:
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="rejected",
+                        decision=policy_decision["reason"],
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "rejected",
+                            "decision": policy_decision["reason"],
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "performance_guard": performance.to_payload(),
+                            "symbol_policy_profile": policy_profile,
+                            "symbol_policy_check": policy_decision,
+                            "production_gate": production_decision.payload,
+                        },
+                    )
+                )
+                db.flush()
                 continue
 
-            plan.qty = round(adjusted_qty, 6)
-            plan.required_margin = round(float(plan.required_margin) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_tp1 = round(float(plan.net_pnl_tp1) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_tp2 = round(float(plan.net_pnl_tp2) * float(performance.risk_multiplier or 1.0), 6)
-            plan.net_pnl_stop = round(float(plan.net_pnl_stop) * float(performance.risk_multiplier or 1.0), 6)
+            performance_adjustment = self._apply_symbol_performance_adjustment(plan, performance)
+            performance_adjustment["policy_profile"] = policy_profile
+            if float(plan.qty or 0) <= 0:
+                continue
 
             exposure_result = self.exposure_guard.check_before_publish(
                 db=db,
@@ -532,18 +562,183 @@ class RobotLoop:
                     "net_rr_tp2": plan.net_rr_tp2,
                     "is_valid": plan.is_valid,
                     "reject_reason": plan.reject_reason,
+                    "performance_guard": performance_adjustment,
                 },
             )
 
             db.add(sig)
             db.flush()
+            db.refresh(sig)
 
+            await self._publish_new_signal_safely(
+                db=db,
+                sig=sig,
+                signal_payload=signal_payload,
+                effective_confidence=effective_confidence,
+                grade=grade,
+                is_public=should_publish,
+                result=result,
+            )
+
+
+    def _check_symbol_policy_profile(self, policy_profile: dict, gate_payload: dict) -> dict:
+        if not bool(policy_profile.get("publish_allowed", True)):
+            return {
+                "allowed": False,
+                "reason": "symbol_policy_publish_blocked",
+                "policy_profile": policy_profile,
+            }
+
+        thresholds = gate_payload.get("thresholds") or {}
+        confidence = float(gate_payload.get("effective_confidence") or 0.0)
+        rr1 = float(gate_payload.get("net_rr_tp1") or 0.0)
+        rr2 = float(gate_payload.get("net_rr_tp2") or 0.0)
+        confidence_delta = float(policy_profile.get("min_confidence_delta") or 0.0)
+        rr_delta = float(policy_profile.get("min_rr_delta") or 0.0)
+
+        required_confidence = float(thresholds.get("min_confidence") or 0.0) + confidence_delta
+        required_rr1 = float(thresholds.get("min_rr_tp1") or 0.0) + rr_delta
+        required_rr2 = float(thresholds.get("min_rr_tp2") or 0.0) + rr_delta
+
+        payload = {
+            "allowed": True,
+            "reason": "symbol_policy_passed",
+            "policy_profile": policy_profile,
+            "required_confidence": round(required_confidence, 4),
+            "required_rr_tp1": round(required_rr1, 4),
+            "required_rr_tp2": round(required_rr2, 4),
+            "actual_confidence": confidence,
+            "actual_rr_tp1": rr1,
+            "actual_rr_tp2": rr2,
+        }
+
+        if confidence < required_confidence:
+            return {**payload, "allowed": False, "reason": "symbol_policy_confidence_too_low"}
+        if rr1 < required_rr1:
+            return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp1_too_low"}
+        if rr2 < required_rr2:
+            return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp2_too_low"}
+
+        return payload
+
+    def _apply_symbol_performance_adjustment(self, plan, performance) -> dict:
+        multiplier = float(getattr(performance, "risk_multiplier", 1.0) or 1.0)
+        original = {
+            "qty": float(plan.qty or 0),
+            "required_margin": float(plan.required_margin or 0),
+            "net_pnl_tp1": float(plan.net_pnl_tp1 or 0),
+            "net_pnl_tp2": float(plan.net_pnl_tp2 or 0),
+            "net_pnl_stop": float(plan.net_pnl_stop or 0),
+        }
+
+        plan.qty = round(original["qty"] * multiplier, 6)
+        plan.required_margin = round(original["required_margin"] * multiplier, 6)
+        plan.net_pnl_tp1 = round(original["net_pnl_tp1"] * multiplier, 6)
+        plan.net_pnl_tp2 = round(original["net_pnl_tp2"] * multiplier, 6)
+        plan.net_pnl_stop = round(original["net_pnl_stop"] * multiplier, 6)
+
+        return {
+            "allowed": bool(getattr(performance, "allowed", True)),
+            "reason": getattr(performance, "reason", "symbol_performance_ok"),
+            "risk_multiplier": multiplier,
+            "symbol": getattr(performance, "symbol", None),
+            "classification": "reduced" if multiplier < 1.0 else "ok",
+            "original": original,
+            "adjusted": {
+                "qty": plan.qty,
+                "required_margin": plan.required_margin,
+                "net_pnl_tp1": plan.net_pnl_tp1,
+                "net_pnl_tp2": plan.net_pnl_tp2,
+                "net_pnl_stop": plan.net_pnl_stop,
+            },
+        }
+
+    async def _publish_new_signal_safely(
+        self,
+        *,
+        db: Session,
+        sig: Signal,
+        signal_payload: dict,
+        effective_confidence: float,
+        grade: str,
+        is_public: bool,
+        result=None,
+    ) -> bool:
+        """
+        Publish Telegram notification without rolling back the trading state.
+
+        In paper mode Telegram delivery is operationally important, but it must not
+        erase a valid published signal: otherwise the lifecycle never gets a
+        chance to open a paper position. In live modes we still keep the DB
+        transaction safe and mark the signal as telegram_failed.
+        """
+        try:
             await self.telegram_router.publish_new_signal(
                 signal=signal_payload,
                 confidence=effective_confidence,
                 grade=grade,
                 signal_id=sig.id,
-            )            
+                is_public=is_public,
+            )
+            return True
+
+        except Exception as telegram_error:
+            error_text = f"{type(telegram_error).__name__}: {repr(telegram_error)}"
+            live_delivery_required = bool(getattr(settings, "is_live_enabled", False)) or str(
+                getattr(settings, "TRADING_MODE", "paper_signal")
+            ).lower().startswith("live")
+            vip_delivery_required = bool(is_public)
+            delivery_required = live_delivery_required or vip_delivery_required
+
+            plan_json = sig.plan_json or {}
+            plan_json["telegram_delivery"] = {
+                "ok": False,
+                "error": error_text,
+                "mode": "required" if delivery_required else "non_blocking_paper",
+                "vip_delivery_required": vip_delivery_required,
+                "live_delivery_required": live_delivery_required,
+            }
+            sig.plan_json = plan_json
+
+            if delivery_required:
+                sig.status = "telegram_failed"
+                sig.closed_reason = "initial_vip_telegram_publish_failed" if vip_delivery_required else "initial_telegram_publish_failed"
+                event_status = "telegram_failed"
+                event_decision = sig.closed_reason
+            else:
+                # Private/owner-only paper diagnostics should continue even if an
+                # optional Telegram alert fails. Public/VIP signals are different:
+                # if the full VIP delivery fails, the signal must not become active.
+                event_status = "warning"
+                event_decision = "telegram_delivery_failed_signal_kept_published"
+
+            db.add(
+                IntelligenceEvent(
+                    symbol=sig.symbol,
+                    status=event_status,
+                    decision=event_decision,
+                    action=sig.side,
+                    regime=getattr(result, "regime", None),
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    setup_score=(getattr(result, "setup_quality", {}) or {}).get("final_score", 0.0)
+                    if result is not None
+                    else None,
+                    payload_json={
+                        "signal_id": sig.id,
+                        "symbol": sig.symbol,
+                        "side": sig.side,
+                        "grade": grade,
+                        "is_public": is_public,
+                        "telegram_error": error_text,
+                        "delivery_required": delivery_required,
+                        "vip_delivery_required": vip_delivery_required,
+                        "live_delivery_required": live_delivery_required,
+                    },
+                )
+            )
+            db.flush()
+            return False
 
     def _intelligence_effective_confidence(self, result) -> float:
         """
