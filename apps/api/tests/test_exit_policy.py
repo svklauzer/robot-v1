@@ -121,3 +121,12 @@ def test_before_tp1_adaptive_mfe_capture_can_be_disabled():
         assert decision.reason != "adaptive_mfe_capture"
     finally:
         settings.MFE_CAPTURE_ENABLED = old_enabled
+
+
+def test_exit_policy_has_no_stale_exit_pct_reference():
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "services" / "exit_policy.py"
+
+    assert re.search(r"(?<!protective_)\bexit_pct\b", source.read_text()) is None
