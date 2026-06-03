@@ -125,16 +125,37 @@ class ExitPolicyService:
         """
         Все MFE/loss пороги относительно stop_distance_pct.
         Абсолютный пол (net_safe_floor) не даёт порогам быть ниже break-even.
+
+        FIX v3.1: Добавлен абсолютный CAP на failed_loss пороги.
+        При широких стопах (4-6% ATR) динамические пороги становятся
+        -1.4% до -4.0% — неприемлемо для spot с 0.4% комиссиями.
+        Cap ограничивает их значениями из .env (FAILED_SETUP_LOSS_*_PCT),
+        которые калиброваны под реальные spot условия.
         """
         sd             = abs(stop_distance_pct)
         net_safe_floor = 0.45
+
+        # Абсолютные caps из .env — не ждать убытка больше этих значений
+        abs_cap_soft = abs(float(getattr(settings, "FAILED_SETUP_LOSS_SOFT_PCT", -0.35)))
+        abs_cap_mid  = abs(float(getattr(settings, "FAILED_SETUP_LOSS_MID_PCT",  -0.55)))
+        abs_cap_deep = abs(float(getattr(settings, "FAILED_SETUP_LOSS_DEEP_PCT", -0.80)))
+
+        # Динамические пороги, но не хуже абсолютных caps
+        raw_loss_soft = sd * self.K_LOSS_SOFT
+        raw_loss_mid  = sd * self.K_LOSS_MID
+        raw_loss_deep = sd * self.K_LOSS_DEEP
+
+        capped_loss_soft = min(raw_loss_soft, abs_cap_soft)
+        capped_loss_mid  = min(raw_loss_mid,  abs_cap_mid)
+        capped_loss_deep = min(raw_loss_deep, abs_cap_deep)
+
         return {
             "failed_mfe_soft":  sd * self.K_FAILED_SOFT,
             "failed_mfe_mid":   sd * self.K_FAILED_MID,
             "failed_mfe_deep":  sd * self.K_FAILED_DEEP,
-            "failed_loss_soft": -(sd * self.K_LOSS_SOFT),
-            "failed_loss_mid":  -(sd * self.K_LOSS_MID),
-            "failed_loss_deep": -(sd * self.K_LOSS_DEEP),
+            "failed_loss_soft": -capped_loss_soft,
+            "failed_loss_mid":  -capped_loss_mid,
+            "failed_loss_deep": -capped_loss_deep,
             "protect_start":    max(sd * self.K_PROTECT, net_safe_floor),
             "trail_start":      max(sd * self.K_TRAIL,   net_safe_floor + 0.30),
             "capture_start":    max(sd * self.K_CAPTURE, net_safe_floor + 0.15),
@@ -152,8 +173,9 @@ class ExitPolicyService:
 
         # Безопасный fallback: используем консервативный дефолтный стоп 1.5%
         # вместо чтения settings.FAILED_SETUP_MFE_SOFT_PCT (удалено из config.py)
+        # Cap гарантирует что пороги не хуже .env значений
         fallback_stop = 1.5
-        return self._dynamic_thresholds(fallback_stop), "dynamic_fallback(stop=1.5%)"
+        return self._dynamic_thresholds(fallback_stop), "dynamic_fallback(stop=1.5%+capped)"
 
     # ------------------------------------------------------------------
     # Основной метод: до TP1
@@ -243,7 +265,7 @@ class ExitPolicyService:
             capture_share    = float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.35))
 
             tp1_guard_ok = (
-                tp1_dist_pct is None or          # tp1 не передан — не блокируем
+                tp1_dist_pct is None or             # tp1 не передан — не блокируем
                 current_pct >= tp1_dist_pct * 0.90  # прошли 90% пути до TP1
             )
 
@@ -257,22 +279,7 @@ class ExitPolicyService:
                 if est_net is not None and est_net < min_protective_net_usdt:
                     return ExitDecision(exit=False)
 
-        # 0. Adaptive MFE capture experiment:
-        # если сделка уже дала умеренный плюс, но быстро отдает часть MFE,
-        # фиксируем net-safe profit раньше классического trailing.
-        if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)):
-            capture_start = float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.65))
-            capture_drawdown = float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30))
-            capture_share = float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.35))
-
-            if mfe >= capture_start and current_pct > net_safe_pct and drawdown_from_mfe >= capture_drawdown:
-                protected_pct = max(mfe * capture_share, net_safe_pct, min_protective_exit_pct)
-                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
-                if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
-                    return ExitDecision(exit=False)
-
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-
                 return ExitDecision(
                     exit=True,
                     reason="adaptive_mfe_capture",
@@ -281,7 +288,8 @@ class ExitPolicyService:
                         f"mfe={round(mfe, 4)} current={round(current_pct, 4)} "
                         f"drawdown={round(drawdown_from_mfe, 4)} "
                         f"protected={round(protected_pct, 4)} "
-                        f"net_safe={round(net_safe_pct, 4)} fee_source={fee_source}"
+                        f"net_safe={round(net_safe_pct, 4)} fee_source={fee_source} "
+                        f"tp1_dist={round(tp1_dist_pct, 4) if tp1_dist_pct else None}"
                     ),
                 )
 
@@ -294,8 +302,6 @@ class ExitPolicyService:
             if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-
-            exit_price = self._price_from_result_pct(side, entry_price, exit_pct)
             return ExitDecision(
                 exit=True, reason="protective_breakeven_profit_guard",
                 exit_price=round(exit_price, 8),
