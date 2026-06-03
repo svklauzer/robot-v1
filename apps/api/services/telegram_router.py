@@ -126,23 +126,33 @@ class TelegramRouter:
 
         vip_text = self._format_update(symbol, text_status, extra)
 
-        await self._send_required(
+        vip_result = await self.sender.send_message(
             settings.TELEGRAM_VIP_SIGNALS_CHAT_ID,
             vip_text,
-            "vip_signal_update",
+            message_type="vip_signal_update",
         )
 
+        free_result = None
         if grade in ["A+", "A"] and (
             "закрыта" in text_status.lower()
             or "tp1" in text_status.lower()
         ):
             free_text = self._format_free_update(symbol, text_status)
 
-            await self._send_optional(
+            free_result = await self._send_optional(
                 settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
                 free_text,
                 "free_update",
             )
+
+        return {
+            "ok": bool(vip_result and vip_result.get("ok")),
+            "route": "signal_update",
+            "vip_sent": bool(vip_result and vip_result.get("ok")),
+            "vip_error": vip_result.get("error") if vip_result else "no_result",
+            "free_sent": bool(free_result and free_result.get("ok")) if free_result is not None else False,
+            "free_error": free_result.get("error") if free_result and not free_result.get("ok") else None,
+        }
 
     async def owner_alert(self, title: str, body: str):
         await self.sender.send_owner_alert(title, body)

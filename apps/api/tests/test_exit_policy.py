@@ -31,6 +31,7 @@ def test_before_tp1_protective_breakeven_guard_triggers_after_good_mfe():
     assert decision.exit is True
     assert decision.reason == "protective_breakeven_profit_guard"
     assert decision.exit_price is not None
+    assert "protected" in (decision.note or "")
 
 
 def test_before_tp1_no_exit_on_healthy_pullback():
