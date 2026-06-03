@@ -101,6 +101,8 @@ def test_system_health_service_builds_owner_payload_without_route_globals(monkey
         assert payload["telegram_delivery"] == {"sla_pct": 100.0}
         assert payload["payments"] == {"pending": 0}
         assert payload["live_safety"] == {"blocked": False}
+        assert payload["exit_policy"]["ok"] is True
+        assert payload["exit_policy"]["runtime"] == "protected_pct_v2"
         assert payload["ml_outcomes"] == {"status": "ok"}
         assert "production_readiness" in payload
     finally:

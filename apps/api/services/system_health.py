@@ -10,6 +10,7 @@ from models.signal import Signal
 from models.subscriber import Subscriber
 from services.billing_service import BillingService
 from services.exchange_reconciliation import ExchangeReconciliationService
+from services.exit_policy import ExitPolicyService
 from services.funding_arbitrage import FundingArbEngine
 from services.live_safety import LiveSafetyService
 from services.market_connectivity import MarketConnectivityService
@@ -61,6 +62,7 @@ class SystemHealthService:
             "revenue": RevenueMetricsService().summary(db),
             "funding_arb": FundingArbEngine().summary(db),
             "live_safety": LiveSafetyService().snapshot(db=db, bot=bot),
+            "exit_policy": ExitPolicyService.runtime_guard(),
             "ml_outcomes": MLOutcomeStatsService().safe_summary(),
             "production_readiness": {
                 "ready": len(production_blockers) == 0,

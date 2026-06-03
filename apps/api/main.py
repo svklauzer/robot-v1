@@ -69,6 +69,7 @@ from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
 from services.live_safety import LiveSafetyService
 from services.funding_arbitrage import FundingMonitorService, FundingArbEngine
+from services.exit_policy import ExitPolicyService
 
 from pydantic import BaseModel
 
@@ -524,6 +525,7 @@ def health():
     return {
         "api": "ok",
         "env": settings.APP_ENV,
+        "exit_policy": ExitPolicyService.runtime_guard(),
     }
 
 
