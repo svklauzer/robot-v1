@@ -49,6 +49,9 @@ def test_symbol_performance_summary_blocks_negative_expectancy(monkeypatch):
         assert summary["blocked_count"] == 1
         assert summary["items"][0]["classification"] == "blocked"
         assert summary["items"][0]["reason"] == "symbol_negative_expectancy_blocked"
+        assert summary["items"][0]["policy_profile"]["profile"] == "blocked"
+        assert summary["items"][0]["policy_profile"]["publish_allowed"] is False
+        assert summary["items"][0]["policy_profile"]["side_restriction"] == "no_new_client_signals"
         assert "Исключить символ" in summary["items"][0]["action"]
     finally:
         db.close()
@@ -67,5 +70,29 @@ def test_symbol_performance_summary_resolves_distinct_closed_symbols():
 
         assert summary["symbols_count"] == 2
         assert {item["symbol"] for item in summary["items"]} == {"BTC/USDT", "ETH/USDT"}
+    finally:
+        db.close()
+
+
+def test_symbol_performance_summary_marks_giveback_symbols_as_watch_only(monkeypatch):
+    db = _db_session()
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_GIVEBACK_TRIGGER", 3)
+
+    try:
+        for idx in range(6):
+            signal = _signal("SOL/USDT", 0.5, "protective_breakeven_profit_guard", idx)
+            signal.plan_json = {"lifecycle": {"positive_then_negative": idx < 3}}
+            db.add(signal)
+        db.commit()
+
+        item = SymbolPerformanceSummaryService().summarize(db, symbols=["SOL/USDT"], lookback=6)["items"][0]
+
+        assert item["classification"] == "reduced"
+        assert item["reason"] == "symbol_gives_back_profit_reduce_risk"
+        assert item["policy_profile"]["profile"] == "watch_only"
+        assert item["policy_profile"]["publish_allowed"] is True
+        assert item["policy_profile"]["min_confidence_delta"] == 10
+        assert item["policy_profile"]["min_rr_delta"] == 0.25
+        assert item["policy_profile"]["exit_bias"] == "earlier_mfe_capture"
     finally:
         db.close()

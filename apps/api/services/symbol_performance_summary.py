@@ -38,6 +38,7 @@ class SymbolPerformanceSummaryService:
             decision = self.guard.analyze(db=db, bot_id=bot_id, symbol=symbol, lookback=lookback)
             payload = self.guard.to_dict(decision)
             payload["classification"] = self._classification(payload)
+            payload["policy_profile"] = self._policy_profile(payload)
             payload["action"] = self._action(payload)
             items.append(payload)
 
@@ -93,6 +94,44 @@ class SymbolPerformanceSummaryService:
         if float(payload.get("risk_multiplier") or 0) < 1.0:
             return "reduced"
         return "ok"
+
+    def _policy_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        classification = self._classification(payload)
+        reason = str(payload.get("reason") or "")
+        risk_multiplier = float(payload.get("risk_multiplier") or 0.0)
+
+        if classification == "blocked":
+            return {
+                "profile": "blocked",
+                "publish_allowed": False,
+                "risk_multiplier": 0.0,
+                "min_confidence_delta": 999,
+                "min_rr_delta": 999,
+                "side_restriction": "no_new_client_signals",
+                "exit_bias": "manual_review_required",
+            }
+
+        if classification == "reduced":
+            exit_bias = "earlier_mfe_capture" if reason == "symbol_gives_back_profit_reduce_risk" else "standard"
+            return {
+                "profile": "watch_only",
+                "publish_allowed": True,
+                "risk_multiplier": risk_multiplier,
+                "min_confidence_delta": 10,
+                "min_rr_delta": 0.25,
+                "side_restriction": "both_sides_reduced_risk",
+                "exit_bias": exit_bias,
+            }
+
+        return {
+            "profile": "tradeable",
+            "publish_allowed": True,
+            "risk_multiplier": 1.0,
+            "min_confidence_delta": 0,
+            "min_rr_delta": 0,
+            "side_restriction": "none",
+            "exit_bias": "standard",
+        }
 
     def _action(self, payload: dict[str, Any]) -> str:
         reason = str(payload.get("reason") or "")
