@@ -1,0 +1,6 @@
+# CMD: docker compose ps
+NAME               IMAGE          COMMAND                  SERVICE   CREATED          STATUS          PORTS
+robot-v1-api-1     robot-v1-api   "uvicorn main:app --…"   api       17 minutes ago   Up 17 minutes   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+robot-v1-db-1      postgres:16    "docker-entrypoint.s…"   db        17 minutes ago   Up 17 minutes   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+robot-v1-redis-1   redis:7        "docker-entrypoint.s…"   redis     17 minutes ago   Up 17 minutes   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+robot-v1-web-1     robot-v1-web   "docker-entrypoint.s…"   web       17 minutes ago   Up 17 minutes   0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
