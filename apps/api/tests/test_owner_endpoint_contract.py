@@ -51,6 +51,7 @@ def test_owner_read_endpoints_require_owner_auth():
         "/analytics/reason-breakdown",
         "/analytics/outcome-root-cause",
         "/analytics/symbol-performance",
+        "/analytics/symbol-policy-replay",
         "/analytics/signal-quality",
         "/analytics/grade-c-audit",
         "/ml/outcomes/summary",

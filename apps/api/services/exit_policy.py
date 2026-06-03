@@ -330,6 +330,7 @@ class ExitPolicyService:
             if est_net is not None and est_net < float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25)):
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+
             return ExitDecision(
                 exit=True, reason="protective_breakeven_profit_guard",
                 exit_price=round(exit_price, 8),

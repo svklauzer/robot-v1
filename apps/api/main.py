@@ -56,6 +56,7 @@ from services.intelligence_memory import IntelligenceMemory
 from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.symbol_performance_summary import SymbolPerformanceSummaryService
+from services.symbol_policy_replay import SymbolPolicyReplayService
 from services.ml_outcome_stats import MLOutcomeStatsService
 from services.candidate_priority import CandidatePriorityService
 from services.reentry_cooldown import ReEntryCooldownGuard
@@ -1127,6 +1128,16 @@ def analytics_symbol_performance(lookback: int = 12):
         return SymbolPerformanceSummaryService().summarize(db, bot=bot, lookback=lookback)
     finally:
         db.close()
+
+
+@app.get("/analytics/symbol-policy-replay", dependencies=[Depends(require_owner_action)])
+def analytics_symbol_policy_replay(lookback: int = 12, sample_limit: int = 25):
+    """Replay JSONL outcomes through current per-symbol policy profiles."""
+    return SymbolPolicyReplayService().replay_path(
+        "storage/ml/trade_outcomes.jsonl",
+        lookback=lookback,
+        sample_limit=sample_limit,
+    )
 
 
 @app.post("/signals/{signal_id}/close", dependencies=[Depends(require_owner_action)])
