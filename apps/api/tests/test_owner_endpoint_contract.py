@@ -1,0 +1,99 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_sensitive_owner_endpoints_require_owner_auth():
+    main = (ROOT / "apps/api/main.py").read_text()
+
+    sensitive_routes = [
+        ('post', '/bot/start'),
+        ('post', '/bot/stop'),
+        ('post', '/robot/run-once'),
+        ('post', '/signals/{signal_id}/close'),
+        ('post', '/signals/maintenance/queued-to-published'),
+        ('post', '/reports/send-owner'),
+        ('post', '/reports/send-free'),
+        ('post', '/reports/send-vip'),
+        ('post', '/reports/send-all'),
+        ('post', '/subscribers'),
+        ('post', '/payments/checkout'),
+        ('post', '/payments/events'),
+        ('post', '/payments/reconcile'),
+        ('post', '/funding-arb/scan'),
+        ('post', '/funding-arb/open'),
+        ('post', '/funding-arb/paper-smoke'),
+        ('post', '/system/kill-switch'),
+        ('post', '/system/kill-switch-smoke'),
+        ('post', '/trade/cost-preview'),
+        ('post', '/trade/build-plan'),
+        ('post', '/intelligence/scan/run'),
+    ]
+
+    for method, route in sensitive_routes:
+        prefix = f'@app.{method}("{route}"'
+        line = next(line for line in main.splitlines() if line.startswith(prefix))
+        assert 'Depends(require_owner_action)' in line, route
+
+
+def test_owner_read_endpoints_require_owner_auth():
+    main = (ROOT / "apps/api/main.py").read_text()
+
+    owner_read_routes = [
+        "/bot/state",
+        "/signals",
+        "/positions",
+        "/orders",
+        "/robot/loop-state",
+        "/analytics/summary",
+        "/analytics/validation-gates",
+        "/analytics/reason-breakdown",
+        "/analytics/outcome-root-cause",
+        "/analytics/symbol-performance",
+        "/analytics/symbol-policy-replay",
+        "/analytics/signal-quality",
+        "/analytics/grade-c-audit",
+        "/ml/outcomes/summary",
+        "/reports/summary",
+        "/intelligence/analyze",
+        "/intelligence/scan",
+        "/intelligence/funnel",
+        "/intelligence/events",
+        "/subscribers",
+        "/system/health",
+        "/system/exchange-reconciliation",
+        "/system/live-safety",
+        "/system/readiness",
+        "/audit/events",
+        "/payments",
+        "/payments/events",
+        "/payments/summary",
+        "/payments/revenue",
+        "/funding-arb/summary",
+        "/funding-arb/opportunities",
+        "/funding-arb/positions",
+        "/telegram/deliveries/summary",
+    ]
+    for route in owner_read_routes:
+        line = next(line for line in main.splitlines() if line.startswith(f'@app.get("{route}"'))
+        assert 'Depends(require_owner_action)' in line, route
+
+
+def test_public_telegram_webhook_stays_public_for_telegram_callbacks():
+    main = (ROOT / "apps/api/main.py").read_text()
+
+    line = next(line for line in main.splitlines() if '"/telegram/webhook"' in line and line.startswith('@app.'))
+    assert 'Depends(require_owner_action)' not in line
+
+
+def test_only_intended_get_routes_are_public():
+    main = (ROOT / "apps/api/main.py").read_text()
+    allowed_public = {'/', '/health', '/payments/plans'}
+
+    for line in main.splitlines():
+        if not line.startswith('@app.get("'):
+            continue
+        route = line.split('"', 2)[1]
+        if 'Depends(require_owner_action)' not in line and 'Depends(require_non_production_debug)' not in line:
+            assert route in allowed_public, route
