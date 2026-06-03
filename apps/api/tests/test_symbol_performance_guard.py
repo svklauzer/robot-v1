@@ -50,3 +50,33 @@ def test_cooldown_on_failed_setup_streak(monkeypatch):
     assert decision.allowed is False
     assert decision.reason == "symbol_cooldown_failed_setup_streak"
     assert decision.failed_setup_count == 4
+
+
+def test_robot_loop_applies_symbol_performance_risk_multiplier_to_trade_plan():
+    from workers.robot_loop import RobotLoop
+
+    plan = SimpleNamespace(
+        qty=10.0,
+        required_margin=100.0,
+        net_pnl_tp1=12.0,
+        net_pnl_tp2=24.0,
+        net_pnl_stop=-8.0,
+    )
+    performance = SimpleNamespace(
+        allowed=True,
+        reason="symbol_gives_back_profit_reduce_risk",
+        risk_multiplier=0.5,
+        symbol="TON/USDT",
+    )
+
+    adjustment = RobotLoop()._apply_symbol_performance_adjustment(plan, performance)
+
+    assert plan.qty == 5.0
+    assert plan.required_margin == 50.0
+    assert plan.net_pnl_tp1 == 6.0
+    assert plan.net_pnl_tp2 == 12.0
+    assert plan.net_pnl_stop == -4.0
+    assert adjustment["classification"] == "reduced"
+    assert adjustment["risk_multiplier"] == 0.5
+    assert adjustment["original"]["qty"] == 10.0
+    assert adjustment["adjusted"]["qty"] == 5.0
