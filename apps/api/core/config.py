@@ -166,6 +166,22 @@ class Settings(BaseSettings):
     VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
     VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
 
+    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
+    # fresh paper data shows positive->negative giveback.
+    MFE_CAPTURE_ENABLED: bool = True
+    MFE_CAPTURE_START_PCT: float = 0.65
+    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
+    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
+
+    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
+    # recent closed trades, readiness should show that the learning memory is stale.
+    ML_OUTCOMES_STALE_HOURS: int = 72
+
+    # Paper/live-shadow validation gates before limited live scaling.
+    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
+    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
+    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
+
     # =========================
     # SYMBOL PERFORMANCE GUARD
     # =========================

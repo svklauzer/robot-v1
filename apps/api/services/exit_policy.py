@@ -293,7 +293,7 @@ class ExitPolicyService:
                     ),
                 )
 
-         # 1. Жёсткая NET-защита:
+        # 1. Жёсткая NET-защита:
         # сделка дала >= 0.45%, но возвращается к зоне, где после комиссий уже опасно.
         # Выходим не по +0.05%, а по net_safe_pct.
         if mfe >= float(settings.PROTECTIVE_MFE_START_PCT) and current_pct <= net_safe_pct:

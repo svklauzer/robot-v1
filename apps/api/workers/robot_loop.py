@@ -374,7 +374,43 @@ class RobotLoop:
                 db.flush()
                 continue
 
+            policy_profile = self.symbol_performance_guard.policy_profile(performance)
+            policy_decision = self._check_symbol_policy_profile(policy_profile, production_decision.payload)
+            if not policy_decision["allowed"]:
+                db.add(
+                    IntelligenceEvent(
+                        symbol=symbol,
+                        status="rejected",
+                        decision=policy_decision["reason"],
+                        action=result.action,
+                        regime=result.regime,
+                        radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={
+                            "symbol": symbol,
+                            "status": "rejected",
+                            "decision": policy_decision["reason"],
+                            "action": result.action,
+                            "regime": result.regime,
+                            "radar_state": result.radar_state,
+                            "confidence_hint": result.confidence_hint,
+                            "scores": result.scores,
+                            "setup_quality": result.setup_quality,
+                            "setup_decision": result.setup_decision,
+                            "reason": result.reason,
+                            "performance_guard": performance.to_payload(),
+                            "symbol_policy_profile": policy_profile,
+                            "symbol_policy_check": policy_decision,
+                            "production_gate": production_decision.payload,
+                        },
+                    )
+                )
+                db.flush()
+                continue
+
             performance_adjustment = self._apply_symbol_performance_adjustment(plan, performance)
+            performance_adjustment["policy_profile"] = policy_profile
             if float(plan.qty or 0) <= 0:
                 continue
 
@@ -544,6 +580,46 @@ class RobotLoop:
                 result=result,
             )
 
+
+    def _check_symbol_policy_profile(self, policy_profile: dict, gate_payload: dict) -> dict:
+        if not bool(policy_profile.get("publish_allowed", True)):
+            return {
+                "allowed": False,
+                "reason": "symbol_policy_publish_blocked",
+                "policy_profile": policy_profile,
+            }
+
+        thresholds = gate_payload.get("thresholds") or {}
+        confidence = float(gate_payload.get("effective_confidence") or 0.0)
+        rr1 = float(gate_payload.get("net_rr_tp1") or 0.0)
+        rr2 = float(gate_payload.get("net_rr_tp2") or 0.0)
+        confidence_delta = float(policy_profile.get("min_confidence_delta") or 0.0)
+        rr_delta = float(policy_profile.get("min_rr_delta") or 0.0)
+
+        required_confidence = float(thresholds.get("min_confidence") or 0.0) + confidence_delta
+        required_rr1 = float(thresholds.get("min_rr_tp1") or 0.0) + rr_delta
+        required_rr2 = float(thresholds.get("min_rr_tp2") or 0.0) + rr_delta
+
+        payload = {
+            "allowed": True,
+            "reason": "symbol_policy_passed",
+            "policy_profile": policy_profile,
+            "required_confidence": round(required_confidence, 4),
+            "required_rr_tp1": round(required_rr1, 4),
+            "required_rr_tp2": round(required_rr2, 4),
+            "actual_confidence": confidence,
+            "actual_rr_tp1": rr1,
+            "actual_rr_tp2": rr2,
+        }
+
+        if confidence < required_confidence:
+            return {**payload, "allowed": False, "reason": "symbol_policy_confidence_too_low"}
+        if rr1 < required_rr1:
+            return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp1_too_low"}
+        if rr2 < required_rr2:
+            return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp2_too_low"}
+
+        return payload
 
     def _apply_symbol_performance_adjustment(self, plan, performance) -> dict:
         multiplier = float(getattr(performance, "risk_multiplier", 1.0) or 1.0)

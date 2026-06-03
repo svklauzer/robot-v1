@@ -80,3 +80,70 @@ def test_robot_loop_applies_symbol_performance_risk_multiplier_to_trade_plan():
     assert adjustment["risk_multiplier"] == 0.5
     assert adjustment["original"]["qty"] == 10.0
     assert adjustment["adjusted"]["qty"] == 5.0
+
+
+def test_symbol_performance_guard_exposes_watch_only_policy_profile():
+    performance = SimpleNamespace(
+        allowed=True,
+        reason="symbol_gives_back_profit_reduce_risk",
+        risk_multiplier=0.6,
+        symbol="SOL/USDT",
+        closed_count=6,
+        wins=6,
+        losses=0,
+        winrate=100.0,
+        total_net_pnl=3.0,
+        stop_loss_count=0,
+        failed_setup_count=0,
+        positive_then_negative_count=3,
+        last_closed_reason="protective_breakeven_profit_guard",
+        losing_streak=0,
+    )
+
+    profile = SymbolPerformanceGuard().policy_profile(performance)
+
+    assert profile["profile"] == "watch_only"
+    assert profile["publish_allowed"] is True
+    assert profile["risk_multiplier"] == 0.6
+    assert profile["min_confidence_delta"] == 10
+    assert profile["min_rr_delta"] == 0.25
+    assert profile["exit_bias"] == "earlier_mfe_capture"
+
+
+def test_robot_loop_symbol_policy_requires_watch_only_extra_confidence_and_rr():
+    from workers.robot_loop import RobotLoop
+
+    policy_profile = {
+        "profile": "watch_only",
+        "publish_allowed": True,
+        "risk_multiplier": 0.6,
+        "min_confidence_delta": 10,
+        "min_rr_delta": 0.25,
+        "side_restriction": "both_sides_reduced_risk",
+        "exit_bias": "earlier_mfe_capture",
+    }
+    gate_payload = {
+        "effective_confidence": 76.0,
+        "net_rr_tp1": 1.1,
+        "net_rr_tp2": 1.7,
+        "thresholds": {
+            "min_confidence": 70.0,
+            "min_rr_tp1": 0.9,
+            "min_rr_tp2": 1.35,
+        },
+    }
+
+    decision = RobotLoop()._check_symbol_policy_profile(policy_profile, gate_payload)
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "symbol_policy_confidence_too_low"
+    assert decision["required_confidence"] == 80.0
+
+    gate_payload["effective_confidence"] = 82.0
+    gate_payload["net_rr_tp1"] = 1.2
+    gate_payload["net_rr_tp2"] = 1.7
+    decision = RobotLoop()._check_symbol_policy_profile(policy_profile, gate_payload)
+
+    assert decision["allowed"] is True
+    assert decision["required_rr_tp1"] == 1.15
+    assert decision["required_rr_tp2"] == 1.6
