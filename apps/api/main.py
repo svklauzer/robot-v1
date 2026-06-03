@@ -1,12 +1,14 @@
 import asyncio
 import logging
+import time
+from uuid import uuid4
 from core.decision_codes import (
     DECISION_WAIT_BETTER_ENTRY_RR,
     DECISION_ACTIVE_SIGNAL_ALREADY_EXISTS,
     DECISION_MAX_ACTIVE_SIGNALS_REACHED,
     DECISION_REQUIRED_MARGIN_EXCEEDS_FREE_MARGIN,
 )
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -448,6 +450,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    started = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        log_event(
+            logger,
+            logging.ERROR,
+            "request_error",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            duration_ms=duration_ms,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise
+
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    log_event(
+        logger,
+        logging.INFO,
+        "request_completed",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+    )
+    return response
+
 
 def bootstrap_billing_plans():
     db: Session = SessionLocal()
@@ -2355,6 +2395,102 @@ async def telegram_webhook(payload: TelegramWebhookRequest):
         db.rollback()
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
+    finally:
+        db.close()
+
+
+def _telegram_menu_text(command: str, subscriber: Subscriber | None = None) -> str:
+    command = command.lower().strip()
+
+    if command in ["/start", "/menu"]:
+        return (
+            "🤖 Finmt Robot\n\n"
+            "Меню:\n"
+            "/plans — тарифы VIP\n"
+            "/pay — как оплатить доступ\n"
+            "/status — статус подписки\n"
+            "/help — FAQ и риски\n"
+            "/support — поддержка"
+        )
+
+    if command == "/plans":
+        return (
+            "💎 VIP планы\n\n"
+            "VIP 30 дней — полный сигнал, уровни, сопровождение и отчёты.\n"
+            "VIP 90 дней — тот же доступ с долгим периодом.\n\n"
+            "Нажмите /pay для инструкции по оплате."
+        )
+
+    if command == "/pay":
+        return (
+            "💳 Оплата VIP\n\n"
+            "Напишите /pay vip_30 или /pay vip_90, чтобы создать pending checkout. "
+            "Owner сможет подтвердить оплату в разделе Payments."
+        )
+
+    if command == "/status":
+        if not subscriber:
+            return "Статус: подписка не найдена. Нажмите /plans или /pay."
+        return (
+            "📌 Статус подписки\n\n"
+            f"Plan: {subscriber.plan}\n"
+            f"Status: {subscriber.status}\n"
+            f"Expires: {subscriber.expires_at}"
+        )
+
+    if command == "/help":
+        return (
+            "ℹ️ FAQ и риски\n\n"
+            "Сигналы не являются финансовой рекомендацией. "
+            "Используйте риск-менеджмент и не торгуйте средствами, которые не готовы потерять. "
+            "Перед live-режимом система проходит paper/live-shadow gates."
+        )
+
+    if command == "/support":
+        return "Поддержка: напишите owner/admin канала с вашим Telegram ID."
+
+    return "Неизвестная команда. Нажмите /menu."
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(payload: TelegramWebhookRequest):
+    db = SessionLocal()
+    try:
+        response = TelegramBotMenuService().handle(
+            db=db,
+            message=payload.message,
+            callback_query=payload.callback_query,
+        )
+        db.commit()
+
+        if response.chat_id:
+            await SignalBroadcaster().send_message(
+                chat_id=response.chat_id,
+                text=response.text,
+                message_type=response.message_type,
+                reply_markup=response.reply_markup,
+            )
+
+        return {
+            "status": "ok",
+            "command": response.command,
+            "telegram_user_id": response.telegram_user_id,
+            "message_type": response.message_type,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/telegram/deliveries/summary", dependencies=[Depends(require_owner_action)])
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
     finally:
         db.close()
 
