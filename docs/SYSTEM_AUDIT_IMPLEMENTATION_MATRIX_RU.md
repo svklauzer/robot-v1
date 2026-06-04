@@ -11,7 +11,7 @@
 
 | Домен | Что проверено | Вывод |
 |---|---|---|
-| `apps/api` | models, services, workers, routers, migrations, tests, `main.py` | Основной функционал payments/Telegram/subscribers/readiness уже реализован; найден и удален остаточный dead-code drift в `main.py` и `intelligence_memory.py`; paper-сигналы больше не блокируются Telegram timeout, а closed outcomes backfill пишется в JSONL. |
+| `apps/api` | models, services, workers, routers, migrations, tests, `main.py` | Основной функционал payments/Telegram/subscribers/readiness уже реализован; найден и удален остаточный dead-code drift в `main.py` и `intelligence_memory.py`; paper-сигналы больше не блокируются Telegram timeout, closed outcomes backfill пишется в JSONL, добавлен product E2E smoke Telegram→payment→subscription. |
 | `apps/web` | owner pages, components, API client | Payments/health/readiness UI уже есть; новый блок Monetization не нужно создавать заново, нужно усиливать существующую страницу payments и health. |
 | `telegram` | отдельный Docker/bot entrypoint | Не основной продуктовый webhook; основной customer menu сейчас обслуживает API `/telegram/webhook`. |
 | `scripts` | run reports, ML summary, replay, backup smoke | Есть dry-run backup/restore и outcome/replay tooling; E2E product smoke еще нужен отдельно. |
@@ -59,13 +59,13 @@
 | 7 | Ввести `/subscription_status` | Сделано как alias к `/status` | Поддерживать один текст статуса и один test contract. |
 | 8 | Owner dashboard “Monetization health” | Частично есть: `apps/web/app/payments/page.tsx`, payments summary/revenue; health/readiness отдельно | Не создавать новую страницу; добавить компактный блок SLA/reconciliation на существующую Payments/Health страницу. |
 | 9 | 1–2 правки в выход из failed setup | Частично есть: exit policy v4, MFE capture, validation gates, symbol policy tooling | Следующий кодовый шаг: diagnostics/replay по `failed_setup_exit`, затем точечный invalidate/capture change. |
-| 10 | Dry-run E2E и go/no-go checklist | Частично есть: backup dry-run, kill-switch smoke, `/system/readiness` | Нужен новый product E2E smoke Telegram→payment→subscriber и checklist в runbook. |
+| 10 | Dry-run E2E и go/no-go checklist | Product E2E smoke добавлен: `POST /system/product-e2e-smoke`; также есть backup dry-run, kill-switch smoke, `/system/readiness` | Осталось расширить runbook go/no-go checklist и запускать smoke перед релизом. |
 
 ---
 
 ## 4. Следующие безопасные задачи
 
-1. Добавить product E2E smoke test: Telegram `/start` → `pay:vip_30` → payment event → active subscriber → `/subscription_status`.
+1. Запускать product E2E smoke перед релизом: `POST /system/product-e2e-smoke` проверяет Telegram `/start` → `pay:vip_30` → payment event → active subscriber → `/subscription_status` и по умолчанию откатывает изменения.
 2. Формализовать payment transitions без новой таблицы: `pending -> paid|failed|expired|refunded`.
 3. Добавить provider webhook только после выбора провайдера и секрета подписи.
 4. Доработать существующую payments dashboard как Monetization health, а не создавать новую сущность.
@@ -88,3 +88,20 @@
 5. Путь JSONL вынесен в `TRADE_OUTCOMES_PATH` с default `storage/ml/trade_outcomes.jsonl`, совпадающим с Docker bind mount `./storage/ml:/app/storage/ml`.
 
 Операционное действие после деплоя: выполнить `POST /ml/outcomes/backfill?limit=500`, затем проверить `GET /ml/outcomes/summary` и файл `storage/ml/trade_outcomes.jsonl` на host.
+
+
+---
+
+## 6. Roadmap step: Product E2E smoke для Telegram/payment/subscription
+
+Добавлен dry-run owner endpoint `POST /system/product-e2e-smoke`, который переиспользует реальные production services, а не дублирует логику:
+
+1. `TelegramBotMenuService` обрабатывает `/start`;
+2. callback `pay:vip_30` создает pending checkout;
+3. `BillingService.process_payment_event()` переводит payment в `paid`;
+4. `BillingService.confirm_payment()` выдает/продлевает VIP доступ;
+5. `CustomerNotificationService` ставит customer notification в Telegram delivery queue;
+6. повтор того же provider event проверяет idempotency;
+7. `/subscription_status` проверяет, что пользователь видит активную подписку.
+
+Endpoint по умолчанию делает `rollback` (`persist=false`), поэтому подходит для pre-release smoke без создания реального клиента. Если нужен отладочный persist в dev, передать `{"persist": true}`.

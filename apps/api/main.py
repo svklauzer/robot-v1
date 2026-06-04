@@ -69,6 +69,7 @@ from services.candidate_funnel import CandidateFunnelService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.validation_gates import ValidationGateService
 from services.system_health import SystemHealthService
+from services.product_e2e_smoke import ProductE2ESmokeService
 from services.telegram_bot_menu import TelegramBotMenuService
 from services.audit_log import AuditLogService
 from services.live_safety import LiveSafetyService
@@ -323,6 +324,13 @@ class FundingArbPaperSmokeRequest(BaseModel):
     notional_usdt: float | None = None
     funding_periods: int = 1
     persist: bool = False
+
+
+class ProductE2ESmokeRequest(BaseModel):
+    telegram_user_id: str | None = None
+    plan_code: str = "vip_30"
+    persist: bool = False
+
 
 async def background_robot_loop():
     global robot_loop_enabled
@@ -1803,6 +1811,32 @@ def system_health():
         db.close()
 
 
+
+
+@app.post("/system/product-e2e-smoke", dependencies=[Depends(require_owner_action)])
+def system_product_e2e_smoke(payload: ProductE2ESmokeRequest | None = None):
+    db = SessionLocal()
+    request = payload or ProductE2ESmokeRequest()
+
+    try:
+        result = ProductE2ESmokeService().run(
+            db,
+            telegram_user_id=request.telegram_user_id,
+            plan_code=request.plan_code,
+        )
+        result["persisted"] = bool(request.persist)
+        if request.persist:
+            db.commit()
+        else:
+            db.rollback()
+        return result
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
 
 
 @app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
