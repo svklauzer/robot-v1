@@ -20,6 +20,7 @@ from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
+from services.ml_trade_logger import MLTradeLogger
 
 from models.signal import Signal
 from models.position import Position
@@ -45,6 +46,7 @@ class RobotLoop:
         self.lifecycle = SignalLifecycleManager()
         self.quality = SignalQualityService()
         self.telegram_router = TelegramRouter()
+        self.ml_trade_logger = MLTradeLogger()
 
     async def step(
         self,
@@ -669,8 +671,8 @@ class RobotLoop:
 
         In paper mode Telegram delivery is operationally important, but it must not
         erase a valid published signal: otherwise the lifecycle never gets a
-        chance to open a paper position. In live modes we still keep the DB
-        transaction safe and mark the signal as telegram_failed.
+        chance to open a paper position or write ML outcomes. In live modes we
+        still keep the DB transaction safe and mark the signal as telegram_failed.
         """
         try:
             await self.telegram_router.publish_new_signal(
@@ -688,13 +690,16 @@ class RobotLoop:
                 getattr(settings, "TRADING_MODE", "paper_signal")
             ).lower().startswith("live")
             vip_delivery_required = bool(is_public)
-            delivery_required = live_delivery_required or vip_delivery_required
+            # In paper modes Telegram is delivery/SLA telemetry, not a trading-state
+            # gate. Keep public paper signals active so the lifecycle can open and
+            # close paper positions while Telegram retry worker restores delivery.
+            delivery_required = live_delivery_required
 
             plan_json = sig.plan_json or {}
             plan_json["telegram_delivery"] = {
                 "ok": False,
                 "error": error_text,
-                "mode": "required" if delivery_required else "non_blocking_paper",
+                "mode": "required_live" if delivery_required else "non_blocking_paper",
                 "vip_delivery_required": vip_delivery_required,
                 "live_delivery_required": live_delivery_required,
             }
@@ -706,9 +711,8 @@ class RobotLoop:
                 event_status = "telegram_failed"
                 event_decision = sig.closed_reason
             else:
-                # Private/owner-only paper diagnostics should continue even if an
-                # optional Telegram alert fails. Public/VIP signals are different:
-                # if the full VIP delivery fails, the signal must not become active.
+                # Paper diagnostics and public paper signals continue even if
+                # Telegram delivery fails; delivery retry/SLA is tracked separately.
                 event_status = "warning"
                 event_decision = "telegram_delivery_failed_signal_kept_published"
 

@@ -18,7 +18,7 @@ class MLOutcomeStatsService:
     """
 
     def __init__(self, path: str | Path | None = None, stale_hours: int | None = None):
-        self.file_path = Path(path) if path is not None else Path("storage/ml/trade_outcomes.jsonl")
+        self.file_path = Path(path) if path is not None else Path(getattr(settings, "TRADE_OUTCOMES_PATH", "storage/ml/trade_outcomes.jsonl"))
         self.stale_hours = int(stale_hours or getattr(settings, "ML_OUTCOMES_STALE_HOURS", 72) or 72)
 
     def safe_summary(self) -> dict:

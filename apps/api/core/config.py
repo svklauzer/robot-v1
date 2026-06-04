@@ -110,8 +110,12 @@ class Settings(BaseSettings):
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
+    # ML outcome memory. The relative default resolves under /app in Docker and
+    # under the repo root in local runs, so the compose bind mount writes to
+    # ./storage/ml/trade_outcomes.jsonl on the host.
+    TRADE_OUTCOMES_PATH: str = "storage/ml/trade_outcomes.jsonl"
+    # If trade_outcomes.jsonl exists but has no recent closed trades, readiness
+    # should show that the learning memory is stale.
     ML_OUTCOMES_STALE_HOURS: int = 72
 
     # Paper/live-shadow validation gates before limited live scaling.

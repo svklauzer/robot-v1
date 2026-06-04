@@ -1,40 +1,106 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone
+from core.config import settings
 
 
 class MLTradeLogger:
-    def __init__(self, path: str = "/app/storage/ml/trade_outcomes.jsonl"):
-        p = Path(path)
-        if p.is_absolute() and not p.parent.exists():
-            # Fallback for non-container/local runs where /app is not mounted.
-            p = Path("storage/ml/trade_outcomes.jsonl")
-        self.path = p
+    def __init__(self, path: str | Path | None = None):
+        self.path = self._resolve_path(path)
 
-    def _already_logged(self, signal_id: int) -> bool:
+    def _resolve_path(self, path: str | Path | None) -> Path:
+        configured = path or getattr(settings, "TRADE_OUTCOMES_PATH", "storage/ml/trade_outcomes.jsonl")
+        p = Path(configured)
+
+        # Backward compatibility for older configs that used /app explicitly in
+        # containers while tests/local runs execute from the repository root.
+        if p.is_absolute() and not p.parent.exists() and str(p).startswith("/app/"):
+            return Path(str(p).replace("/app/", "", 1))
+
+        return p
+
+    def _iter_logged_signal_ids(self) -> set[int]:
         if not self.path.exists():
-            return False
+            return set()
 
-        needle = f'"signal_id": {int(signal_id)}'
-
+        ids: set[int] = set()
         try:
             with self.path.open("r", encoding="utf-8") as f:
                 for line in f:
-                    if needle in line:
-                        return True
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    signal_id = payload.get("signal_id") if isinstance(payload, dict) else None
+                    if signal_id is not None:
+                        try:
+                            ids.add(int(signal_id))
+                        except Exception:
+                            continue
         except Exception as e:
-            print(f"[ML TRADE LOGGER DEDUP ERROR] signal_id={signal_id}: {e}")
+            print(f"[ML TRADE LOGGER DEDUP ERROR] path={self.path}: {e}")
 
-        return False
+        return ids
 
-    def log_closed_signal(self, signal):
+    def _already_logged(self, signal_id: int) -> bool:
+        return int(signal_id) in self._iter_logged_signal_ids()
+
+    def log_unlogged_closed_signals(self, db, limit: int = 500) -> dict:
+        from models.signal import Signal
+
+        logged_ids = self._iter_logged_signal_ids()
+        closed = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.asc())
+            .limit(max(int(limit), 1))
+            .all()
+        )
+
+        logged = 0
+        skipped = 0
+        errors: list[dict] = []
+
+        for signal in closed:
+            if int(signal.id) in logged_ids:
+                skipped += 1
+                continue
+            try:
+                result = self.log_closed_signal(signal, known_logged_ids=logged_ids)
+                if result.get("status") == "logged":
+                    logged += 1
+                    logged_ids.add(int(signal.id))
+                else:
+                    skipped += 1
+            except Exception as exc:
+                errors.append({
+                    "signal_id": signal.id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
+        return {
+            "status": "ok" if not errors else "partial_error",
+            "path": str(self.path),
+            "checked": len(closed),
+            "logged": logged,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+    def log_closed_signal(self, signal, known_logged_ids: set[int] | None = None):
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-        if self._already_logged(signal.id):
+        if known_logged_ids is not None:
+            already_logged = int(signal.id) in known_logged_ids
+        else:
+            already_logged = self._already_logged(signal.id)
+
+        if already_logged:
             return {
                 "status": "skipped",
                 "reason": "already_logged",
                 "signal_id": signal.id,
+                "path": str(self.path),
             }
 
         plan = signal.plan_json or {}

@@ -112,7 +112,7 @@ class TelegramBotMenuService:
                 self._main_keyboard(),
             )
 
-        if command == "/status":
+        if command in ["/status", "/subscription_status"]:
             profile.funnel_stage = "active" if subscriber and subscriber.status == "active" else "status_checked"
             return self._response(chat_id, telegram_user_id, command, self._status_text(subscriber), self._main_keyboard())
 
@@ -159,6 +159,7 @@ class TelegramBotMenuService:
             "menu": "/menu",
             "plans": "/plans",
             "status": "/status",
+            "subscription_status": "/subscription_status",
             "help": "/help",
             "support": "/support",
             "pay": "/pay",
@@ -195,7 +196,7 @@ class TelegramBotMenuService:
         return (
             "🤖 Finmt Robot\n\n"
             "Сигналы, уровни входа/стопа/TP, сопровождение и отчеты.\n"
-            "Выберите действие ниже или используйте команды /plans /pay /status /htx /help /support."
+            "Выберите действие ниже или используйте команды /plans /pay /status /subscription_status /htx /help /support."
             f"{status_line}"
         )
 
