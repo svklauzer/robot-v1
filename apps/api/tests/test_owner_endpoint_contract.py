@@ -64,6 +64,7 @@ def test_owner_read_endpoints_require_owner_auth():
         "/system/health",
         "/system/exchange-reconciliation",
         "/system/live-safety",
+        "/system/live-shadow/drift",
         "/system/readiness",
         "/audit/events",
         "/payments",

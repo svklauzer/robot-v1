@@ -341,11 +341,11 @@ class Settings(BaseSettings):
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
 
-    # Publish soft gates — снижены для learning mode
-    PUBLISH_WEAK_VOLUME_MAX_COUNT: int = 5
-    PUBLISH_WEAK_VOLUME_MIN_CONFIRMATION: float = 2.0
-    PUBLISH_MIN_TREND_ALIGNMENT: float = 10.0   # снижен: ADA/SOL имеют 10-30
-    PUBLISH_MIN_ENTRY_TIMING: float = 10.0      # снижен: симметрично
+    # Минимальная защищаемая прибыль для exit-политики, чтобы не фиксировать микро-движения.
+    MIN_PROTECTIVE_EXIT_PCT: float = 1.20
+    MIN_POST_TP1_EXIT_PCT: float = 0.80
+    MIN_PROTECTIVE_NET_USDT: float = 1.50
+    MIN_PROTECTIVE_R_MULT: float = 0.30
 
     # =========================
     # FEES / COST ENGINE
