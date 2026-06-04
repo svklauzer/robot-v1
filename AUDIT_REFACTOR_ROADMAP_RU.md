@@ -1,556 +1,287 @@
-# Полный аудит Robot V1 и дорожная карта рефакторинга к прибыли, live market и Telegram-подпискам
+# Новый аудит и ROADMAP Robot V1
 
-Дата аудита: 28 мая 2026 UTC.
-Основание: статический аудит репозитория, текущая архитектура `api + web + db + redis`, существующая roadmap-документация и последний предоставленный тестовый срез `run_20260528T133826Z`.
+Дата актуализации: **4 июня 2026 UTC**.
+Основание: полный статический проход по репозиторию, существующий `AUDIT_REFACTOR_ROADMAP_RU.md`, `RELEASE_ROADMAP_RU.md`, latest analytics snapshot `analytics_24h/run_20260528T124709Z`, структура API/Web/Telegram/ML/ops, проверка компиляции backend entrypoint и матрица `docs/SYSTEM_AUDIT_IMPLEMENTATION_MATRIX_RU.md`.
 
-> Важно: документ не является финансовой рекомендацией и не гарантирует прибыль. Его цель — превратить текущую систему из исследовательского/paper-прототипа в управляемый продукт с измеримым edge, платным доступом и безопасным go-live процессом.
+> Важно: документ не является финансовой рекомендацией и не обещает прибыль. Его цель — синхронизировать код, продуктовую цель и порядок работ так, чтобы робот можно было безопасно довести от paper/live-shadow к ограниченному production.
 
-## 1. Executive summary
+---
 
-Система уже имеет рабочий каркас торгового продукта: FastAPI backend, Next.js owner UI, Postgres/Redis, торговый цикл, signal lifecycle, analytics endpoints, Telegram routing, список подписчиков и watchdog истечений. Но по состоянию на текущий срез ее нельзя выпускать на живой рынок с обещанием прибыли и нельзя масштабировать продажи без завершения платежного и Telegram UX контура.
+## 1. Цель проекта в текущем виде
 
-Главный вывод: **сначала нужно стабилизировать экономику сигнала и замкнуть продуктовую воронку, затем ограниченно выходить в live с малыми лимитами, и только после доказанного edge включать агрессивную монетизацию**.
+Robot V1 — это не просто генератор сигналов. Целевой продукт состоит из пяти связанных контуров:
 
-### Критические факты из последнего среза
+1. **Trading/intelligence контур** — поиск кандидатов, scoring, quality gates, trade plan, risk/exposure проверки, lifecycle и exit policy.
+2. **Safety/readiness контур** — production blockers, live safety, kill-switch, validation gates, exchange reconciliation, live-shadow drift.
+3. **Telegram контур** — VIP/FREE доставка сигналов, меню бота, delivery log, retry worker и customer notifications.
+4. **Monetization контур** — billing plans, платежи, события, reconciliation, revenue metrics, выдача/продление доступа.
+5. **Owner operations контур** — web dashboard, health/readiness pages, analytics, reports, clients/payments/funding panels и runbook.
 
-- `total_signals=39`, `closed_signals=36`, `expired_signals=3`, `active_signals=0`.
-- `wins=11`, `losses=25`, `winrate=30.56%`.
-- `total_net_pnl_usdt=-24.159891`, `avg_net_pnl_usdt=-0.671108`, `total_costs_usdt=22.053502`.
-- Главный источник убытка: `failed_setup_exit` — 25 из 36 закрытых сделок, `69.44%`, суммарно `-25.05804 USDT`.
-- Позитивное движение было у 28 из 36 сделок, но `positive_then_negative=17`, то есть `47.22%` закрытых сигналов уходили из плюса в минус.
-- `avg_missed_profit_pct=0.793`, `tp2_rate=0.0%`, `trailing_rate=2.78%` — система часто видит движение, но не монетизирует его.
-- `ml_outcomes_summary` в свежем API-срезе деградировал с причиной `ml_summary_python_failed`; значит ML-аналитика не может считаться надежным production-контролем.
-- В API логах есть `TELEGRAM SEND ERROR ... ConnectTimeout`; отправка Telegram сейчас не имеет полноценной очереди, retry/backoff и доставочного SLA.
+Главная продуктовая цель на ближайший этап: **сначала сделать надежный управляемый owner/VIP-сервис с прозрачными рисками и safety gates, затем выходить в live только малым лимитом после доказанного edge**.
 
-## 2. Текущее состояние системы as-is
+---
 
-### 2.1 Инфраструктура
+## 2. Что было найдено при текущем аудите
 
-- Docker Compose поднимает `db`, `redis`, `api`, `web`.
-- Postgres и Redis проброшены наружу, что удобно для разработки, но требует hardening перед production.
-- API использует `.env`; web получает `NEXT_PUBLIC_API_URL`.
-- В репозитории нет полноценного `.gitignore` для `node_modules`, `.next`, кешей и локальных артефактов; в рабочем дереве уже появился `apps/web/node_modules/` как untracked мусор.
+### 2.1 Критичный рассинхрон в `apps/api/main.py` — исправлено
 
-### 2.2 Backend/API
+В `main.py` был большой merge/generation drift: одни и те же FastAPI routes были объявлены по 2–4 раза, а часть тел из одного домена была вставлена под decorators другого домена. Примеры рассинхрона до исправления:
 
-- В `apps/api/main.py` сосредоточено слишком много ответственности: bootstrap, lifecycle app, фоновые циклы, bot endpoints, signals, analytics, subscribers, health, debug/force endpoints и экспериментальные маршруты.
-- Фоновые циклы запускаются в lifespan API-процесса:
-  - `background_robot_loop` каждые 60 секунд;
-  - `background_subscription_loop` раз в 6 часов.
-- Есть отдельные сервисы для trade plan, cost, lifecycle, exit policy, quality, market intelligence, production gate, exposure guard, symbol performance guard.
-- Часть роутеров в `apps/api/routers/*` существует, но фактические endpoints в основном живут в `main.py`; это признак незавершенного разделения слоев.
+- `GET /reports/summary` был продублирован и в одном из дублей возвращал `LiveSafetyService().snapshot(...)`, что относилось к `/system/live-safety`.
+- `POST /reports/send-owner`, `/reports/send-free`, `/reports/send-vip` содержали фрагменты kill-switch/readiness логики.
+- `POST /subscribers` в одном из дублей содержал readiness response вместо создания подписчика.
+- `/telegram/webhook` был объявлен несколько раз.
+- Блоки payments/funding/subscribers/reports повторялись несколько раз и делали часть handlers недостижимыми.
+- `python -m py_compile apps/api/main.py` падал с `SyntaxError`.
+- `.env` расходился с v4 exit-policy/test contract: `MIN_PROTECTIVE_EXIT_PCT=0.60` и `MFE_CAPTURE_PROTECT_SHARE=0.35` ослабляли защиту прибыли относительно кодового default/ожидаемого контракта.
 
-### 2.3 Trading/intelligence контур
+Текущее исправление:
 
-Положительные стороны:
+- удален загрязненный повторный slab routes;
+- оставлены единичные канонические handlers для reports, subscribers, payments, funding, system readiness, Telegram webhook и delivery summary;
+- добавлен regression-test на уникальность `@app.<method>("path")` decorators;
+- `main.py` снова компилируется;
+- legacy `_telegram_menu_text(...)` удален из `main.py`, потому что Telegram UX уже централизован в `TelegramBotMenuService`;
+- tracked `.env` синхронизирован с v4 protective floor: `MIN_PROTECTIVE_EXIT_PCT=1.20`, `MFE_CAPTURE_PROTECT_SHARE=0.40`;
+- удален dead-code drift в `IntelligenceMemory`: недостижимый повтор создания event и module-level копии helper-методов.
 
-- Есть `TradePlanBuilder` с расчетом риска, qty, биржевых precision/limits, net PnL и RR после costs.
-- Есть `CostEngine`, `ExposureGuard`, `ProductionEntryGate`, `AntiDrainGuard`, `SymbolPerformanceGuard`.
-- Есть lifecycle сопровождение и exit policy с защитными выходами.
-- Есть тесты для trade plan, exit policy, signal quality и symbol performance guard.
+### 2.2 Документация и входная точка проекта — исправлено
 
-Проблемы:
+- `README.md` был пустым, из-за чего цель проекта и entrypoints были неочевидны.
+- `.gitignore` содержал повторяющиеся `.env` строки.
 
-- Текущий PnL отрицательный, а корневая причина повторяется: `failed_setup_exit` доминирует в убытках.
-- Много сигналов имеют MFE, но не фиксируют прибыль: проблема не только входов, но и exit/partial/trailing логики.
-- `tp2_rate=0.0%` означает, что текущие цели либо недостижимы для выбранного таймфрейма/волатильности, либо exit policy забирает сделки раньше, либо план уровней не соответствует фактическому движению.
-- Риски live execution пока не закрыты: нет полноценного order reconciliation, idempotency, circuit breaker, exchange outage handling, dry-run/live parity report.
-- Настройки в `core/config.py` частично дублируются (`MIN_NET_PNL_TP1_USDT`, `MIN_NET_PNL_TP2_USDT` объявлены дважды), что повышает риск неверной конфигурации.
+Текущее исправление:
 
-### 2.4 Telegram и подписки
+- добавлен краткий README с назначением проекта, основными entrypoints и предупреждением по release safety;
+- `.gitignore` очищен от повторяющейся `.env` строки.
 
-Что уже есть:
+### 2.3 Статус торговой модели по последнему локальному snapshot
 
-- `TelegramRouter` разделяет VIP full signal и FREE teaser/update.
-- `SignalBroadcaster` умеет отправлять сообщения через Telegram Bot API.
-- Есть модель `Subscriber` со статусом, планом, trial-флагом и датой окончания.
-- Есть CRUD-подобные endpoints `/subscribers`, `/subscribers/{id}/extend`, `/subscribers/{id}/status`, `/subscribers/check-expirations`.
-- В web есть страница клиентов с добавлением, продлением, блокировкой и фильтрами.
+Последний доступный snapshot: `analytics_24h/run_20260528T124709Z`.
 
-Критические gap'ы:
+Ключевые факты из `ml_outcomes_summary.json`:
 
-- Нет Telegram webhook/polling обработчика входящих сообщений пользователя.
-- Нет команд `/start`, `/menu`, `/status`, `/plans`, `/pay`, `/help`, `/support`.
-- Нет inline keyboard/callback меню.
-- Нет payment provider, invoices, payment webhooks, статуса оплаты, idempotency payment events.
-- Нет автоматической выдачи/отзыва доступа в VIP-канал после оплаты/истечения.
-- Watchdog уведомляет owner, но не управляет клиентским жизненным циклом полностью.
-- Telegram send failure сейчас логируется print'ом; нет очереди доставок, retry, dead-letter, метрик доставляемости.
+- `total_rows=90`, `closed_rows=90`;
+- `net_pnl_sum=-96.208143`;
+- `winrate_pct=45.56`;
+- `wins=41`, `losses=49`;
+- топ причина закрытия: `failed_setup_exit=47`;
+- `protective_breakeven_profit_guard=37`;
+- худшие по net PnL символы в этом snapshot: `SOL/USDT`, `AVAX/USDT`, `ETH/USDT`, `XRP/USDT`, `TON/USDT`, `LINK/USDT`, `DOT/USDT`, `BTC/USDT`.
 
-### 2.5 Web/owner UI
+Вывод: readiness/product контуры стали шире, но **торговый edge еще не доказан**. Масштабировать платный трафик с обещанием результата нельзя; допустим только ограниченный soft launch с честным дисклеймером, paper/live-shadow evidence и малыми лимитами.
 
-Положительные стороны:
+---
 
-- Есть операционные страницы: dashboard, analytics, reports, signals, positions, health, clients.
-- Страница клиентов уже закрывает ручной MVP управления подписками.
+## 3. Где мы находимся относительно старого roadmap
 
-Проблемы:
+### Уже сделано / частично закрыто
 
-- UI — owner-first, не customer-facing.
-- Нет платежной панели, invoices, revenue metrics, MRR, churn, cohort, conversion funnel.
-- Нет строгого auth guard на уровне API/UI для всех owner endpoints.
-- Нет production build validation в CI.
-- Next dev лог из среза показал автоправку TypeScript include; нужно зафиксировать стабильную конфигурацию и запретить runtime-mutating surprises.
+- Есть FastAPI + Next.js + Postgres/Redis инфраструктура.
+- Есть Telegram routing, menu service, `/subscription_status` alias, delivery log/worker и owner test endpoints.
+- Есть billing plans, payments, payment events, reconciliation и revenue metrics.
+- Есть subscriptions/watchdog, customer notifications и affiliate/trial контуры.
+- Есть production/readiness gates: validation gates, live safety, kill-switch, live-shadow drift, exchange reconciliation, market connectivity.
+- Есть ML outcome summary и symbol performance tooling.
+- Есть funding arbitrage домен с opportunity/position endpoints и tests.
+- Есть production runbook и большой набор backend tests.
 
-### 2.6 ML/outcomes/analytics
+### Главный текущий шаг
 
-- Есть JSONL outcomes storage и `ml_outcome_stats`.
-- Последний локальный `latest_report_for_chat.md` показывает 90 closed rows, winrate `45.56%`, net PnL `-96.208143`, top reason `failed_setup_exit=47`.
-- Свежий API-срез показал degraded summary из-за `ml_summary_python_failed`.
-- Нужна единая truth-source витрина: paper/live, gross/net, costs, slippage, fees, funding, latency, symbol, setup type, entry/exit reason, MFE/MAE, missed profit.
+Мы находимся **между старой Фазой 0/1 и стабилизационной Фазой 3**:
 
-## 3. Диагноз прибыльности
-
-Текущая проблема не выглядит как «бот вообще не видит рынок». Напротив, `went_positive=28/36` показывает, что рынок часто дает движение в сторону сигнала. Проблема в трех местах:
-
-1. **Качество входа и режим рынка** — слишком много сетапов быстро признаются failed setup.
-2. **Экономика сделки после costs** — комиссии/издержки съедают маленькие защитные плюсы; `protective_breakeven_profit_guard` дает win count, но почти не покрывает минусы.
-3. **Exit capture** — система упускает MFE и почти не доводит до TP2/trailing; текущий protective guard часто превращает потенциально хорошие сделки в микроплюс.
-
-### Profit-first метрики, которые должны стать release gates
-
-Перед live и продажами фиксируем минимальные критерии:
+- продуктовый и payment контур уже появился;
+- Telegram UX уже не нулевой;
+- safety/readiness контур уже появился;
+- но кодовый drift в `main.py` показывал, что перед любыми новыми фичами нужен **refactor freeze + route/domain synchronization**;
+- торговая модель все еще требует улучшения `failed_setup_exit`, MFE capture и symbol policy.
 
-- Paper rolling window: не меньше 200 закрытых сигналов или 30 календарных дней.
-- Net PnL after costs: положительный минимум 14 из последних 21 дней или positive expectancy на выборке.
-- Max daily loss: не выше заранее заданного лимита, hard stop в коде.
-- `failed_setup_exit` share: ниже 35% закрытых сигналов.
-- `positive_then_negative_rate`: ниже 25%.
-- `tp2_rate + meaningful trailing_rate`: не ниже 15%.
-- Средний net win должен быть минимум в 1.3 раза выше среднего net loss или winrate должен компенсировать payout ratio.
-- Все Telegram VIP deliveries: SLA не ниже 99% с retry; недоставленный сигнал не считается активным клиентским сигналом.
-
-## 4. Целевая архитектура refactor-to-profit
-
-### 4.1 Разделение доменов backend
-
-Разнести `apps/api/main.py` на модули:
-
-```text
-apps/api/
-  app.py / main.py                 # только создание FastAPI, middleware, lifespan
-  routers/
-    bot.py
-    signals.py
-    positions.py
-    analytics.py
-    subscribers.py
-    payments.py
-    telegram_webhook.py
-    system.py
-  services/
-    trading/
-    telegram/
-    billing/
-    analytics/
-    risk/
-  workers/
-    robot_loop.py
-    subscription_loop.py
-    telegram_delivery_worker.py
-    payment_reconciliation_worker.py
-  models/
-    subscriber.py
-    payment.py
-    telegram_delivery.py
-    signal.py
-```
-
-Цель: убрать god-file, сделать тестируемые сервисы, отделить trading от billing и Telegram UX.
-
-### 4.2 Событийная модель
-
-Ввести таблицы/очереди:
-
-- `telegram_deliveries`: сообщение, chat_id, type, status, attempts, last_error, next_retry_at.
-- `payment_events`: provider, provider_event_id, user_id, amount, currency, status, raw_payload, processed_at.
-- `subscriptions`: можно оставить `subscribers`, но добавить payment linkage, plan_id, source, auto_renew, cancel_reason.
-- `audit_events`: admin actions, bot start/stop, config changes, manual subscriber changes.
-- `trade_runs` / `signal_decisions`: все rejected/approved с причинами и score snapshot.
-
-### 4.3 Live market safety envelope
-
-Для выхода на live нужен отдельный режим `live_shadow` и затем `live_limited`:
-
-- `paper_signal` — текущая публикация/наблюдение.
-- `live_shadow` — отправляем ордера в симулятор с реальными bid/ask/slippage snapshots.
-- `live_limited` — реальные ордера на малый капитал, hard caps.
-- `live_scaled` — масштабирование только после подтвержденных метрик.
-
-Hard controls:
-
-- One-click kill switch и API endpoint stop с audit log.
-- Daily loss circuit breaker.
-- Exchange connectivity breaker.
-- Telegram delivery breaker: если VIP publish не доставлен, сигнал не активируется.
-- Position/order reconciliation каждые N секунд.
-- Idempotent client order id.
-- Запрет live, если config не прошел validation.
-
-## 5. Roadmap по фазам
-
-## Фаза 0 — 48 часов: Freeze, hygiene, контрольная база
-
-Цель: остановить расползание хаоса и получить воспроизводимую baseline-картину.
-
-**Работы:**
-
-1. Зафиксировать `.gitignore`: `node_modules`, `.next`, кеши, локальные analytics run folders при необходимости.
-2. Описать env profiles: `dev`, `paper`, `live_shadow`, `live_limited`, `production`.
-3. Ввести release checklist: tests, docker compose health, API smoke, Telegram test, analytics summary.
-4. Разделить «экспериментальные force/debug endpoints» и production endpoints; закрыть их owner-auth или feature flag.
-5. Зафиксировать текущие метрики из `run_20260528T133826Z` как baseline.
-
-**Exit criteria:**
-
-- `pytest` проходит.
-- `next build` проходит.
-- Owner health показывает API/db/market/telegram/subscribers.
-- Новый analytics report генерируется без `ml_summary_python_failed`.
-
-## Фаза 1 — Неделя 1: Profit instrumentation и analytics truth-source
-
-Цель: понять, где именно теряются деньги, до изменения стратегии.
-
-**Работы:**
-
-1. Единая таблица/витрина outcomes:
-   - symbol, side, timeframe, setup reason, grade, confidence;
-   - gross PnL, fees, slippage, funding, net PnL;
-   - MFE/MAE, missed profit, time in trade;
-   - entry reason, exit reason, lifecycle states.
-2. Добавить `decision_events` для всех rejected/approved кандидатов.
-3. Сделать report `failed_setup_exit root cause`:
-   - по символам;
-   - по side;
-   - по grade;
-   - по volatility regime;
-   - по времени суток;
-   - по RR bucket.
-4. Добавить dashboard widgets:
-   - expectancy;
-   - payout ratio;
-   - costs share;
-   - missed profit;
-   - failed setup share;
-   - delivery SLA.
-5. Исправить `ml_summary_python_failed`: тестируемый CLI/endpoint с fallback и ошибкой в health.
-
-**Exit criteria:**
-
-- Любая закрытая сделка объяснима через `entry_decision -> lifecycle -> exit_decision -> net outcome`.
-- Owner видит top-5 источников убытка за сутки/неделю.
-- Нет degraded ML summary в штатном отчете.
-
-## Фаза 2 — Неделя 1-2: Trading edge stabilization
-
-Цель: перестать терять на повторяемых failed setup и начать забирать MFE.
-
-**Работы:**
-
-1. Ужесточить entry gates для символов с отрицательной статистикой:
-   - временно заблокировать худшие symbols из report: SOL, AVAX, ETH, XRP, TON, LINK, DOT при продолжении отрицательного expectancy;
-   - включить cooldown по `failed_setup_exit` не только streak, но и rolling net PnL.
-2. Пересобрать exit policy:
-   - partial take profit при MFE `0.30-0.50%`, если net after costs положительный;
-   - adaptive trailing не позже после MFE `0.60-0.80%`;
-   - запрет микроплюса, если он статистически не покрывает средний failed setup loss;
-   - отдельная логика для scalp/trend regimes.
-3. Пересчитать TP уровни под фактическую волатильность:
-   - TP1 должен быть достижимым с учетом ATR и fees;
-   - TP2 не должен быть фиктивной целью, если `tp2_rate=0%`.
-4. Добавить per-symbol policy profiles:
-   - `tradeable`, `watch_only`, `blocked`;
-   - min confidence/RR per symbol;
-   - side restrictions.
-5. Backtest/replay на JSONL outcomes и новых правилах.
-
-**Exit criteria:**
-
-- `failed_setup_exit` ниже 35% на rolling sample.
-- `positive_then_negative_rate` ниже 25%.
-- Net PnL rolling window положительный после costs.
-- Документирован go/no-go report по каждому символу.
-
-## Фаза 3 — Неделя 2: Telegram delivery reliability
-
-Цель: VIP-сигнал должен доставляться надежно; иначе продукт нельзя продавать.
-
-**Работы:**
-
-1. Вынести отправку из прямого `httpx.post` в очередь `telegram_deliveries`.
-2. Добавить retry/backoff, dead-letter, last_error, attempts.
-3. Ввести статусы:
-   - `queued`, `sent`, `failed_retryable`, `failed_final`.
-4. Для VIP full signal сделать transactional flow:
-   - signal created as `queued`;
-   - delivery success -> `published`;
-   - delivery final fail -> `telegram_failed` и owner alert.
-5. Добавить health metric `telegram_delivery_sla_24h`.
-6. Добавить тесты на required/optional delivery behavior.
-
-**Exit criteria:**
-
-- VIP delivery failure не теряется print'ом.
-- Любой Telegram timeout виден в owner UI.
-- Повторная отправка идемпотентна.
-
-## Фаза 4 — Неделя 2-3: Telegram bot menu и customer UX
-
-Цель: пользователь сам проходит путь от `/start` до оплаты/статуса/поддержки.
-
-**Работы:**
-
-1. Добавить Telegram webhook endpoint `/telegram/webhook`.
-2. Поддержать commands:
-   - `/start` — welcome + value proposition + кнопки;
-   - `/menu` — главное меню;
-   - `/plans` — тарифы;
-   - `/pay` — создание invoice/payment link;
-   - `/status` — статус подписки и дата окончания;
-   - `/help` — FAQ и disclaimer;
-   - `/support` — контакт поддержки.
-3. Inline keyboard сценарии:
-   - `trial_start`;
-   - `buy_vip_30d`;
-   - `buy_vip_90d`;
-   - `renew`;
-   - `faq_risks`;
-   - `contact_support`.
-4. Хранить Telegram user profile при первом контакте.
-5. Добавить customer messages templates:
-   - trial activated;
-   - payment pending;
-   - payment success;
-   - expires in 3 days/1 day;
-   - expired;
-   - access revoked.
-
-**Exit criteria:**
-
-- Новый пользователь может без owner-ручного действия узнать тариф, получить ссылку на оплату и проверить статус.
-- Owner UI показывает источник пользователя и funnel stage.
-
-## Фаза 5 — Неделя 3: Payments и подписки end-to-end
-
-Цель: подписка активируется оплатой, а не ручным добавлением.
-
-**Работы:**
-
-1. Выбрать payment provider под юрисдикцию и аудит:
-   - для MVP можно начать с crypto/manual confirmed, но production лучше делать через provider с webhook;
-   - любые manual payments должны иметь audit trail.
-2. Добавить модели:
-   - `Plan`: code, price, duration_days, is_active;
-   - `Payment`: user/subscriber, provider, amount, currency, status;
-   - `PaymentEvent`: idempotent webhook events.
-3. Endpoints:
-   - `POST /payments/checkout`;
-   - `POST /payments/webhook/{provider}`;
-   - `GET /payments` owner;
-   - `POST /payments/{id}/manual-confirm` owner-only.
-4. Subscription activation flow:
-   - payment success -> subscriber active/extended;
-   - failed/canceled -> no access;
-   - refund/chargeback -> suspend/revoke.
-5. VIP access automation:
-   - generate invite link or approve join request;
-   - revoke/ban on expiry if policy allows.
-6. Revenue dashboard:
-   - MRR;
-   - cash collected;
-   - active paid subscribers;
-   - trials;
-   - conversion trial-to-paid;
-   - churn.
-
-**Exit criteria:**
-
-- Оплата автоматически продлевает подписку.
-- Повтор webhook не продлевает дважды.
-- Owner видит revenue и ошибки платежей.
-
-## Фаза 6 — Неделя 3-4: Refactor API structure и security hardening
-
-Цель: подготовить код к production maintenance.
-
-**Работы:**
-
-1. Разбить `main.py` на routers.
-2. Включить auth dependencies для owner endpoints.
-3. Убрать debug/force endpoints из production или закрыть `APP_ENV != production`.
-4. Добавить Alembic migrations вместо `Base.metadata.create_all` как production path.
-5. Привести config к single source of truth:
-   - удалить дубли;
-   - добавить typed profiles;
-   - добавить config validation at startup.
-6. Перевести `print`-логи на structured logging.
-7. Добавить request ids и audit logs.
-
-**Exit criteria:**
-
-- Production API не содержит открытых force/debug операций.
-- Все owner actions авторизованы и аудируются.
-- Миграции воспроизводимо поднимают схему.
-
-## Фаза 7 — Неделя 4-5: Live shadow и limited live
-
-Цель: проверить соответствие paper/live без риска большого капитала.
-
-**Live shadow:**
-
-- Реальные bid/ask snapshots.
-- Симуляция исполнения по worst-case slippage.
-- Сравнение planned vs executable levels.
-- Отчет drift между paper и live-shadow.
-
-**Limited live:**
-
-- Только top symbols с положительным expectancy.
-- Риск на сделку: минимальный, например 0.05-0.10% equity.
-- Max open positions: 1.
-- Max daily loss: жестко 0.5-1.0%.
-- Trading hours/regime filters.
-- Owner manual approval на первые N сделок.
-
-**Exit criteria:**
-
-- 50-100 live_shadow сделок без критических расхождений.
-- 20-30 limited_live сделок без execution incidents.
-- Live net after costs не хуже paper на заранее допустимый drift.
-
-## Фаза 8 — Неделя 5-6: Go-to-market и монетизация
-
-Цель: продавать не «гарантированную прибыль», а прозрачный сервис сигналов с контролируемой статистикой и рисками.
-
-**Работы:**
-
-1. Product packaging:
-   - FREE: teaser + delayed updates + education;
-   - VIP: full levels + lifecycle updates + daily report;
-   - PRO/Owner later: dashboard/advanced analytics.
-2. Legal/marketing:
-   - risk disclaimer;
-   - no guaranteed returns;
-   - terms of service;
-   - refund policy;
-   - privacy policy.
-3. Funnel:
-   - Telegram free channel -> bot `/start` -> trial -> payment -> VIP invite.
-   - HTX affiliate hook: пользователь переходит по `HTX_AFFILIATE_LINK`, регистрируется в HTX и получает бесплатный VIP на `AFFILIATE_FREE_VIP_DAYS` дней с invite из `VIP_INVITE_LINK` (MVP: self-claim в боте, later: verification webhook/provider report).
-4. Retention:
-   - daily/weekly transparent reports;
-   - explain closed trades;
-   - show risk management;
-   - renewal reminders.
-5. Pricing tests:
-   - monthly VIP;
-   - quarterly discount;
-   - limited founder price.
-
-**Exit criteria:**
-
-- Клиентский путь полностью автоматизирован.
-- Owner видит funnel/revenue metrics.
-- Торговая статистика не противоречит публичному positioning.
-
-## 6. Приоритетный backlog
-
-### P0 — нельзя идти в live/продажи без этого
-
-1. Исправить analytics/ML degraded report.
-2. Добавить Telegram delivery queue + retry + status.
-3. Ввести payment/subscription domain models.
-4. Добавить Telegram webhook/menu.
-5. Закрыть force/debug endpoints и owner operations auth.
-6. Снизить `failed_setup_exit` и `positive_then_negative` через gates/exit tuning.
-7. Ввести live kill switch и daily loss circuit breaker.
-
-### P1 — нужно для устойчивой монетизации
-
-1. Revenue dashboard.
-2. VIP access automation.
-3. HTX affiliate free-VIP funnel: `/htx` в Telegram, tracking stage, trial activation на 30 дней, анти-дублирование и последующая верификация регистрации.
-3. Payment webhook idempotency.
-4. Payment reconciliation worker: auto-expire stale pending checkouts, audit event, `/payments/reconcile`.
-5. Per-symbol profitability guard + owner report (`/analytics/symbol-performance`) для block/reduce/ok решений по каждому символу.
-5. MFE capture analytics and adaptive exit experiments (`adaptive_mfe_capture` before TP1, configurable thresholds).
-6. Structured logs + health checks (JSON events for background loops and Telegram delivery, secret redaction).
-7. Market connectivity breaker: latency/spread/source checks in health/readiness before live.
-8. HTX funding-rate arbitrage: single HTX ccxt client, spot-long/perp-short hedge, FundingMonitorService every 8h, HedgeBuilder, ArbExitEngine, P&L DB log; gated by ENABLE_FUNDING_ARB + ENABLE_FUTURES.
-9. Alembic migrations for new billing/telegram/audit tables (baseline runtime + operational domains migration added; production create_all disabled by schema bootstrap gate).
-
-### P2 — масштабирование
-
-1. A/B тарифы, trial duration и affiliate free-VIP офферы.
-2. Referral codes.
-3. Cohort analytics.
-4. Multi-provider payments.
-5. Multi-exchange architecture.
-6. Backtest/replay framework.
-7. Customer web portal.
-
-## 7. Рекомендуемый порядок рефакторинга файлов
-
-1. `apps/api/main.py` -> routers:
-   - `routers/subscribers.py`, `routers/system.py`, `routers/bot.py`, `routers/signals.py`, `routers/analytics.py`, `routers/debug.py`.
-2. Новый billing domain:
-   - `models/payment.py`, `models/plan.py`, `services/billing/*`, `routers/payments.py`.
-3. Новый Telegram UX domain:
-   - `models/telegram_delivery.py`, `services/telegram/*`, `routers/telegram_webhook.py`, `workers/telegram_delivery_worker.py`.
-4. Trading safety:
-   - `services/execution_engine.py`, `services/recovery_engine.py`, `services/exposure_guard.py`, `services/signal_lifecycle.py`, `services/exit_policy.py`.
-5. Analytics truth-source:
-   - `services/analytics_service.py`, `services/ml_outcome_stats.py`, `models/analytics.py`.
-6. Web UI:
-   - `apps/web/app/clients/page.tsx` -> add payments/revenue/funnel;
-   - `apps/web/app/health/page.tsx` -> delivery/payment/live safety/funding-arb metrics;
-   - new `apps/web/app/payments/page.tsx`;
-   - new `apps/web/app/funding/page.tsx` -> HTX funding scan, candidates, paper hedge open, exit evaluation and P&L positions.
-
-## 8. Acceptance checklist перед публичным запуском
-
-### Trading
-
-- [ ] Rolling net PnL positive after all costs (tracked by `ValidationGateService` / `/analytics/validation-gates`).
-- [ ] `failed_setup_exit < 35%` (tracked by validation gates and readiness blockers).
-- [ ] `positive_then_negative_rate < 25%` (tracked by lifecycle validation gate).
-- [x] Adaptive MFE capture experiment is enabled/configurable and measured by close reason (`adaptive_mfe_capture` in exit policy, ML labels and analytics).
-- [x] Per-symbol profitability guard виден owner-у и блокирует/снижает риск по убыточным символам (analytics page + `SymbolPerformanceGuard` adjusts TradePlan risk).
-- [ ] At least 200 closed paper/live_shadow outcomes (sample count is surfaced in validation gates).
-- [x] Live kill switch tested (`kill_switch_smoke` dry-run enables, blocks, stops running bot, disables, rolls back and is exposed in owner Health UI).
-- [x] Exchange reconnect/reconciliation tested (`ExchangeReconciliationService` dry-run checks HTX reconnect, open orders and live positions; readiness/UI surface blockers).
-- [x] Market connectivity breaker blocks live on market snapshot errors/mock source/high spread (`MarketConnectivityService` covers snapshot failures, mock live source and spread thresholds).
-- [x] HTX funding-rate arbitrage is paper-tested: deterministic paper smoke creates candidate -> opens hedge -> logs funding/P&L -> closes on compression (`paper_cycle_smoke` + owner endpoint/UI).
-- [x] Owner UI exposes HTX funding arb: readiness loop status, scan button, candidate table, paper hedge open, exit evaluation, paper smoke and position P&L.
-
-### Telegram
-
-- [x] `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/help`, `/support` implemented (TelegramBotMenuService command/callback contract covered by tests).
-- [x] VIP signal delivery queue with retries (`TelegramDeliveryLog` + `TelegramDeliveryWorker` retry `vip_full_signal`).
-- [x] Delivery SLA dashboard (health/analytics owner UI shows total and VIP SLA/queue metrics).
-- [x] Undelivered VIP full signal does not become active (`telegram_failed` gate on public/VIP publish failure).
-
-### Payments/subscriptions
-
-- [x] Checkout creates payment (`BillingService.create_checkout` is covered by billing tests).
-- [x] Stale pending checkout expires automatically and is audit-visible (`PaymentReconciliationService` records `PaymentEvent` + `AuditEvent`).
-- [x] Webhook is idempotent (`BillingService.process_payment_event` deduplicates provider event IDs).
-- [x] Success activates/extends subscription (`confirm_payment` activates/extends `Subscriber`).
-- [x] Expiry revokes or flags VIP access (`SubscriptionWatchdog` sets `expired` and records marker).
-- [x] Revenue dashboard exists (`/payments` owner page consumes `/payments/revenue`).
-- [x] HTX affiliate funnel tracked: link click -> registration claim/verification -> 30d VIP -> paid conversion (`TelegramProfile.funnel_stage` reaches `affiliate_paid_conversion`).
-
-### Security/ops
-
-- [x] Owner endpoints authenticated (`require_owner_action` protects mutating owner/admin routes; Telegram webhook remains public).
-- [x] Debug endpoints disabled in production (`require_non_production_debug` blocks `/debug/*` and force/test robot endpoints).
-- [x] Secrets not logged (`sanitize_log_value` redacts Telegram/owner/HTX/JWT/password values; HTX client retries use structured sanitized logs).
-- [x] Background loops emit structured JSON logs with Telegram/owner secrets redacted (`log_event` for robot/subscription/telegram/payment/funding loops).
-- [x] Alembic migrations in place for operational domains; production startup skips `Base.metadata.create_all` and requires migrations (`DB_AUTO_CREATE_SCHEMA=false` + `api-migrate`).
-- [x] Docker production profile documented (`docker-compose.prod.yml`, `docs/PRODUCTION_RUNBOOK_RU.md`).
-- [x] Backup/restore tested via scripted smoke path (`scripts/db_backup_restore_smoke.sh --dry-run` contract + runbook).
-
-## 9. Финальная рекомендация
-
-Не запускать живой рынок и платный VIP как «прибыльный продукт» прямо сейчас. Запустить можно только контролируемую beta: FREE/closed VIP с честным статусом paper/live-shadow, сбором статистики и ручной модерацией. Основной фокус ближайших 2-3 недель — **снизить системный drain, автоматизировать Telegram/payment funnel и обеспечить доставку сигналов**. После прохождения profit gates можно переходить к limited live и платному масштабированию.
+### Что предстоит
+
+1. Закрепить отсутствие рассинхрона tests/CI.
+2. Разнести `main.py` на routers/domains без изменения контрактов.
+3. Доказать устойчивость Telegram/payment/subscription E2E.
+4. Уменьшить торговые причины убытка и зафиксировать live-shadow evidence.
+5. Только после этого проводить soft launch.
+
+---
+
+## 4. Новый ROADMAP
+
+## Фаза A — 24–48 часов: Code sync freeze и защита от повторного drift
+
+**Цель:** остановить рассинхрон между доменами и сделать API entrypoint предсказуемым.
+
+**Задачи:**
+
+1. Держать `main.py` компилируемым в каждом PR.
+2. Проверять уникальность FastAPI routes тестом.
+3. Запретить ручное копирование больших route blocks без теста контрактов.
+4. Составить route inventory: `bot`, `signals`, `analytics`, `reports`, `subscribers`, `payments`, `funding-arb`, `system`, `telegram`, `trade`, `intelligence`.
+5. Для каждого route указать владельца домена и целевой router module.
+
+**Критерий выхода:** `py_compile`, route uniqueness test и owner endpoint contract проходят; в `main.py` нет повторных decorators одного метода/пути.
+
+---
+
+## Фаза B — 2–4 дня: Разнос `main.py` по routers без изменения API контрактов
+
+**Цель:** убрать главный источник будущего рассинхрона — монолитный `main.py`.
+
+**Порядок выноса:**
+
+1. `reports` → `apps/api/routers/reports.py`.
+2. `subscribers` + Telegram delivery summary → `apps/api/routers/subscribers.py` / `telegram.py`.
+3. `payments` → `apps/api/routers/payments.py`.
+4. `funding-arb` → `apps/api/routers/funding.py`.
+5. `system` readiness/live-safety/kill-switch → `apps/api/routers/system.py`.
+6. `trade` debug/build-plan/cost-preview → `apps/api/routers/trade.py`.
+7. `intelligence` scan/analyze/events/funnel → `apps/api/routers/intelligence.py`.
+
+**Правила:**
+
+- переносить по одному домену за PR;
+- сохранять paths, methods, dependencies и response shape;
+- после каждого переноса запускать contract tests;
+- `main.py` должен остаться bootstrap/lifespan/middleware/include_router точкой.
+
+**Критерий выхода:** `main.py` < 900 строк, все route handlers живут в routers/services, контракт owner endpoints не изменен.
+
+---
+
+## Фаза C — 3–5 дней: Product E2E hardening Telegram + payments + subscriptions
+
+**Цель:** пользователь без ручного вмешательства проходит путь Telegram → тариф → pending payment → подтверждение/сверка → VIP access → reminder/renewal.
+
+**Задачи:**
+
+1. Проверить `/telegram/webhook` на команды `/start`, `/menu`, `/plans`, `/pay`, `/status`, `/subscription_status`, `/help`, `/support`.
+2. Зафиксировать сценарии callback keyboard в tests.
+3. Добавить E2E-smoke для создания payment event и выдачи/продления subscription.
+4. Проверить idempotency ключи платежных событий.
+5. Проверить payment reconciliation на stale/pending cases.
+6. Проверить customer notifications: success/fail/renewal/reminder/expiration.
+7. В UI явно показать payment health и Telegram delivery SLA.
+
+**Критерий выхода:** один automated smoke покрывает путь от Telegram user до активной VIP подписки.
+
+---
+
+## Фаза D — 5–10 дней: Trading quality stabilization
+
+**Цель:** уменьшить системный убыток и доказать, что робот умеет не только находить движение, но и удерживать/фиксировать прибыль.
+
+**Задачи:**
+
+1. Разобрать `failed_setup_exit` по символам, таймингам, spread/latency и режимам рынка.
+2. Ужесточить invalidate для setups, которые не подтверждаются быстро.
+3. Усилить MFE capture: partial profit, adaptive trailing, breakeven shift, max giveback.
+4. Включить symbol policy guard по net PnL/failed setup share, а не только по общему count.
+5. Добавить replay comparison старых и новых правил через `symbol_policy_replay`.
+6. Ввести daily owner report: `net_pnl`, `failed_setup_exit_share`, `positive_then_negative_share`, `mfe_capture`, `telegram_failed`, `readiness_status`.
+
+**Критерий выхода:** на paper/live-shadow окне минимум 7 дней видно снижение `failed_setup_exit` share и улучшение net PnL trend; readiness gates не блокируют soft launch по качественным причинам.
+
+---
+
+## Фаза E — 3–5 дней: Ops/CI/release discipline
+
+**Цель:** сделать так, чтобы проект можно было сопровождать без ручного угадывания состояния.
+
+**Задачи:**
+
+1. Добавить минимальный CI набор: backend compile/tests, frontend build/typecheck, duplicate route guard.
+2. Сделать health/readiness release checklist обязательным перед deploy.
+3. Документировать rollback по API/Web/DB migration.
+4. Добавить backup/restore smoke в release checklist.
+5. Зафиксировать env policy: какие переменные mandatory для paper, live-shadow и live.
+6. Разделить debug endpoints и production blockers.
+
+**Критерий выхода:** release можно повторить по runbook; debug endpoints не доступны в production; go/no-go решение основано на `/system/readiness`.
+
+---
+
+## Фаза F — 1–2 недели: Controlled soft launch
+
+**Цель:** проверить продуктовую и операционную нагрузку без агрессивных обещаний прибыли.
+
+**Ограничения:**
+
+- небольшая аудитория;
+- честный risk disclaimer;
+- paper/live-shadow evidence вместо обещаний;
+- дневной лимит VIP сигналов;
+- kill-switch и manual override доступны owner.
+
+**KPI:**
+
+- Telegram delivery success ≥ 99%;
+- payment event processing/reconciliation success ≥ 99.5%;
+- D1/D7 retention по Telegram users;
+- refund/support load под контролем;
+- торговые quality metrics не деградируют относительно baseline.
+
+**Критерий выхода:** можно расширять аудиторию только если одновременно выполняются product, ops и trading gates.
+
+---
+
+## 5. Backlog MoSCoW
+
+### Must
+
+- Закрепить compile + duplicate route tests.
+- Разнести `main.py` по routers.
+- E2E smoke Telegram/payment/subscription.
+- Daily trading quality report.
+- `failed_setup_exit` diagnostics + first policy fix.
+- Readiness gate как обязательный release blocker.
+
+### Should
+
+- UI блоки для route/domain health и payment/Telegram SLA.
+- Replay-based policy comparison перед изменением live rules.
+- Более строгие symbol deny/weight rules.
+- Alerting по деградации ML outcomes и stale logs.
+
+### Could
+
+- CRM-lite для support/refund/manual extension.
+- Referral/affiliate UX после стабилизации retention.
+- AI-summary сделок для клиентов.
+- Публичная landing page с прозрачными risk disclosures.
+
+---
+
+## 6. Go/No-Go критерии для live/marketing
+
+**No-Go, если:**
+
+- есть duplicate route decorators или `main.py` не компилируется;
+- `/system/readiness` возвращает blockers;
+- Telegram delivery failures не объяснены и не восстановлены;
+- платежи требуют ручного вмешательства без reconciliation;
+- `failed_setup_exit` остается доминирующей причиной убытка без mitigation;
+- нет свежего ML outcomes summary или он stale/degraded.
+
+**Go только для soft launch, если:**
+
+- API/Web/Telegram/payment контуры проходят smoke;
+- owner может остановить live через kill-switch;
+- есть 7-дневный paper/live-shadow отчет;
+- risk disclosure явно показан пользователю;
+- лимиты и symbol policy включены.
+
+---
+
+## 7. Ближайшие 10 задач
+
+1. Прогнать полный backend test suite и исправить failures после очистки `main.py`.
+2. Добавить route inventory doc или auto-report.
+3. Начать вынос `reports` routes из `main.py`.
+4. Затем вынести `payments` routes и покрыть contract tests.
+5. Затем вынести `subscribers` + Telegram delivery summary.
+6. Сделать Telegram/payment/subscription E2E smoke.
+7. Сформировать daily trading quality report по latest outcomes.
+8. Реализовать первую policy-правку против `failed_setup_exit`.
+9. Прогнать replay на старом outcomes snapshot.
+10. Обновить runbook go/no-go с новым readiness checklist.

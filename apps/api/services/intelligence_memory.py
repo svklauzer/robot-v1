@@ -129,24 +129,6 @@ class IntelligenceMemory:
 
         return event
 
-        setup_quality = item.get("setup_quality") or {}
-
-        event = IntelligenceEvent(
-            symbol=symbol,
-            status=status,
-            decision=decision,
-            action=item.get("action"),
-            regime=item.get("regime"),
-            radar_state=item.get("radar_state"),
-            confidence_hint=item.get("confidence_hint"),
-            setup_score=setup_quality.get("final_score") if isinstance(setup_quality, dict) else None,
-            payload_json=item,
-        )
-
-        db.add(event)
-        db.flush()
-
-        return event
 
     def latest_events(self, db: Session, limit: int = 100):
         return (
@@ -384,35 +366,3 @@ class IntelligenceMemory:
                 return True, "strong_reentry_override_short"
 
         return False, None
-
-def _is_noisy_decision(self, decision: str | None) -> bool:
-    return decision in [
-        "candidate_but_wait_confirmation",
-        "setup_quality_too_low",
-        "quality_grade_too_low",
-        "skip_no_trade_conditions",
-    ]
-
-def _has_recent_same_noisy_event(
-    self,
-    db: Session,
-    symbol: str,
-    status: str,
-    decision: str | None,
-    minutes: int = 15,
-) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-
-    recent = (
-        db.query(IntelligenceEvent)
-        .filter(
-            IntelligenceEvent.symbol == symbol,
-            IntelligenceEvent.status == status,
-            IntelligenceEvent.decision == decision,
-            IntelligenceEvent.created_at >= cutoff,
-        )
-        .order_by(IntelligenceEvent.id.desc())
-        .first()
-    )
-
-    return recent is not None
