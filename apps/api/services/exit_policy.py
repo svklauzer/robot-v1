@@ -225,8 +225,7 @@ class ExitPolicyService:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
-                exit=True,
-                reason="protective_breakeven_profit_guard",
+                exit=True, reason="protective_breakeven_profit_guard",
                 exit_price=round(exit_price, 8),
                 note=(
                     f"mfe={round(mfe, 4)} current={round(current_pct, 4)} "
@@ -241,8 +240,7 @@ class ExitPolicyService:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
-                exit=True,
-                reason="protective_trailing_stop",
+                exit=True, reason="protective_trailing_stop",
                 exit_price=round(exit_price, 8),
                 note=(
                     f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
@@ -257,8 +255,7 @@ class ExitPolicyService:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
-                exit=True,
-                reason="adaptive_trailing_stop",
+                exit=True, reason="adaptive_trailing_stop",
                 exit_price=round(exit_price, 8),
                 note=(
                     f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
@@ -267,6 +264,10 @@ class ExitPolicyService:
             )
 
         return ExitDecision(exit=False)
+
+    # ------------------------------------------------------------------
+    # Основной метод: после TP1
+    # ------------------------------------------------------------------
 
     def after_tp1_decision(
         self,
@@ -301,8 +302,7 @@ class ExitPolicyService:
 
         if tp2_pct > 0 and current_pct >= tp2_pct * 0.92:
             return ExitDecision(
-                exit=True,
-                reason="tp2_reached",
+                exit=True, reason="tp2_reached",
                 exit_price=round(float(tp2_price), 8),
                 note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f}",
             )

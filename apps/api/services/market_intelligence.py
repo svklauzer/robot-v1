@@ -411,9 +411,12 @@ class MarketIntelligenceEngine:
         stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
         min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
 
+        # FIX: стоп ТОЛЬКО по ATR, не min(support, atr, pct).
+        # support = low.tail(50) на 1h = 2-дневный минимум (-4-6%).
+        # Использовать его как стоп означает ждать -4-6% убытка.
         atr_stop = last - atr * stop_atr_mult
         pct_stop = last * (1 - min_stop_pct)
-        stop_price = round(min(support, atr_stop, pct_stop), 4)
+        stop_price = round(min(atr_stop, pct_stop), 4)  # support убран намеренно
 
         risk = max(last - stop_price, atr)
 
@@ -424,10 +427,9 @@ class MarketIntelligenceEngine:
         tp1 = max(tp1, round(last * 1.006, 4))
         tp2 = max(tp2, round(last * 1.012, 4))
 
-        # Если resistance рядом, можно учитывать его как цель, но не занижать TP.
-        if resistance > last:
-            tp1 = max(tp1, round(resistance, 4))
-            tp2 = max(tp2, round(resistance + risk * 0.8, 4))
+        # FIX: убрана привязка tp1/tp2 к resistance.tail(50) на 1h.
+        # resistance за 50 часов = 2-дневный максимум (+7-15% от цены).
+        # TP на таком расстоянии не достигаются за время сигнала.
 
         return {
             "entry_zone": [entry_from, entry_to],
@@ -483,9 +485,14 @@ class MarketIntelligenceEngine:
         stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
         min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
 
+        # FIX: стоп ТОЛЬКО по ATR, не max(resistance, atr, pct).
+        # resistance = high.tail(50) на 1h = 2-дневный максимум (+4-6%).
+        # Это не стоп — это структурный уровень. Использовать его как стоп
+        # означает ждать -4-6% убытка прежде чем сработает защита.
+        # Стоп должен ограничивать риск на ATR-расстоянии от входа.
         atr_stop = last + atr * stop_atr_mult
         pct_stop = last * (1 + min_stop_pct)
-        stop_price = round(max(resistance, atr_stop, pct_stop), 4)
+        stop_price = round(max(atr_stop, pct_stop), 4)  # resistance убран намеренно
 
         risk = max(stop_price - last, atr)
 
@@ -496,9 +503,10 @@ class MarketIntelligenceEngine:
         tp1 = min(tp1, round(last * 0.994, 4))
         tp2 = min(tp2, round(last * 0.988, 4))
 
-        if support < last:
-            tp1 = min(tp1, round(support, 4))
-            tp2 = min(tp2, round(support - risk * 0.8, 4))
+        # FIX: убрана привязка tp1/tp2 к support.tail(50) на 1h.
+        # support за 50 часов = 2-дневный минимум (-7-15% от цены).
+        # TP на таком расстоянии цена не достигает за время сигнала.
+        # TP теперь строятся только по risk * multiplier от входа.
 
         return {
             "entry_zone": [entry_from, entry_to],
@@ -717,8 +725,8 @@ class MarketIntelligenceEngine:
         # но 1h + 15m + 5m уже дают рабочее направление.
         if learning_mode:
             long_learning_ok = (
-                h4_trend in ["trend_up", "mixed", "flat"]
-                and h1_trend in ["trend_up", "mixed", "flat"]
+                h4_trend in ["trend_up", "mixed"]            # flat убран
+                and h1_trend == "trend_up"                   # FIX: h1 обязан быть trend_up
                 and m15_trend == "trend_up"
                 and m5_trend in ["trend_up", "flat", "mixed"]
                 and m15_momentum in ["bullish", "neutral"]
@@ -731,8 +739,8 @@ class MarketIntelligenceEngine:
                 return "trend_up_candidate"
 
             short_learning_ok = (
-                h4_trend in ["trend_down", "mixed", "flat"]
-                and h1_trend in ["trend_down", "mixed", "flat"]
+                h4_trend in ["trend_down", "mixed"]          # flat убран: flat на 4h = боковик, не short
+                and h1_trend == "trend_down"                 # FIX: h1 обязан быть trend_down
                 and m15_trend == "trend_down"
                 and m5_trend in ["trend_down", "flat", "mixed"]
                 and m15_momentum in ["bearish", "neutral"]
@@ -1283,8 +1291,8 @@ class MarketIntelligenceEngine:
         if radar_state == "watch_long":
             if learning_mode:
                 higher_ok = (
-                    h4_trend in ["trend_up", "mixed", "flat"]
-                    and h1_trend in ["trend_up", "mixed", "flat"]
+                    h4_trend in ["trend_up", "mixed"]        # flat убран
+                    and h1_trend in ["trend_up", "mixed"]    # flat убран
                     and h4_momentum not in ["oversold"]
                 )
 
@@ -1345,8 +1353,8 @@ class MarketIntelligenceEngine:
         if radar_state == "watch_short":
             if learning_mode:
                 higher_ok = (
-                    h4_trend in ["trend_down", "mixed", "flat"]
-                    and h1_trend in ["trend_down", "mixed", "flat"]
+                    h4_trend in ["trend_down", "mixed"]      # flat убран
+                    and h1_trend in ["trend_down", "mixed"]  # flat убран: flat+flat = боковик
                     and h4_momentum not in ["overheated"]
                 )
 
