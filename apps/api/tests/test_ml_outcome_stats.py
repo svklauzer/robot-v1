@@ -141,3 +141,65 @@ def test_ml_outcome_stats_keeps_recent_logged_at_fresh(tmp_path):
     assert summary["freshness_status"] == "fresh"
     assert summary["stale"] is False
     assert summary["latest_age_hours"] <= 1
+
+
+def test_ml_trade_logger_backfills_unlogged_closed_signals(tmp_path):
+    from datetime import datetime, timezone
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from core.db import Base
+    from models.signal import Signal
+    from services.ml_trade_logger import MLTradeLogger
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine, tables=[Signal.__table__])
+    db = sessionmaker(bind=engine)()
+    path = tmp_path / "trade_outcomes.jsonl"
+
+    try:
+        db.add_all([
+            Signal(
+                bot_id=1,
+                symbol="TON/USDT",
+                side="long",
+                status="closed",
+                entry_zone_json={"from": 2.0, "to": 2.01},
+                stop_price=1.98,
+                tp_json={"tp1": 2.04, "tp2": 2.08},
+                confidence=80.0,
+                rationale="closed paper outcome",
+                result_pct=-0.8,
+                closed_reason="failed_setup_exit",
+                closed_net_pnl=-0.5,
+                closed_total_cost=0.1,
+                closed_at=datetime.now(timezone.utc),
+            ),
+            Signal(
+                bot_id=1,
+                symbol="ETH/USDT",
+                side="short",
+                status="published",
+                entry_zone_json={"from": 100.0, "to": 101.0},
+                stop_price=102.0,
+                tp_json={"tp1": 98.0, "tp2": 96.0},
+                confidence=80.0,
+                rationale="not closed yet",
+            ),
+        ])
+        db.commit()
+
+        result = MLTradeLogger(path=path).log_unlogged_closed_signals(db)
+        second = MLTradeLogger(path=path).log_unlogged_closed_signals(db)
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        assert result["logged"] == 1
+        assert result["skipped"] == 0
+        assert second["logged"] == 0
+        assert second["skipped"] == 1
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "TON/USDT"
+        assert rows[0]["closed_reason"] == "failed_setup_exit"
+    finally:
+        db.close()

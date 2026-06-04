@@ -26,9 +26,11 @@ def test_sensitive_owner_endpoints_require_owner_auth():
         ('post', '/funding-arb/paper-smoke'),
         ('post', '/system/kill-switch'),
         ('post', '/system/kill-switch-smoke'),
+        ('post', '/system/product-e2e-smoke'),
         ('post', '/trade/cost-preview'),
         ('post', '/trade/build-plan'),
         ('post', '/intelligence/scan/run'),
+        ('post', '/ml/outcomes/backfill'),
     ]
 
     for method, route in sensitive_routes:
