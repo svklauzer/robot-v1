@@ -314,3 +314,55 @@ class SymbolPerformanceGuard:
             "last_closed_reason": decision.last_closed_reason,
             "losing_streak": decision.losing_streak,
         }
+
+    def classification(self, decision_or_payload) -> str:
+        payload = self._payload_for_policy(decision_or_payload)
+        if not payload.get("allowed"):
+            return "blocked"
+        if float(payload.get("risk_multiplier") or 0) < 1.0:
+            return "reduced"
+        return "ok"
+
+    def policy_profile(self, decision_or_payload) -> dict:
+        payload = self._payload_for_policy(decision_or_payload)
+        classification = self.classification(payload)
+        reason = str(payload.get("reason") or "")
+        risk_multiplier = float(payload.get("risk_multiplier") or 0.0)
+
+        if classification == "blocked":
+            return {
+                "profile": "blocked",
+                "publish_allowed": False,
+                "risk_multiplier": 0.0,
+                "min_confidence_delta": 999,
+                "min_rr_delta": 999,
+                "side_restriction": "no_new_client_signals",
+                "exit_bias": "manual_review_required",
+            }
+
+        if classification == "reduced":
+            exit_bias = "earlier_mfe_capture" if reason == "symbol_gives_back_profit_reduce_risk" else "standard"
+            return {
+                "profile": "watch_only",
+                "publish_allowed": True,
+                "risk_multiplier": risk_multiplier,
+                "min_confidence_delta": 10,
+                "min_rr_delta": 0.25,
+                "side_restriction": "both_sides_reduced_risk",
+                "exit_bias": exit_bias,
+            }
+
+        return {
+            "profile": "tradeable",
+            "publish_allowed": True,
+            "risk_multiplier": 1.0,
+            "min_confidence_delta": 0,
+            "min_rr_delta": 0,
+            "side_restriction": "none",
+            "exit_bias": "standard",
+        }
+
+    def _payload_for_policy(self, decision_or_payload) -> dict:
+        if isinstance(decision_or_payload, dict):
+            return decision_or_payload
+        return self.to_dict(decision_or_payload)
