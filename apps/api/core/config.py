@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     TRADING_MODE: str = "paper_signal"
     MARKET_TYPE: str = "spot"
     ENABLE_LIVE_ORDERS: bool = False
+    LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT: float = 0.35
+    LIVE_SHADOW_SLIPPAGE_PCT: float = 0.10
+
     ENABLE_FUTURES: bool = False
     FUTURES_MARGIN_MODE: str = "isolated"
     FUTURES_LEVERAGE: int = 1
@@ -83,159 +86,29 @@ class Settings(BaseSettings):
     # Здесь хранятся только loss-пороги и минимальные ограничения.
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.20
-    FAILED_SETUP_MFE_MID_PCT: float = 0.45
-    FAILED_SETUP_MFE_DEEP_PCT: float = 0.70
+    FAILED_SETUP_MFE_SOFT_PCT: float = 0.50
+    FAILED_SETUP_MFE_MID_PCT: float = 0.80
+    FAILED_SETUP_MFE_DEEP_PCT: float = 1.10
+    FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT: float = 0.50
 
-    # Failed setup: loss пороги (абсолютные, не динамические)
-    # Используются как floor — не закрывать раньше этого убытка
- 
-    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.35
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.55
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.80
+    # Пороги убытка для принудительного закрытия слабого setup до TP1.
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.40
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.65
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
     FAILED_SETUP_MIN_AGE_SEC: int = 300
 
-    # Динамические MFE-пороги (K-коэффициенты) — exit_policy.py
-    # K_FAILED_SOFT=0.30, K_FAILED_MID=0.55, K_FAILED_DEEP=0.80
-    # K_PROTECT=0.50, K_TRAIL=0.80, K_CAPTURE=0.65
-    # Менять здесь не нужно — правятся в exit_policy.py напрямую
-
-    # Защитный trailing — доля MFE которую отдаём при откате
-    PROTECTIVE_MFE_START_PCT: float = 0.30
+    # MFE-протекция и частичная фиксация в процентах.
+    PROTECTIVE_MFE_START_PCT: float = 0.80
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.80
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.90
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
-    # Минимальные ограничения на выход — не фиксировать мелочь
-    MIN_PROTECTIVE_EXIT_PCT: float = 0.60
-    MIN_POST_TP1_EXIT_PCT: float = 0.45
-    MIN_PROTECTIVE_NET_USDT: float = 1.50
-    MIN_PROTECTIVE_R_MULT: float = 0.30
-
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
+    MFE_CAPTURE_START_PCT: float = 0.75
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
-
-    # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
-    # recent closed trades, readiness should show that the learning memory is stale.
-    ML_OUTCOMES_STALE_HOURS: int = 72
-
-    # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
-    VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
-    VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
-
-    # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
-    # fresh paper data shows positive->negative giveback.
-    MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.65
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
-    MFE_CAPTURE_PROTECT_SHARE: float = 0.35
+    MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
     # ML outcome memory freshness. If trade_outcomes.jsonl exists but has no
     # recent closed trades, readiness should show that the learning memory is stale.
