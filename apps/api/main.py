@@ -60,6 +60,7 @@ from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.symbol_performance_summary import SymbolPerformanceSummaryService
 from services.symbol_policy_replay import SymbolPolicyReplayService
 from services.ml_outcome_stats import MLOutcomeStatsService
+from services.ml_trade_logger import MLTradeLogger
 from services.candidate_priority import CandidatePriorityService
 from services.reentry_cooldown import ReEntryCooldownGuard
 from services.production_entry_gate import ProductionEntryGate
@@ -356,6 +357,7 @@ async def background_robot_loop():
                             daily_loss_pct=safety.get("daily_loss_pct", 0),
                             drawdown_pct=0,
                         )
+                        ml_backfill = loop.ml_trade_logger.log_unlogged_closed_signals(db)
                         db.commit()
                         log_event(
                             logger,
@@ -364,6 +366,8 @@ async def background_robot_loop():
                             bot_id=bot.id,
                             mode=bot.mode,
                             daily_loss_pct=safety.get("daily_loss_pct", 0),
+                            ml_outcomes_logged=ml_backfill.get("logged", 0),
+                            ml_outcomes_path=ml_backfill.get("path"),
                         )
 
         except Exception as e:
@@ -4019,13 +4023,42 @@ async def intelligence_scan_run():
                 )
 
             except Exception as telegram_error:
-                sig.status = "telegram_failed"
-                sig.closed_reason = "initial_telegram_publish_failed"
+                error_text = f"{type(telegram_error).__name__}: {repr(telegram_error)}"
+                live_delivery_required = bool(getattr(settings, "is_live_enabled", False)) or str(
+                    getattr(settings, "TRADING_MODE", "paper_signal")
+                ).lower().startswith("live")
 
-                item["status"] = "telegram_failed"
-                item["decision"] = "initial_telegram_publish_failed"
-                item["priority_publish_status"] = "telegram_failed_signal_not_activated"
-                item["telegram_error"] = f"{type(telegram_error).__name__}: {repr(telegram_error)}"
+                plan_json = sig.plan_json or {}
+                plan_json["telegram_delivery"] = {
+                    "ok": False,
+                    "error": error_text,
+                    "mode": "required_live" if live_delivery_required else "non_blocking_paper",
+                    "vip_delivery_required": bool(sig.is_public),
+                    "live_delivery_required": live_delivery_required,
+                }
+                sig.plan_json = plan_json
+
+                if live_delivery_required:
+                    sig.status = "telegram_failed"
+                    sig.closed_reason = "initial_telegram_publish_failed"
+                    item["status"] = "telegram_failed"
+                    item["decision"] = "initial_telegram_publish_failed"
+                    item["priority_publish_status"] = "telegram_failed_signal_not_activated"
+                else:
+                    item["status"] = "published"
+                    item["decision"] = "published_signal_created"
+                    item["priority_publish_status"] = "published_by_priority_queue_telegram_retry_pending"
+                    published.append({
+                        "signal_id": sig.id,
+                        "symbol": symbol,
+                        "side": side,
+                        "grade": grade,
+                        "priority_score": item.get("priority_score"),
+                        "telegram_delivery": "retry_pending",
+                    })
+                    published_count += 1
+
+                item["telegram_error"] = error_text
                 item["signal_id"] = sig.id
 
                 db.flush()
@@ -4494,6 +4527,14 @@ def ml_outcomes_summary():
     service = MLOutcomeStatsService()
     return service.safe_summary()
 
+
+@app.post("/ml/outcomes/backfill", dependencies=[Depends(require_owner_action)])
+def ml_outcomes_backfill(limit: int = 500):
+    db = SessionLocal()
+    try:
+        return MLTradeLogger().log_unlogged_closed_signals(db, limit=limit)
+    finally:
+        db.close()
 
 @app.get("/analytics/grade-c-audit", dependencies=[Depends(require_owner_action)])
 def analytics_grade_c_audit(date_from: str | None = None):

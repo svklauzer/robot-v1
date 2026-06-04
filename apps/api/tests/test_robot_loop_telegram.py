@@ -94,7 +94,7 @@ def test_private_paper_signal_stays_published_when_optional_telegram_delivery_fa
         db.close()
 
 
-def test_public_paper_signal_marks_telegram_failed_when_vip_delivery_fails():
+def test_public_paper_signal_stays_published_when_vip_delivery_fails():
     db = _db_session()
     old_mode = settings.TRADING_MODE
     old_live = settings.ENABLE_LIVE_ORDERS
@@ -148,13 +148,13 @@ def test_public_paper_signal_marks_telegram_failed_when_vip_delivery_fails():
         event = db.query(IntelligenceEvent).one()
 
         assert ok is False
-        assert signal.status == "telegram_failed"
-        assert signal.closed_reason == "initial_vip_telegram_publish_failed"
-        assert signal.plan_json["telegram_delivery"]["mode"] == "required"
+        assert signal.status == "published"
+        assert signal.closed_reason is None
+        assert signal.plan_json["telegram_delivery"]["mode"] == "non_blocking_paper"
         assert signal.plan_json["telegram_delivery"]["vip_delivery_required"] is True
         assert signal.plan_json["telegram_delivery"]["live_delivery_required"] is False
-        assert event.status == "telegram_failed"
-        assert event.decision == "initial_vip_telegram_publish_failed"
+        assert event.status == "warning"
+        assert event.decision == "telegram_delivery_failed_signal_kept_published"
     finally:
         settings.TRADING_MODE = old_mode
         settings.ENABLE_LIVE_ORDERS = old_live
@@ -217,6 +217,7 @@ def test_live_signal_marks_telegram_failed_without_raising():
         assert ok is False
         assert signal.status == "telegram_failed"
         assert signal.closed_reason == "initial_vip_telegram_publish_failed"
+        assert signal.plan_json["telegram_delivery"]["mode"] == "required_live"
         assert signal.plan_json["telegram_delivery"]["vip_delivery_required"] is True
         assert signal.plan_json["telegram_delivery"]["live_delivery_required"] is True
         assert event.status == "telegram_failed"

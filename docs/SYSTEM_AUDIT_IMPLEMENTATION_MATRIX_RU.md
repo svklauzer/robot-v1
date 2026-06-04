@@ -11,7 +11,7 @@
 
 | Домен | Что проверено | Вывод |
 |---|---|---|
-| `apps/api` | models, services, workers, routers, migrations, tests, `main.py` | Основной функционал payments/Telegram/subscribers/readiness уже реализован; найден и удален остаточный dead-code drift в `main.py` и `intelligence_memory.py`. |
+| `apps/api` | models, services, workers, routers, migrations, tests, `main.py` | Основной функционал payments/Telegram/subscribers/readiness уже реализован; найден и удален остаточный dead-code drift в `main.py` и `intelligence_memory.py`; paper-сигналы больше не блокируются Telegram timeout, а closed outcomes backfill пишется в JSONL. |
 | `apps/web` | owner pages, components, API client | Payments/health/readiness UI уже есть; новый блок Monetization не нужно создавать заново, нужно усиливать существующую страницу payments и health. |
 | `telegram` | отдельный Docker/bot entrypoint | Не основной продуктовый webhook; основной customer menu сейчас обслуживает API `/telegram/webhook`. |
 | `scripts` | run reports, ML summary, replay, backup smoke | Есть dry-run backup/restore и outcome/replay tooling; E2E product smoke еще нужен отдельно. |
@@ -71,3 +71,20 @@
 4. Доработать существующую payments dashboard как Monetization health, а не создавать новую сущность.
 5. Запустить replay/diagnostics по `failed_setup_exit` и менять только один exit-policy параметр за раз.
 6. Расширить `docs/PRODUCTION_RUNBOOK_RU.md` go/no-go checklist на основе `/system/readiness`.
+
+
+---
+
+## 5. Hotfix 4 июня 2026: publication → paper open → ML outcomes
+
+Проблема по текущим логам: `telegram_send_error ConnectTimeout` мог переводить публичный paper-сигнал в `telegram_failed`, из-за чего lifecycle не видел его как `published` и не открывал paper-position. Для paper режима Telegram должен быть SLA/доставка с retry, но не gate торгового состояния.
+
+Исправлено:
+
+1. В paper modes Telegram full-signal failure больше не переводит сигнал в `telegram_failed`; сигнал остается `published`, а ошибка сохраняется в `plan_json.telegram_delivery` как `non_blocking_paper`.
+2. В live modes Telegram остается обязательным gate: при failure сигнал помечается `telegram_failed`.
+3. Добавлен backfill закрытых сигналов в `storage/ml/trade_outcomes.jsonl`: background robot loop после lifecycle пишет все еще не залогированные `closed` signals.
+4. Добавлен ручной owner endpoint `POST /ml/outcomes/backfill?limit=500`, чтобы дозаписать уже закрытые сделки из БД в JSONL без ожидания нового цикла.
+5. Путь JSONL вынесен в `TRADE_OUTCOMES_PATH` с default `storage/ml/trade_outcomes.jsonl`, совпадающим с Docker bind mount `./storage/ml:/app/storage/ml`.
+
+Операционное действие после деплоя: выполнить `POST /ml/outcomes/backfill?limit=500`, затем проверить `GET /ml/outcomes/summary` и файл `storage/ml/trade_outcomes.jsonl` на host.
