@@ -98,6 +98,7 @@ def test_required_customer_commands_return_operator_ready_responses():
         ("/plans", "/plans", "VIP планы", "pay:vip_30"),
         ("/pay", "/pay", "Выберите тариф", "pay:vip_30"),
         ("/status", "/status", "Статус подписки", "status"),
+        ("/subscription_status", "/subscription_status", "Статус подписки", "status"),
         ("/help", "/help", "FAQ и риски", "plans"),
         ("/support", "/support", "Поддержка", "plans"),
     ]
@@ -125,6 +126,7 @@ def test_customer_menu_callbacks_map_to_supported_commands():
         ("plans", "/plans", "VIP планы"),
         ("pay", "/pay", "Выберите тариф"),
         ("status", "/status", "подписка не найдена"),
+        ("subscription_status", "/subscription_status", "подписка не найдена"),
         ("faq_risks", "/help", "FAQ и риски"),
         ("contact_support", "/support", "Поддержка"),
     ]

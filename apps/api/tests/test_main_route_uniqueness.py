@@ -25,3 +25,10 @@ def test_main_has_no_duplicate_route_decorators():
     }
 
     assert duplicates == {}
+
+
+def test_main_delegates_telegram_menu_to_service_without_legacy_helper():
+    main = (ROOT / "apps/api/main.py").read_text()
+
+    assert "def _telegram_menu_text" not in main
+    assert "TelegramBotMenuService().handle" in main
