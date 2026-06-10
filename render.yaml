@@ -1,0 +1,186 @@
+# render.yaml — Infrastructure as Code для Render.com
+# Docs: https://render.com/docs/infrastructure-as-code
+#
+# Deploy: Render Dashboard → New → Blueprint → выбери репозиторий
+# Redis создаётся вручную (см. RENDER_DEPLOY.md, Шаг 3.2)
+
+services:
+
+  # ── API (FastAPI + uvicorn + все background workers) ──────────────────────
+  - type: web
+    name: robot-api
+    runtime: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: apps/api
+    plan: starter
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+
+    # Alembic миграции запускаются до каждого деплоя
+    preDeployCommand: python -m alembic -c alembic.ini upgrade head
+
+    # Persistent disk — хранит trade_outcomes.jsonl между деплоями
+    disk:
+      name: ml-storage
+      mountPath: /app/storage/ml
+      sizeGB: 1
+
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DB_AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: TRADE_OUTCOMES_PATH
+        value: /app/storage/ml/trade_outcomes.jsonl
+      - key: NEWS_ENABLED
+        value: "true"
+
+      # ── Secrets (заполнить в Render Dashboard → Environment) ──────────────
+      - key: JWT_SECRET
+        sync: false          # openssl rand -hex 32
+      - key: OWNER_API_TOKEN
+        sync: false          # openssl rand -hex 32
+      - key: OWNER_PASSWORD
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+
+      # ── Database (Internal URL из robot-db → Info) ────────────────────────
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_DB
+        sync: false
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_PORT
+        value: "5432"
+
+      # ── Redis ─────────────────────────────────────────────────────────────
+      - key: REDIS_URL
+        sync: false          # Internal Redis URL или Upstash URL
+
+      # ── Telegram ──────────────────────────────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_CHAT_ID
+        sync: false
+      - key: TELEGRAM_FREE_SIGNALS_CHAT_ID
+        sync: false
+      - key: TELEGRAM_VIP_SIGNALS_CHAT_ID
+        sync: false
+      - key: TELEGRAM_CONNECT_TIMEOUT
+        value: "15.0"
+      - key: TELEGRAM_READ_TIMEOUT
+        value: "30.0"
+
+      # ── HTX API ───────────────────────────────────────────────────────────
+      - key: HTX_API_KEY
+        sync: false
+      - key: HTX_API_SECRET
+        sync: false
+      - key: HTX_MARKET_TYPE
+        value: spot
+      - key: HTX_SYMBOLS
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,ADA/USDT,LINK/USDT,AVAX/USDT,DOT/USDT
+
+      # ── Trading mode (paper для старта) ───────────────────────────────────
+      - key: ROBOT_MODE
+        value: paper         # → live_shadow (Phase 3) → live (Phase 6)
+      - key: TRADING_MODE
+        value: paper_trade   # → live_limited → live
+      - key: ENABLE_LIVE_ORDERS
+        value: "false"
+
+      # ── Risk management ───────────────────────────────────────────────────
+      - key: RISK_EQUITY_USDT
+        value: "950"
+      - key: RISK_PER_TRADE_PCT
+        value: "0.4"
+      - key: MAX_OPEN_POSITIONS
+        value: "5"
+      - key: MAX_ACTIVE_SIGNALS
+        value: "5"
+      - key: MAX_DAILY_LOSS_PCT
+        value: "3"
+      - key: MAX_DRAWDOWN_PCT
+        value: "15"
+
+      # ── Symbol guard (calibrated v2026-06) ────────────────────────────────
+      - key: SYMBOL_PERF_BLOCK_MAX_WINRATE
+        value: "48.0"
+      - key: SYMBOL_PERF_REDUCE_MAX_WINRATE
+        value: "55.0"
+      - key: SYMBOL_PERF_COOLDOWN_STREAK
+        value: "3"
+      - key: SYMBOL_PERF_COOLDOWN_FAILED_SETUPS
+        value: "2"
+      - key: SYMBOL_PERF_LOOKBACK
+        value: "10"
+
+      # ── Production entry gate ─────────────────────────────────────────────
+      - key: PROD_GATE_A_PLUS_MIN_SETUP
+        value: "76.0"
+      - key: PROD_GATE_A_PLUS_MIN_CONFIDENCE
+        value: "68.0"
+      - key: PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER
+        value: "0.80"
+      - key: PROD_GATE_A_MIN_SETUP
+        value: "65.0"
+      - key: PROD_GATE_A_MIN_CONFIDENCE
+        value: "62.0"
+      - key: PROD_GATE_A_MIN_RR_TP1_PAPER
+        value: "0.75"
+
+      # ── Live-shadow (Phase 3 — раскомментировать при переключении) ─────────
+      # - key: ROBOT_MODE
+      #   value: live_shadow
+      - key: LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT
+        value: "0.35"
+      - key: LIVE_SHADOW_SLIPPAGE_PCT
+        value: "0.10"
+      - key: EXCHANGE_RECONCILIATION_ENABLED
+        value: "false"
+
+      # ── Validation thresholds ─────────────────────────────────────────────
+      - key: VALIDATION_MIN_CLOSED_SIGNALS
+        value: "50"
+      - key: MARKET_CONNECTIVITY_MAX_LATENCY_MS
+        value: "15000"
+
+      # ── Funding arb ───────────────────────────────────────────────────────
+      - key: ENABLE_FUNDING_ARB
+        value: "true"
+      - key: ENABLE_FUTURES
+        value: "true"
+      - key: FUNDING_ARB_SYMBOLS
+        value: BTC/USDT,ETH/USDT,SOL/USDT,DOGE/USDT,XRP/USDT,SUI/USDT
+      - key: FUNDING_ARB_AUTO_OPEN_PAPER
+        value: "true"
+
+  # ── Web (Next.js) ──────────────────────────────────────────────────────────
+  - type: web
+    name: robot-web
+    runtime: docker
+    dockerfilePath: apps/web/Dockerfile
+    dockerContext: apps/web
+    plan: starter
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+
+    envVars:
+      # После деплоя API замени на реальный URL (например robot-api.onrender.com)
+      - key: NEXT_PUBLIC_API_URL
+        value: https://robot-api.onrender.com
+
+databases:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  - name: robot-db
+    plan: starter            # $7/мес, 1 GB storage, 97 connections
+    databaseName: robot
+    user: robot
+    region: frankfurt
