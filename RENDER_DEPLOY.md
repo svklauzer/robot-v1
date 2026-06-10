@@ -55,7 +55,7 @@ asyncio — отдельного Celery/worker сервиса не нужно.
 
 - `robot-api` (web, docker, plan `starter`, region `frankfurt`),
   `healthCheckPath: /health`, persistent disk на `/app/storage/ml`,
-  `preDeployCommand: python -m alembic -c alembic.ini upgrade head`.
+  `preDeployCommand: sh migrate.sh` (запускает `alembic upgrade head`).
 - `robot-web` (web, docker, plan `starter`).
 - `robot-redis` (`type: keyvalue`, plan `free`) — создаётся blueprint'ом.
 - `robot-db` (Render Postgres, plan `basic-256mb`) — создаётся blueprint'ом.
@@ -72,6 +72,12 @@ asyncio — отдельного Celery/worker сервиса не нужно.
 `core/config.py` принимает `DATABASE_URL` напрямую (с нормализацией
 `postgres://` → `postgresql://`); если он пуст — собирает URL из `POSTGRES_*`.
 
+> **Почему `sh migrate.sh`, а не `alembic ... upgrade head` напрямую:** Render
+> для Docker-сервисов разбивает `preDeployCommand` по пробелам без обработки
+> кавычек, из-за чего alembic терял сабкоманду и падал с `too few arguments`.
+> Скрипт `apps/api/migrate.sh` выполняет команду внутри shell — это надёжно.
+> `.gitattributes` форсит LF для `*.sh`, иначе sh ломается на CRLF.
+
 > Если меняешь модели — создавай миграцию (см. раздел в конце), иначе
 > `preDeployCommand` не подхватит новые таблицы.
 
@@ -82,10 +88,14 @@ asyncio — отдельного Celery/worker сервиса не нужно.
 ### 3.1 Commit + push
 
 ```bash
-git add render.yaml apps/api/Dockerfile apps/web/Dockerfile apps/api/core/config.py
-git commit -m "infra: harden render.yaml (auto-wire db+redis, fix plans, healthcheck, \$PORT)"
+git add render.yaml apps/api/Dockerfile apps/web/Dockerfile \
+        apps/api/core/config.py apps/api/migrate.sh .gitattributes
+git commit -m "infra: render blueprint fixes (auto-wire db+redis, plans, healthcheck, \$PORT, migrate.sh)"
 git push origin main
 ```
+
+> Уже задеплоился со старым `preDeployCommand`? Просто запушь этот фикс —
+> `autoDeploy: true` пересоберёт `robot-api`, и pre-deploy пройдёт.
 
 ### 3.2 Blueprint
 

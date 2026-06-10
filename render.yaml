@@ -19,8 +19,11 @@ services:
     autoDeploy: true
     healthCheckPath: /health   # Render ждёт 200 здесь перед маршрутизацией
 
-    # Alembic миграции запускаются до каждого деплоя
-    preDeployCommand: python -m alembic -c alembic.ini upgrade head
+    # Alembic миграции запускаются до каждого деплоя.
+    # Запускаем через скрипт: Render разбивает preDeployCommand по пробелам
+    # без обработки кавычек/флагов, поэтому "alembic -c ... upgrade head"
+    # терял сабкоманду ("too few arguments"). sh migrate.sh — надёжно.
+    preDeployCommand: sh migrate.sh
 
     # Persistent disk — хранит trade_outcomes.jsonl между деплоями
     disk:
