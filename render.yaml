@@ -194,6 +194,25 @@ services:
     maxmemoryPolicy: noeviction
     ipAllowList: []          # только приватная сеть (доступ изнутри Render)
 
+  # ── Daily owner report (Render Cron Job) ─────────────────────────────────────
+  # Серверный планировщик — работает 24/7 независимо от Cowork.
+  # ВНИМАНИЕ: Render cron считает время в UTC. 0 3 * * * = 08:00 при UTC+5.
+  - type: cron
+    name: robot-daily-report
+    runtime: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: apps/api
+    plan: starter
+    region: frankfurt
+    branch: main
+    schedule: "0 3 * * *"
+    dockerCommand: python send_daily_report.py   # 2 токена — безопасно для парсера Render
+    envVars:
+      - key: OWNER_API_TOKEN
+        sync: false          # тот же токен, что у robot-api
+      - key: REPORT_API_URL
+        value: https://robot-api-fx9h.onrender.com
+
 databases:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
