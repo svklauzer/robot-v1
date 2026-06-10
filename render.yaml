@@ -177,12 +177,14 @@ services:
     autoDeploy: true
 
     envVars:
-      # Реальный URL API (Render добавил суффикс при создании сервиса).
-      # ВАЖНО: NEXT_PUBLIC_* инлайнится на этапе `npm run build`, поэтому
-      # robot-web нужно ПЕРЕсобрать (Manual Deploy → Clear cache & deploy),
-      # а переменная должна быть доступна во время сборки (см. примечание ниже).
-      - key: NEXT_PUBLIC_API_URL
+      # Backend URL для серверного прокси (app/api/proxy). Читается на сервере
+      # в рантайме — пересборка не требуется при смене значения.
+      - key: API_BASE_URL
         value: https://robot-api-fx9h.onrender.com
+      # Owner-токен — ТОЛЬКО на сервере (без NEXT_PUBLIC), в клиент не попадает.
+      # Должен совпадать с OWNER_API_TOKEN у robot-api.
+      - key: OWNER_API_TOKEN
+        sync: false
 
   # ── Redis (Render Key Value) ────────────────────────────────────────────────
   - type: keyvalue
