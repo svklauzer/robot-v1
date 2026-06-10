@@ -90,7 +90,7 @@ class TelegramBotMenuService:
                     chat_id,
                     telegram_user_id,
                     command,
-                    "💳 Выберите тариф для создания pending checkout.",
+                    "💳 Выберите тариф — оплата звёздами Telegram.",
                     self._plans_keyboard(db),
                 )
 
@@ -261,12 +261,18 @@ class TelegramBotMenuService:
             f"{status_line}"
         )
 
+    def _plan_price_label(self, plan) -> str:
+        stars = settings.stars_price_for_plan(plan.code)
+        if stars > 0:
+            return f"⭐ {stars:,}".replace(",", " ")
+        return f"{plan.amount_usdt:g} {plan.currency}"
+
     def _plans_text(self, db: Session) -> str:
         plans = self.billing.list_plans(db)
         rows = ["💎 VIP планы\n"]
         for plan in plans:
-            rows.append(f"• {plan.title}: {plan.amount_usdt:g} {plan.currency}, {plan.duration_days} дней")
-        rows.append("\nНажмите кнопку тарифа, чтобы создать pending checkout. Или получите бесплатный VIP через HTX партнёрскую регистрацию: /htx.")
+            rows.append(f"• {plan.title}: {self._plan_price_label(plan)} · {plan.duration_days} дней")
+        rows.append("\nНажмите кнопку тарифа, чтобы оплатить звёздами Telegram. Или получите бесплатный VIP через HTX партнёрскую регистрацию: /htx.")
         return "\n".join(rows)
 
     def _checkout_text(self, payment: Payment) -> str:
@@ -364,7 +370,7 @@ class TelegramBotMenuService:
 
     def _plans_keyboard(self, db: Session) -> dict:
         plans = self.billing.list_plans(db)
-        rows = [[{"text": f"{plan.title} · {plan.amount_usdt:g} {plan.currency}", "callback_data": f"pay:{plan.code}"}] for plan in plans]
+        rows = [[{"text": f"{plan.title} · {self._plan_price_label(plan)}", "callback_data": f"pay:{plan.code}"}] for plan in plans]
         rows.append([{"text": "⬅️ Меню", "callback_data": "menu"}, {"text": "🛟 Поддержка", "callback_data": "support"}])
         return {"inline_keyboard": rows}
 
