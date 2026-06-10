@@ -1,2 +1,0 @@
-# CMD: wc -l /c/Users/svk/robot-v1/storage/ml/trade_outcomes.jsonl
-79 /c/Users/svk/robot-v1/storage/ml/trade_outcomes.jsonl

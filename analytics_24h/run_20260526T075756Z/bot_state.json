@@ -1,2 +1,0 @@
-# GET http://localhost:8000/bot/state
-curl: (7) Failed to connect to localhost port 8000 after 2042 ms: Could not connect to server

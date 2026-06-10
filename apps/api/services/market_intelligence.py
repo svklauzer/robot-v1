@@ -297,7 +297,7 @@ class MarketIntelligenceEngine:
         entry_zone = None
         stop_price = None
         tp = None
-        confidence_hint = scores["total"]
+        confidence_hint = scores["total"]   # updated below after action is known
 
         if regime == "trend_up_candidate":
             action = "long"
@@ -327,6 +327,20 @@ class MarketIntelligenceEngine:
             entry_zone = levels.get("entry_zone")
             stop_price = levels.get("stop_price")
             tp = levels.get("tp")
+
+        # Direction-aware confidence (same logic as multi-TF builder)
+        if action in ("long", "short"):
+            _rt = float(scores.get("trend", 50.0))
+            _rm = float(scores.get("momentum", 50.0))
+            dt = (100.0 - _rt) if action == "short" else _rt
+            dm = (100.0 - _rm) if action == "short" else _rm
+            confidence_hint = round(
+                dt * 0.30 + dm * 0.20
+                + float(scores.get("volume", 50.0)) * 0.20
+                + float(scores.get("structure", 50.0)) * 0.20
+                + float(scores.get("volatility", 50.0)) * 0.10,
+                2,
+            )
 
         setup_quality = {
             "trend_alignment": 0.0,
@@ -405,8 +419,8 @@ class MarketIntelligenceEngine:
         if atr <= 0:
             atr = last * 0.003
 
-        entry_from = round(last * 0.999, 4)
-        entry_to = round(last * 1.001, 4)
+        entry_from = round(last * 0.997, 4)
+        entry_to = round(last * 1.003, 4)
 
         stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
         min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
@@ -479,8 +493,8 @@ class MarketIntelligenceEngine:
         if atr <= 0:
             atr = last * 0.003
 
-        entry_from = round(last * 0.999, 4)
-        entry_to = round(last * 1.001, 4)
+        entry_from = round(last * 0.997, 4)
+        entry_to = round(last * 1.003, 4)
 
         stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
         min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
@@ -788,6 +802,9 @@ class MarketIntelligenceEngine:
         entry_zone = None
         stop_price = None
         tp = None
+
+        # confidence_hint is computed after action is determined (see below)
+        # so we initialise to raw total for hold/unknown cases.
         confidence_hint = scores.get("total", 0)
 
         radar_state = self._detect_radar_state(
@@ -848,6 +865,35 @@ class MarketIntelligenceEngine:
 
         if action == "hold" and radar_state in ["watch_long", "watch_short"]:
             reason = radar_state
+
+        # ── Direction-aware confidence_hint ─────────────────────────────────
+        # _score_context uses a "bullishness" scale (trend_up=75, trend_down=25).
+        # For SHORT signals this means bearish alignment scores LOW — the opposite
+        # of what we want. We flip trend and momentum for shorts so that a strong
+        # downtrend correctly yields high confidence for a short candidate.
+        raw_trend      = float(scores.get("trend", 50.0))
+        raw_momentum   = float(scores.get("momentum", 50.0))
+        raw_volume     = float(scores.get("volume", 50.0))
+        raw_structure  = float(scores.get("structure", 50.0))
+        raw_volatility = float(scores.get("volatility", 50.0))
+
+        if action == "short":
+            dir_trend    = 100.0 - raw_trend       # 25 → 75 for trend_down
+            dir_momentum = 100.0 - raw_momentum    # 30 → 70 for bearish
+        else:
+            dir_trend    = raw_trend
+            dir_momentum = raw_momentum
+
+        if action in ("long", "short"):
+            confidence_hint = round(
+                dir_trend    * 0.30
+                + dir_momentum * 0.20
+                + raw_volume   * 0.20
+                + raw_structure * 0.20
+                + raw_volatility * 0.10,
+                2,
+            )
+        # hold keeps the raw total computed above
 
         setup_quality = self._score_setup_quality(
             action=action,

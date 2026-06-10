@@ -77,12 +77,12 @@ export default function ReportsPage() {
       winrate: summary?.winrate ?? 0,
       resultPct: summary?.total_result_pct ?? 0,
       hours: summary?.hours ?? period,
-      netPnl: summary?.total_net_pnl_usdt,
-      avgPnl: summary?.avg_net_pnl_usdt,
-      costs: summary?.total_costs_usdt,
-      active: summary?.active_signals,
-      expired: summary?.expired_signals,
-      rejected: summary?.rejected_signals,
+      netPnl: summary?.total_net_pnl_usdt ?? null,
+      avgPnl: summary?.avg_net_pnl_usdt ?? null,
+      costs: summary?.total_costs_usdt ?? null,
+      active: summary?.active_signals ?? 0,
+      expired: summary?.expired_signals ?? 0,
+      rejected: summary?.rejected_signals ?? 0,
     };
   }, [summary, period]);
 

@@ -56,6 +56,7 @@ def test_owner_read_endpoints_require_owner_auth():
         "/analytics/symbol-policy-replay",
         "/analytics/signal-quality",
         "/analytics/grade-c-audit",
+        "/analytics/daily-quality-report",
         "/ml/outcomes/summary",
         "/reports/summary",
         "/intelligence/analyze",

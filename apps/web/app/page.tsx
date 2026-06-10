@@ -4,25 +4,28 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import AppShell from "../components/AppShell";
 import { apiGet, apiPost } from "../lib/api";
-import { Activity, BarChart3, Bot, CreditCard, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, BarChart3, Bot, CreditCard, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 
 export default function DashboardPage() {
   const [botState, setBotState] = useState<any>(null);
   const [analytics, setAnalytics] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
+  const [dailyQuality, setDailyQuality] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [state, summary, readinessData] = await Promise.all([
+      const [state, summary, readinessData, dailyData] = await Promise.all([
         apiGet("/bot/state"),
         apiGet("/analytics/summary"),
         apiGet("/system/readiness"),
+        apiGet("/analytics/daily-quality-report?hours=24"),
       ]);
       setBotState(state);
       setAnalytics(summary);
       setReadiness(readinessData);
+      setDailyQuality(dailyData);
     } finally {
       setLoading(false);
     }
@@ -108,6 +111,38 @@ export default function DashboardPage() {
         </section>
       )}
 
+      {dailyQuality && (
+        <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp size={18} className="text-emerald-300" />
+              <h2 className="text-xl font-semibold text-emerald-200">Daily Quality Report</h2>
+              <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${dailyQuality.status === "ok" ? "bg-emerald-700 text-white" : "bg-yellow-600 text-black"}`}>
+                {dailyQuality.status}
+              </span>
+            </div>
+            <span className="text-xs text-emerald-100/50">24h window</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+            <DailyCard label="Net PnL" value={`${fmt(dailyQuality.trading?.net_pnl_usdt, 2)} USDT`} good={(dailyQuality.trading?.net_pnl_usdt ?? 0) > 0} danger={(dailyQuality.trading?.net_pnl_usdt ?? 0) < 0} />
+            <DailyCard label="Closed" value={dailyQuality.trading?.closed_count ?? 0} />
+            <DailyCard label="Winrate" value={`${dailyQuality.trading?.winrate_pct ?? "-"}%`} good={(dailyQuality.trading?.winrate_pct ?? 0) >= 50} warn={(dailyQuality.trading?.winrate_pct ?? 100) < 45} />
+            <DailyCard label="Failed Setup" value={`${dailyQuality.trading?.failed_setup_share_pct ?? 0}%`} danger={(dailyQuality.trading?.failed_setup_share_pct ?? 0) > 35} />
+            <DailyCard label="TG SLA" value={`${dailyQuality.telegram_sla?.sla_pct ?? 100}%`} good={(dailyQuality.telegram_sla?.sla_pct ?? 100) >= 99} danger={(dailyQuality.telegram_sla?.sla_pct ?? 100) < 99} />
+            <DailyCard label="Active" value={dailyQuality.active_signals?.total_active ?? 0} />
+          </div>
+          {(dailyQuality.issues?.length ?? 0) > 0 && (
+            <div className="mt-4 space-y-2">
+              {dailyQuality.issues.map((issue: string, i: number) => (
+                <div key={i} className="rounded-lg border border-yellow-900/60 bg-yellow-950/20 px-3 py-2 text-sm text-yellow-100">
+                  ⚠ {issue}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <QuickLink href="/analytics" title="Profit analytics" text="PnL, quality, readiness gates и reason breakdown." />
         <QuickLink href="/payments" title="Payments" text="Создание checkout и подтверждение оплат VIP." />
@@ -153,4 +188,14 @@ function QuickLink({ href, title, text }: { href: string; title: string; text: s
 function fmt(value: any, digits = 2) {
   const num = Number(value);
   return Number.isFinite(num) ? num.toFixed(digits) : "0.00";
+}
+
+function DailyCard({ label, value, good, warn, danger }: { label: string; value: any; good?: boolean; warn?: boolean; danger?: boolean }) {
+  const cls = danger ? "text-red-300" : warn ? "text-yellow-300" : good ? "text-emerald-300" : "text-emerald-200";
+  return (
+    <div className="rounded-xl border border-emerald-950 bg-black/20 p-3">
+      <div className="text-xs text-emerald-100/50">{label}</div>
+      <div className={`mt-1 text-lg font-bold ${cls}`}>{value ?? "-"}</div>
+    </div>
+  );
 }

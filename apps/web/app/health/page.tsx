@@ -126,7 +126,8 @@ export default function HealthPage() {
         <Panel title="Background loops">
           <LoopRow title="Robot Loop" enabled={loops?.robot_loop?.enabled} created={loops?.robot_loop?.task_created} done={loops?.robot_loop?.task_done} />
           <LoopRow title="Subscription Loop" enabled={loops?.subscription_loop?.enabled} created={loops?.subscription_loop?.task_created} done={loops?.subscription_loop?.task_done} />
-          <LoopRow title="Telegram Delivery Loop" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
+          <LoopRow title="Telegram Delivery" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
+          <LoopRow title="Payment Reconciliation" enabled={loops?.payment_reconciliation_loop?.enabled} created={loops?.payment_reconciliation_loop?.task_created} done={loops?.payment_reconciliation_loop?.task_done} />
           <LoopRow title="Funding Arb Loop" enabled={loops?.funding_arb_loop?.enabled} created={loops?.funding_arb_loop?.task_created} done={loops?.funding_arb_loop?.task_done} />
         </Panel>
 

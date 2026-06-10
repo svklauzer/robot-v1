@@ -1,2 +1,0 @@
-# GET http://localhost:8000/analytics/reason-breakdown
-{"status":"ok","sample_closed_signals":0,"total_net_pnl_usdt":0.0,"items":[]}

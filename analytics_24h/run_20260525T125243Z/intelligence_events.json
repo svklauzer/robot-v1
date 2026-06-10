@@ -1,2 +1,0 @@
-# GET http://localhost:8000/intelligence/events?limit=300
-{"total":0,"limit":200,"offset":0,"items":[]}

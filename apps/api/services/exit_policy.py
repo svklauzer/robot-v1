@@ -32,7 +32,7 @@ class ExitPolicyService:
     K_LOSS_DEEP = 0.75
     K_PROTECT = 0.60
     K_TRAIL = 0.90
-    K_CAPTURE = 0.75
+    K_CAPTURE = 0.90   # raised from 0.75 — MFE capture starts later, lets winners run longer
     DEFAULT_MFE_ABSOLUTE_MIN_FOR_GUARD = 0.50
 
     def __init__(self):
@@ -108,6 +108,9 @@ class ExitPolicyService:
         abs_cap_mid = abs(float(getattr(settings, "FAILED_SETUP_LOSS_MID_PCT", -0.65)))
         abs_cap_deep = abs(float(getattr(settings, "FAILED_SETUP_LOSS_DEEP_PCT", -0.90)))
 
+        # K_CAPTURE is configurable via MFE_CAPTURE_START_PCT (default = class constant K_CAPTURE).
+        k_capture = float(getattr(settings, "MFE_CAPTURE_START_PCT", self.K_CAPTURE))
+
         return {
             "failed_mfe_soft": max(sd * self.K_FAILED_SOFT, mfe_absolute_min),
             "failed_mfe_mid": max(sd * self.K_FAILED_MID, mfe_absolute_min),
@@ -117,7 +120,7 @@ class ExitPolicyService:
             "failed_loss_deep": -min(sd * self.K_LOSS_DEEP, abs_cap_deep),
             "protect_start": max(sd * self.K_PROTECT, net_safe_floor, float(settings.PROTECTIVE_MFE_START_PCT)),
             "trail_start": max(sd * self.K_TRAIL, net_safe_floor + 0.40),
-            "capture_start": max(sd * self.K_CAPTURE, net_safe_floor + 0.20),
+            "capture_start": max(sd * k_capture, net_safe_floor + 0.20),
             "mfe_absolute_min": mfe_absolute_min,
         }
 

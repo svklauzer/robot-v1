@@ -1,2 +1,0 @@
-# CMD: git branch --show-current
-codex/review-project-structure-and-relationships-v6m5rw

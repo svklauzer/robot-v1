@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     HTX_MARKET_TYPE: str = "spot"
     HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT"
     ALLOW_MARKET_MOCK: bool = False
+    # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
+    HTX_PROXY_URL: str = ""
 
     # =========================
     # TELEGRAM
@@ -48,6 +50,14 @@ class Settings(BaseSettings):
     TELEGRAM_SIGNALS_CHAT_ID: int = 0
     TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
     TELEGRAM_VIP_SIGNALS_CHAT_ID: int = 0
+
+    # Proxy for Telegram API (optional).
+    # Set to socks5://user:pass@host:port or http://user:pass@host:port
+    # if the server cannot reach api.telegram.org directly.
+    TELEGRAM_PROXY_URL: str = ""
+    # Separate connect timeout to detect network-level blocks quickly.
+    TELEGRAM_CONNECT_TIMEOUT: float = 15.0
+    TELEGRAM_READ_TIMEOUT: float = 30.0
 
     MAX_ACTIVE_SIGNALS: int = 4
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
@@ -95,7 +105,7 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.40
     FAILED_SETUP_LOSS_MID_PCT: float = -0.65
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
-    FAILED_SETUP_MIN_AGE_SEC: int = 300
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80
@@ -106,7 +116,7 @@ class Settings(BaseSettings):
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.75
+    MFE_CAPTURE_START_PCT: float = 0.90
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
@@ -129,11 +139,11 @@ class Settings(BaseSettings):
     SYMBOL_PERF_LOOKBACK: int = 12
     SYMBOL_PERF_MIN_HISTORY: int = 3
     SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
-    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 40.0
-    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 45.0
-    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
+    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 42.0
+    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 50.0
+    SYMBOL_PERF_COOLDOWN_STREAK: int = 4
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 4
+    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 3
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -145,16 +155,16 @@ class Settings(BaseSettings):
     # Для live поднять MIN_NET_RR_TP1 до 0.65+
     # =========================
     ANTI_DRAIN_ENABLED: bool = True
-    ANTI_DRAIN_MIN_CONFIDENCE: float = 55.0
-    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.40       # spot 0.2% paper
-    ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.85       # spot 0.2% paper
-    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.80
+    ANTI_DRAIN_MIN_CONFIDENCE: float = 60.0
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.55       # spot 0.2% paper
+    ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # spot 0.2% paper
+    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
     ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 30.0
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
-    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 3.0
-    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 12.0
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 2.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 10.0
 
     # =========================
     # PRODUCTION ENTRY GATE
@@ -171,16 +181,16 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.15   # spot 0.2% paper
 
     # Grade A: setup_score >= 62, confidence >= 58
-    PROD_GATE_A_MIN_SETUP: float = 62.0
-    PROD_GATE_A_MIN_CONFIDENCE: float = 58.0
+    PROD_GATE_A_MIN_SETUP: float = 65.0
+    PROD_GATE_A_MIN_CONFIDENCE: float = 62.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90          # live
-    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.50    # spot 0.2% paper
+    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.55    # spot 0.2% paper
     PROD_GATE_A_MIN_RR_TP2: float = 1.35          # live
-    PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.00    # spot 0.2% paper
+    PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.05    # spot 0.2% paper
 
-    # Grade B: setup_score >= 52, confidence >= 54
-    PROD_GATE_B_MIN_SETUP: float = 52.0
-    PROD_GATE_B_MIN_CONFIDENCE: float = 54.0
+    # Grade B: setup_score >= 58, confidence >= 60
+    PROD_GATE_B_MIN_SETUP: float = 58.0
+    PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
     PROD_GATE_B_MIN_RR_TP1: float = 0.85          # live
     PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.40    # spot 0.2% paper
     PROD_GATE_B_MIN_RR_TP2: float = 1.30          # live
@@ -207,21 +217,21 @@ class Settings(BaseSettings):
     # =========================
     # SETUP QUALITY — LEARNING MODE
     # =========================
-    LEARNING_SETUP_MIN_SCORE: float = 56.0
-    LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 25.0
-    LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 5.0
+    LEARNING_SETUP_MIN_SCORE: float = 62.0
+    LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 32.0
+    LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 8.0
     ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = True
-    MIN_TREND_CONTINUATION_SCORE: float = 58.0
-    MIN_TREND_STRUCTURE_SCORE: float = 14.0
-    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 25.0
-    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 2.0
+    MIN_TREND_CONTINUATION_SCORE: float = 62.0
+    MIN_TREND_STRUCTURE_SCORE: float = 16.0
+    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 32.0
+    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 4.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
-    LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 50.0
+    LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 55.0
 
     # Минимальная защищаемая прибыль для exit-политики, чтобы не фиксировать микро-движения.
-    MIN_PROTECTIVE_EXIT_PCT: float = 1.20
+    MIN_PROTECTIVE_EXIT_PCT: float = 1.80
     MIN_POST_TP1_EXIT_PCT: float = 0.80
-    MIN_PROTECTIVE_NET_USDT: float = 1.50
+    MIN_PROTECTIVE_NET_USDT: float = 2.50
     MIN_PROTECTIVE_R_MULT: float = 0.30
 
     # =========================
@@ -246,14 +256,33 @@ class Settings(BaseSettings):
     # =========================
     ENABLE_FUNDING_ARB: bool = False
     FUNDING_ARB_SYMBOLS: str = "BTC/USDT,ETH/USDT"
-    FUNDING_ARB_MIN_RATE_PCT: float = 0.03
-    FUNDING_ARB_MIN_EDGE_PCT: float = 0.01
-    FUNDING_ARB_MAX_BASIS_PCT: float = 0.35
+
+    # Entry thresholds
+    FUNDING_ARB_MIN_RATE_PCT: float = 0.015     # min funding rate per period (8h) to consider
+    FUNDING_ARB_MAX_BASIS_PCT: float = 0.50     # max abs(basis) allowed at entry
+    # Min net yield PER PERIOD after estimated fees (funding_pct - fee_amortized_pct).
+    # Positive means profitable; negative means fees exceed income.
+    FUNDING_ARB_MIN_NET_YIELD_PCT: float = 0.005
+
+    # Position sizing
     FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0
     FUNDING_ARB_MAX_NOTIONAL_USDT: float = 500.0
-    FUNDING_ARB_CLOSE_RATE_PCT: float = 0.005
-    FUNDING_ARB_MAX_HOLD_HOURS: int = 72
+    FUNDING_ARB_MAX_OPEN_HEDGES: int = 2         # max concurrent paper/live positions
+
+    # Exit thresholds
+    FUNDING_ARB_CLOSE_RATE_PCT: float = 0.005   # close when funding rate drops below this
+    FUNDING_ARB_MAX_HOLD_HOURS: int = 240        # max hold time (10 days = 30 funding periods)
+    FUNDING_ARB_MIN_HOLD_PERIODS: int = 3        # don't close before collecting at least 3 periods
+
+    # Scan settings
     FUNDING_ARB_SCAN_INTERVAL_HOURS: int = 8
+    # Automatically open paper positions when a profitable candidate is found
+    FUNDING_ARB_AUTO_OPEN_PAPER: bool = True
+    # Expected hold periods for annualized return calculation (default 10 × 8h = 80h)
+    FUNDING_ARB_ASSUMED_HOLD_PERIODS: int = 10
+
+    # Legacy — kept for compatibility
+    FUNDING_ARB_MIN_EDGE_PCT: float = 0.01
 
     # =========================
     # AFFILIATE / VIP

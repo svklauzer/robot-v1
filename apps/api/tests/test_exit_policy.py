@@ -5,6 +5,7 @@ from core.config import settings
 def test_before_tp1_failed_setup_does_not_fire_before_absolute_mfe_and_age():
     svc = ExitPolicyService()
 
+    # No age — guard must not fire regardless of loss
     no_age = svc.before_tp1_decision(
         side="long",
         entry_price=100.0,
@@ -14,6 +15,7 @@ def test_before_tp1_failed_setup_does_not_fire_before_absolute_mfe_and_age():
         signal_age_sec=None,
         symbol=None,
     )
+    # MFE too low (below absolute min 0.50) — guard must not fire
     low_mfe = svc.before_tp1_decision(
         side="long",
         entry_price=100.0,
@@ -23,9 +25,20 @@ def test_before_tp1_failed_setup_does_not_fire_before_absolute_mfe_and_age():
         signal_age_sec=600,
         symbol=None,
     )
+    # Age below new threshold (599 < 600) — guard must not fire
+    young_trade = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=99.6,
+        stop_price=98.0,
+        mfe_pct=0.55,
+        signal_age_sec=599,
+        symbol=None,
+    )
 
     assert no_age.exit is False
     assert low_mfe.exit is False
+    assert young_trade.exit is False, "Trade younger than 600s must not trigger failed_setup_exit"
 
 
 def test_before_tp1_failed_setup_exit_triggers_after_strict_age_and_real_mfe():
@@ -60,7 +73,8 @@ def test_before_tp1_protective_breakeven_uses_v4_profit_floor():
     assert decision.exit is True
     assert decision.reason == "protective_breakeven_profit_guard"
     assert decision.exit_price is not None
-    assert decision.exit_price >= 101.2
+    # MIN_PROTECTIVE_EXIT_PCT raised to 1.80 — exit price must reflect the new floor
+    assert decision.exit_price >= 101.8
     assert "protected" in (decision.note or "")
 
 

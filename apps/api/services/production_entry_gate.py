@@ -100,11 +100,11 @@ class ProductionEntryGate:
 
         # ── Grade A+ ────────────────────────────────────────────────────────────
         if grade_value == "A+":
-            min_setup = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_SETUP", 82.0))
-            min_confidence = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_CONFIDENCE", 74.0))
+            min_setup = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_SETUP", 76.0))
+            min_confidence = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_CONFIDENCE", 68.0))
             trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
             if trading_mode in ["paper_signal", "paper_trade"]:
-                min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER", 0.84))
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER", 0.60))
             else:
                 min_rr1 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP1", 0.95))
             min_rr2 = float(getattr(settings, "PROD_GATE_A_PLUS_MIN_RR_TP2", 1.45))
@@ -122,13 +122,13 @@ class ProductionEntryGate:
 
         # ── Grade A ─────────────────────────────────────────────────────────────
         if grade_value == "A":
-            min_setup = float(getattr(settings, "PROD_GATE_A_MIN_SETUP", 76.0))
-            min_confidence = float(getattr(settings, "PROD_GATE_A_MIN_CONFIDENCE", 70.0))
+            min_setup = float(getattr(settings, "PROD_GATE_A_MIN_SETUP", 65.0))
+            min_confidence = float(getattr(settings, "PROD_GATE_A_MIN_CONFIDENCE", 62.0))
             trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
             if trading_mode in ["paper_signal", "paper_trade"]:
-                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.78))
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1_PAPER", 0.55))
             else:
-                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.9))
+                min_rr1 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP1", 0.90))
             min_rr2 = float(getattr(settings, "PROD_GATE_A_MIN_RR_TP2", 1.35))
             attach_thresholds()
 
@@ -144,10 +144,10 @@ class ProductionEntryGate:
 
         # ── Grade B ─────────────────────────────────────────────────────────────
         if grade_value == "B":
-            min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 70.0))
+            min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 58.0))
             min_confidence = float(getattr(settings, "PROD_GATE_B_MIN_CONFIDENCE", 60.0))
-            min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.8))
-            min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.25))
+            min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.85))
+            min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.30))
             min_priority = float(getattr(settings, "PROD_GATE_B_MIN_PRIORITY", 85.0))
             attach_thresholds()
 

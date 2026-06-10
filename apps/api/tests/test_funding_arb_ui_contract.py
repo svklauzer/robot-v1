@@ -15,8 +15,12 @@ def test_funding_arb_owner_page_wires_api_contracts():
     assert "/funding-arb/evaluate-exits" in page
     assert "/funding-arb/paper-smoke" in page
     assert "Paper smoke" in page
-    assert "Funding paper smoke" in page
     assert "mode: \"paper\"" in page
+    # New UI: economics explainer and profitability metrics
+    assert "net_yield_per_period_pct" in page
+    assert "break_even_periods" in page
+    assert "annualized_net_yield_pct" in page
+    assert "auto_open_paper" in page
 
 
 def test_owner_nav_and_health_surface_funding_arbitrage():

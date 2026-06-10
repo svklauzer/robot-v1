@@ -1,4 +1,5 @@
 import logging
+import random
 import time
 
 import ccxt
@@ -9,21 +10,64 @@ logger = get_logger(__name__)
 
 
 class HTXClient:
-    _markets_loaded = False
+    # ── Class-level market cache ──────────────────────────────────────────────
+    # Shared across ALL instances so that a new HTXClient() reuses the markets
+    # loaded by a previous one instead of hitting load_markets() again.
+    _markets_loaded: bool = False
+    _cached_markets: dict = {}
+
+    # Fee API circuit-breaker: if the endpoint fails (e.g. insufficient API
+    # permissions), stop retrying for _FEE_BACKOFF_SECONDS to avoid log spam.
+    _fee_api_backoff_until: float = 0.0
+    _FEE_BACKOFF_SECONDS: float = 4 * 3600  # 4 hours
 
     def __init__(self):
-        self.exchange = ccxt.htx({
+        proxy_url = str(getattr(settings, "HTX_PROXY_URL", "") or "").strip()
+
+        exchange_config: dict = {
             "apiKey": settings.HTX_API_KEY,
             "secret": settings.HTX_API_SECRET,
             "enableRateLimit": True,
-            "timeout": 20000,
+            "timeout": 45000,   # raised 20s→30s→45s; Docker-on-Windows + VPN adds RTT
             "options": {
                 "defaultType": settings.HTX_MARKET_TYPE,
                 "adjustForTimeDifference": True,
-            }
-        })
+            },
+        }
 
-    def _retry(self, fn, *args, retries: int = 3, delay: float = 1.0, **kwargs):
+        # ccxt supports HTTP/SOCKS5 proxies via 'proxies' dict.
+        # Set HTX_PROXY_URL=http://user:pass@host:port  or
+        #     HTX_PROXY_URL=socks5://user:pass@host:port
+        if proxy_url:
+            exchange_config["proxies"] = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+            log_event(
+                logger,
+                logging.INFO,
+                "htx_using_proxy",
+                proxy=proxy_url[:30] + "..." if len(proxy_url) > 30 else proxy_url,
+            )
+
+        self.exchange = ccxt.htx(exchange_config)
+
+        # Disable fetchCurrencies — ccxt/HTX calls v2/reference/currencies during
+        # load_markets(). That endpoint times out under poor network conditions
+        # (Docker on Windows, VPN) and the data isn't needed for our use case.
+        self.exchange.has["fetchCurrencies"] = False
+
+        # Inject class-level market cache into the fresh exchange object so this
+        # instance can use already-loaded precision/limit data without a round-trip.
+        if HTXClient._cached_markets:
+            self.exchange.markets = HTXClient._cached_markets
+
+    def _retry(self, fn, *args, retries: int = 3, delay: float = 2.0, **kwargs):
+        """Retry wrapper with exponential backoff + jitter.
+
+        Jitter (±20%) prevents thundering-herd when multiple symbols retry in sync.
+        Delays: ~2s, ~4s before attempts 2 and 3.
+        """
         last_error = None
 
         for attempt in range(1, retries + 1):
@@ -34,17 +78,52 @@ class HTXClient:
                 log_event(logger, logging.WARNING, "htx_retry", attempt=attempt, retries=retries, error=str(e))
 
                 if attempt < retries:
-                    time.sleep(delay * attempt)
+                    base = delay * attempt
+                    jitter = base * 0.2 * (random.random() * 2 - 1)  # ±20%
+                    time.sleep(max(0.1, base + jitter))
 
         raise last_error
 
     def load_markets(self):
-        if not HTXClient._markets_loaded:
-            result = self._retry(self.exchange.load_markets)
-            HTXClient._markets_loaded = True
-            return result
+        """
+        Load and cache exchange markets — with cross-instance sharing.
 
-        return self.exchange.markets or self.exchange.load_markets()
+        Priority:
+        1. Class-level cache populated by a previous instance  → return immediately
+        2. Exchange object already has markets (rare) → promote to class cache
+        3. Fetch from API → write to class cache so future instances don't repeat
+
+        fetchCurrencies is disabled at __init__ so v2/reference/currencies is
+        never called; only the markets endpoint is used.
+        """
+        # Fast path: class-level cache populated
+        if HTXClient._cached_markets:
+            # Ensure this instance's exchange object also has the markets
+            if not self.exchange.markets:
+                self.exchange.markets = HTXClient._cached_markets
+            return HTXClient._cached_markets
+
+        # Exchange object already populated (edge case: markets set externally)
+        if self.exchange.markets:
+            HTXClient._markets_loaded = True
+            HTXClient._cached_markets = self.exchange.markets
+            return self.exchange.markets
+
+        try:
+            result = self._retry(self.exchange.load_markets, retries=5, delay=3.0)
+            HTXClient._markets_loaded = True
+            HTXClient._cached_markets = result
+            log_event(logger, logging.INFO, "htx_markets_loaded", count=len(result))
+            return result
+        except Exception as e:
+            # If we can't load markets, log and return empty dict.
+            # Callers handle missing market data gracefully (fallback to defaults).
+            log_event(
+                logger, logging.ERROR, "htx_load_markets_failed",
+                error=str(e),
+                note="precision and limits will use fallback values",
+            )
+            return {}
 
     def fetch_balance(self):
         return self._retry(self.exchange.fetch_balance)
@@ -160,9 +239,16 @@ class HTXClient:
 
     def fetch_trading_fee(self, symbol: str) -> dict:
         """
-        Пытаемся получить актуальные комиссии по конкретному символу через HTX/CCXT.
-        Если биржа/API временно не отдали комиссии — возвращаем пустой dict.
+        Fetch live trading fees for a symbol.
+
+        Circuit-breaker: if the fee endpoint fails (e.g. API key lacks fee-query
+        permissions), we back off for _FEE_BACKOFF_SECONDS before retrying.
+        This prevents a WARNING flood every 30s in the logs.
         """
+        now = time.time()
+        if now < HTXClient._fee_api_backoff_until:
+            return {}  # still in back-off window — skip silently
+
         try:
             self.exchange.load_markets()
 
@@ -171,7 +257,13 @@ class HTXClient:
                 return fee or {}
 
         except Exception as e:
-            log_event(logger, logging.WARNING, "htx_fee_error", symbol=symbol, error=str(e))
+            # Trip the circuit-breaker so we stop retrying for a long while.
+            HTXClient._fee_api_backoff_until = now + HTXClient._FEE_BACKOFF_SECONDS
+            log_event(
+                logger, logging.WARNING, "htx_fee_error",
+                symbol=symbol, error=str(e),
+                note=f"fee API disabled for {HTXClient._FEE_BACKOFF_SECONDS/3600:.0f}h, using settings fallback",
+            )
 
         return {}
 

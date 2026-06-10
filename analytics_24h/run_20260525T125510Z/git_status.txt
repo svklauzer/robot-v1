@@ -1,5 +1,0 @@
-# CMD: git status --short --branch
-## work
- M scripts/collect_run_report.sh
-?? analytics_24h/run_20260525T125510Z/
-?? apps/web/node_modules/

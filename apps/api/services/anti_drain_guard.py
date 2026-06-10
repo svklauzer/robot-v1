@@ -6,18 +6,21 @@ from typing import Any
 
 @dataclass
 class AntiDrainConfig:
-    min_confidence: float = 75.0
+    # Defaults aligned with settings defaults (config.py).
+    # robot_loop always constructs this from settings, so dataclass defaults
+    # are used only in tests that instantiate AntiDrainConfig directly.
+    min_confidence: float = 60.0
     allow_grade_c: bool = False
     allow_watch_escalated_candidates: bool = False
-    min_net_rr_tp1: float = 1.10
-    min_net_rr_tp2: float = 1.70
-    min_expected_edge_after_costs_usdt: float = 1.50
-    max_position_margin_pct: float = 5.0
-    max_used_margin_pct: float = 12.0
-    max_open_positions: int = 1
+    min_net_rr_tp1: float = 0.55
+    min_net_rr_tp2: float = 0.90
+    min_expected_edge_after_costs_usdt: float = 1.20
+    max_position_margin_pct: float = 12.0
+    max_used_margin_pct: float = 30.0
+    max_open_positions: int = 2
     max_active_signals_per_symbol: int = 1
-    max_daily_loss_pct: float = 1.5
-    max_drawdown_pct: float = 6.0
+    max_daily_loss_pct: float = 2.0
+    max_drawdown_pct: float = 10.0
     block_weak_structure: bool = True
     block_long_overheated: bool = True
     block_short_oversold: bool = True

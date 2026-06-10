@@ -335,3 +335,58 @@ class MLOutcomeStatsService:
             "reason": "_".join(reasons) if reasons else "ok",
             "stats": row,
         }
+
+    def grade_stats(self, min_count: int = 3) -> dict[str, dict]:
+        """
+        Return per-grade performance stats computed from trade_outcomes.jsonl.
+
+        Only grades with >= min_count closed trades are included.
+        Used by MLScorer to apply a data-driven confidence multiplier.
+
+        Returns dict keyed by grade (e.g. "A+", "A", "B", "C"):
+          {
+            "count": int,
+            "wins": int,
+            "winrate": float,          # 0-100
+            "avg_net_pnl": float,
+            "failed_setup_rate": float, # 0-100
+            "tp2_rate": float,          # 0-100
+          }
+        """
+        rows = self._load_rows()
+        closed = [r for r in rows if str(r.get("status") or "") == "closed"]
+
+        from collections import defaultdict
+        buckets: dict[str, dict] = defaultdict(lambda: {
+            "count": 0, "wins": 0, "net_pnl": 0.0,
+            "failed_setup": 0, "tp2": 0,
+        })
+
+        for r in closed:
+            grade = str(r.get("grade") or "unknown").upper()
+            pnl = float(r.get("closed_net_pnl") or 0)
+            labels = r.get("labels") or {}
+            b = buckets[grade]
+            b["count"] += 1
+            b["net_pnl"] += pnl
+            if pnl > 0:
+                b["wins"] += 1
+            if r.get("closed_reason") == "failed_setup_exit":
+                b["failed_setup"] += 1
+            if labels.get("hit_tp2"):
+                b["tp2"] += 1
+
+        result = {}
+        for grade, b in buckets.items():
+            n = b["count"]
+            if n < min_count:
+                continue
+            result[grade] = {
+                "count": n,
+                "wins": b["wins"],
+                "winrate": round(b["wins"] / n * 100, 1),
+                "avg_net_pnl": round(b["net_pnl"] / n, 4),
+                "failed_setup_rate": round(b["failed_setup"] / n * 100, 1),
+                "tp2_rate": round(b["tp2"] / n * 100, 1),
+            }
+        return result

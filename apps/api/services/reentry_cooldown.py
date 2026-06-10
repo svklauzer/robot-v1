@@ -27,10 +27,11 @@ class ReEntryCooldownGuard:
     """
 
     COOLDOWN_MINUTES = {
-        "failed_setup_exit": 120,
+        "failed_setup_exit": 120,          # 2h — position never confirmed direction
         "low_grade_capital_release": 120,
-        "stop_loss": 180,
-        "protective_breakeven_profit_guard": 60,
+        "stop_loss": 180,                  # 3h — full stop hit, market moved against us
+        "protective_breakeven_profit_guard": 90,  # raised 60→90: re-entering after micro-exit burns fees
+        "adaptive_mfe_capture": 60,        # new: captured early profit, wait for fresh setup
         "protective_trailing_stop": 45,
         "adaptive_trailing_stop": 45,
         "adaptive_post_tp1_stop": 30,

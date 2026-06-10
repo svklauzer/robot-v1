@@ -95,16 +95,19 @@ class SignalQualityService:
             return False
 
         # DEV/PAPER: разрешаем больше сделок, чтобы система собирала статистику.
+        # Пороги синхронизированы с PROD_GATE_* defaults чтобы не создавать
+        # сигналы которые сразу заблокирует production_gate.
         if trading_mode in ["paper_signal", "paper_trade"]:
-            if grade in ["A+", "A"]:
-                return setup_score >= 55 and effective_confidence >= 55
+            if grade == "A+":
+                return setup_score >= 60 and effective_confidence >= 60
+
+            if grade == "A":
+                return setup_score >= 62 and effective_confidence >= 60
 
             if grade == "B":
-                return setup_score >= 58 and effective_confidence >= 56
+                return setup_score >= 58 and effective_confidence >= 60
 
-            # Execution Plan V1:
-            # в paper-режиме отключаем C-класс, чтобы не загрязнять статистику
-            # заведомо слабыми сценариями.
+            # Grade C не публикуется — не загрязняем статистику слабыми сетапами.
             if grade == "C":
                 return False
 

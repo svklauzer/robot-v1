@@ -1,2 +1,0 @@
-# GET http://localhost:8000/positions?limit=200
-[{"id":1,"symbol":"BTC/USDT","side":"long","qty":0.004312,"entry_price":77303.33,"mark_price":77568.57,"unrealized_pnl":1.143715,"status":"open","signal_id":1}]

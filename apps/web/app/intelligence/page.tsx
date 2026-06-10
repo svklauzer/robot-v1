@@ -703,7 +703,11 @@ function decisionLabel(code: string | null | undefined) {
   const map: Record<string, string> = {
     ready_to_publish: "Готов к публикации",
     published_signal_created: "Сигнал создан",
+    published_by_priority_queue: "Опубликован (priority queue)",
     signal_published: "Сигнал опубликован",
+
+    priority_queue_wait_next_scan: "Отложен (следующий скан)",
+    deferred_by_scan_limit: "Отложен (лимит скана)",
 
     active_signal_already_exists: "Активный сигнал уже существует",
 
@@ -718,14 +722,24 @@ function decisionLabel(code: string | null | undefined) {
 
     setup_quality_too_low: "Слабый сетап",
     quality_grade_too_low: "Grade ниже порога",
+    grade_c_learning_only: "Grade C — только обучение",
+    grade_c_blocked_before_signal_create: "Grade C заблокирован",
 
     watch_long: "Watch LONG",
     watch_short: "Watch SHORT",
     watch_expired: "Watch истёк",
     watch_cooldown: "Watch cooldown",
 
+    symbol_cooldown_losing_streak: "Cooldown: серия убытков",
+    symbol_cooldown_failed_setup_streak: "Cooldown: failed setup серия",
+    symbol_negative_expectancy_blocked: "Заблокирован: отрицательное матожидание",
+    symbol_weak_reduce_risk: "Слабый символ: риск снижен",
+    reentry_cooldown_active: "Cooldown повторного входа",
+
     skip_no_trade_conditions: "Нет условий",
     short_candidate_but_shorts_disabled: "Short отключён",
+    learning_setup_too_low: "Сетап ниже порога обучения",
+    learning_wait_more_confirmation: "Ждём подтверждение сетапа",
   };
 
   if (!code) return "-";

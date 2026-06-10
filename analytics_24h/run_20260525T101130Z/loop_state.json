@@ -1,2 +1,0 @@
-# GET http://localhost:8000/robot/loop-state
-{"robot_loop":{"enabled":true,"task_created":true,"task_done":false},"subscription_loop":{"enabled":true,"task_created":true,"task_done":false}}

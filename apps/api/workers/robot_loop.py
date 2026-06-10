@@ -7,6 +7,7 @@ from services.market_data import MarketDataService
 from services.news_filter import NewsFilter
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
+from services.ml_outcome_stats import MLOutcomeStatsService
 from services.risk_engine import RiskEngine
 from services.portfolio_engine import PortfolioEngine
 from services.execution_engine import ExecutionEngine
@@ -47,6 +48,13 @@ class RobotLoop:
         self.quality = SignalQualityService()
         self.telegram_router = TelegramRouter()
         self.ml_trade_logger = MLTradeLogger()
+        self.ml_outcome_stats = MLOutcomeStatsService()
+
+        # Grade stats cache: refreshed every 20 loop iterations (~20 min)
+        # to pick up new closed trades without hitting disk every 60s.
+        self._grade_stats_cache: dict | None = None
+        self._grade_stats_loop_counter: int = 0
+        self._GRADE_STATS_REFRESH_EVERY = 20
 
     async def step(
         self,
@@ -747,6 +755,11 @@ class RobotLoop:
     def _intelligence_effective_confidence(self, result) -> float:
         """
         Калибрует confidence для Intelligence-сигналов перед grade/publish.
+
+        Этапы калибровки:
+        1. Base = confidence_hint из MarketIntelligenceEngine
+        2. Setup quality adjustment (setup_score / approve / wait)
+        3. MLScorer v2 adjustment — выравнивает через multi-factor features
         """
 
         base = float(result.confidence_hint or 0)
@@ -757,13 +770,59 @@ class RobotLoop:
 
         if setup_decision == "approve" and setup_score >= 70:
             calibrated = max(base, setup_score * 0.90)
-            return round(min(calibrated, 88.0), 2)
-
-        if setup_decision == "wait" and setup_score >= 55:
+            calibrated = round(min(calibrated, 88.0), 2)
+        elif setup_decision == "wait" and setup_score >= 55:
             calibrated = max(base, setup_score * 0.75)
-            return round(min(calibrated, 72.0), 2)
+            calibrated = round(min(calibrated, 72.0), 2)
+        else:
+            calibrated = round(base, 2)
 
-        return round(base, 2)
+        # ── MLScorer v2 secondary calibration ────────────────────────────────
+        # Extract features from the primary signal timeframe (15m preferred, else 5m).
+        try:
+            timeframes = result.timeframes if isinstance(result.timeframes, dict) else {}
+            tf_ctx = timeframes.get("15m") or timeframes.get("5m") or {}
+            if isinstance(tf_ctx, dict) and tf_ctx:
+                ml_features = {
+                    "last_close":   tf_ctx.get("last_close", 0),
+                    "ema20":        tf_ctx.get("ema20", 0),
+                    "ema50":        tf_ctx.get("ema50", 0),
+                    "volume":       tf_ctx.get("volume", 0),
+                    "volume_ma":    tf_ctx.get("volume_ma20", 1) or 1,
+                    "rsi":          tf_ctx.get("rsi14", 50.0),
+                    "macd_hist":    tf_ctx.get("macd_hist", 0),
+                    "macd_hist_prev": 0.0,  # not stored in ctx; neutral
+                }
+                grade_stats = self._get_grade_stats()
+                ml_result = self.ml.score(
+                    ml_features,
+                    regime=result.regime,
+                    grade=getattr(result, "grade", None),
+                    grade_stats=grade_stats,
+                )
+                ml_confidence = ml_result.confidence  # [35, 95]
+
+                # Blend: 70% calibrated (from intelligence) + 30% MLScorer
+                blended = calibrated * 0.70 + ml_confidence * 0.30
+                calibrated = round(min(blended, 92.0), 2)
+        except Exception:
+            pass  # MLScorer errors must never block signal generation
+
+        return calibrated
+
+    def _get_grade_stats(self) -> dict | None:
+        """Return cached grade stats, refreshing every N loop iterations."""
+        self._grade_stats_loop_counter += 1
+        if (
+            self._grade_stats_cache is None
+            or self._grade_stats_loop_counter >= self._GRADE_STATS_REFRESH_EVERY
+        ):
+            try:
+                self._grade_stats_cache = self.ml_outcome_stats.grade_stats(min_count=3)
+                self._grade_stats_loop_counter = 0
+            except Exception:
+                pass  # stale cache is fine; never block the loop
+        return self._grade_stats_cache
 
     def _should_send_short_block_alert(self, db: Session, symbol: str) -> bool:
         minutes = getattr(settings, "SHORT_ALERT_THROTTLE_MINUTES", 60)

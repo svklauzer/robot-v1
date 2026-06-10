@@ -80,18 +80,6 @@ from services.daily_quality_report import DailyQualityReportService
 
 from pydantic import BaseModel
 
-# ── Domain routers ───────────────────────────────────────────────────────────
-from routers.analytics import router as analytics_router
-from routers.audit import router as audit_router
-from routers.funding_arb import router as funding_arb_router
-from routers.ml import router as ml_router
-from routers.payments import router as payments_router
-from routers.reports import router as reports_router
-from routers.subscribers import router as subscribers_router
-from routers.system import router as system_router
-from routers.telegram import router as telegram_router
-from routers.trade import router as trade_router
-
 INTELLIGENCE_SCAN_LOCK = Lock()
 INTELLIGENCE_PUBLISH_LOCK = Lock()
 
@@ -111,62 +99,6 @@ funding_arb_task = None
 funding_arb_loop_enabled = True
 
 logger = get_logger(__name__)
-
-
-async def background_robot_loop():
-    global robot_loop_enabled
-
-    await asyncio.sleep(5)
-
-    loop = RobotLoop()
-
-    while robot_loop_enabled:
-        db = SessionLocal()
-
-        try:
-            bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
-
-            if bot and bot.status == "running":
-                validation_gates = ValidationGateService().live_blockers(db)
-
-                if validation_gates.get("live_blockers"):
-                    log_event(logger, logging.WARNING, "robot_loop_validation_skip", **validation_gates)
-                else:
-                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
-
-                    if safety.get("blocked"):
-                        db.commit()
-                        log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
-                    else:
-                        await loop.step(
-                            db=db,
-                            bot=bot,
-                            headlines=[],
-                            balance_usdt=1000,
-                            daily_loss_pct=safety.get("daily_loss_pct", 0),
-                            drawdown_pct=0,
-                        )
-                        ml_backfill = loop.ml_trade_logger.log_unlogged_closed_signals(db)
-                        db.commit()
-                        log_event(
-                            logger,
-                            logging.INFO,
-                            "robot_loop_step_completed",
-                            bot_id=bot.id,
-                            mode=bot.mode,
-                            daily_loss_pct=safety.get("daily_loss_pct", 0),
-                            ml_outcomes_logged=ml_backfill.get("logged", 0),
-                            ml_outcomes_path=ml_backfill.get("path"),
-                        )
-
-        except Exception as e:
-            db.rollback()
-            log_event(logger, logging.ERROR, "robot_loop_error", error_type=type(e).__name__, error=str(e))
-
-        finally:
-            db.close()
-
-        await asyncio.sleep(60)
 
 
 async def background_subscription_loop():
@@ -304,9 +236,172 @@ class TestLifecyclePriceRequest(BaseModel):
     signal_id: int
     price: float
 
+class CreateSubscriberRequest(BaseModel):
+    telegram_user_id: str
+    username: str | None = None
+    full_name: str | None = None
+    plan: str = "vip"
+    days: int = 30
+    is_trial: bool = False
+    notes: str | None = None
+
+class CostPreviewRequest(BaseModel):
+    symbol: str = "BTC/USDT"
+    market_type: str = "spot"
+    side: str = "long"
+    entry_price: float
+    exit_price: float
+    qty: float
+    liquidity: str = "taker"
+    holding_funding_periods: int = 1
+    leverage: int | None = None
+
+class TradePlanRequest(BaseModel):
+    symbol: str
+    side: str = "long"
+    entry: float
+    stop: float
+    tp1: float
+    tp2: float
+    balance_usdt: float = 1000
+
+class ExtendSubscriberRequest(BaseModel):
+    days: int = 30
+
+
+class UpdateSubscriberStatusRequest(BaseModel):
+    status: str
+
 class ExposureDebugRequest(BaseModel):
     symbol: str = "BTC/USDT"
     required_margin: float = 333.0
+
+
+class TelegramWebhookRequest(BaseModel):
+    update_id: int | None = None
+    message: dict | None = None
+    callback_query: dict | None = None
+
+
+class CreateCheckoutRequest(BaseModel):
+    telegram_user_id: str
+    plan_code: str = "vip_30"
+    username: str | None = None
+    full_name: str | None = None
+    provider: str = "manual"
+    notes: str | None = None
+
+
+class ManualConfirmPaymentRequest(BaseModel):
+    provider_event_id: str | None = None
+    raw_payload: str | None = None
+
+
+class PaymentEventRequest(BaseModel):
+    payment_id: int
+    provider: str = "manual"
+    provider_event_id: str
+    status: str = "paid"
+    raw_payload: str | None = None
+
+
+class PaymentReconcileRequest(BaseModel):
+    older_than_hours: int | None = None
+
+
+class KillSwitchRequest(BaseModel):
+    enabled: bool = True
+    reason: str | None = "owner_request"
+
+
+class KillSwitchSmokeRequest(BaseModel):
+    reason: str | None = "owner_smoke"
+
+
+class FundingArbScanRequest(BaseModel):
+    symbols: list[str] | None = None
+
+
+class FundingArbOpenRequest(BaseModel):
+    opportunity_id: int
+    notional_usdt: float | None = None
+    mode: str = "paper"
+
+
+class FundingArbCloseRequest(BaseModel):
+    spot_exit_price: float
+    swap_exit_price: float
+    funding_periods: int = 1
+    exit_funding_rate: float | None = None
+
+
+class FundingArbPaperSmokeRequest(BaseModel):
+    notional_usdt: float | None = None
+    funding_periods: int = 1
+    persist: bool = False
+
+
+class ProductE2ESmokeRequest(BaseModel):
+    telegram_user_id: str | None = None
+    plan_code: str = "vip_30"
+    persist: bool = False
+
+
+async def background_robot_loop():
+    global robot_loop_enabled
+
+    await asyncio.sleep(5)
+
+    loop = RobotLoop()
+
+    while robot_loop_enabled:
+        db = SessionLocal()
+
+        try:
+            bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+
+            if bot and bot.status == "running":
+                validation_gates = ValidationGateService().live_blockers(db)
+
+                if validation_gates.get("live_blockers"):
+                    log_event(logger, logging.WARNING, "robot_loop_validation_skip", **validation_gates)
+                else:
+                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+
+                    if safety.get("blocked"):
+                        db.commit()
+                        log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
+                    else:
+                        await loop.step(
+                            db=db,
+                            bot=bot,
+                            headlines=[],
+                            balance_usdt=1000,
+                            daily_loss_pct=safety.get("daily_loss_pct", 0),
+                            drawdown_pct=0,
+                        )
+                        ml_backfill = loop.ml_trade_logger.log_unlogged_closed_signals(db)
+                        db.commit()
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "robot_loop_step_completed",
+                            bot_id=bot.id,
+                            mode=bot.mode,
+                            daily_loss_pct=safety.get("daily_loss_pct", 0),
+                            ml_outcomes_logged=ml_backfill.get("logged", 0),
+                            ml_outcomes_path=ml_backfill.get("path"),
+                        )
+
+        except Exception as e:
+            db.rollback()
+            log_event(logger, logging.ERROR, "robot_loop_error", error_type=type(e).__name__, error=str(e))
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(60)
+
 
 
 def initialize_database_schema():
@@ -383,19 +478,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── Domain routers ───────────────────────────────────────────────────────────
-app.include_router(analytics_router)
-app.include_router(audit_router)
-app.include_router(funding_arb_router)
-app.include_router(ml_router)
-app.include_router(payments_router)
-app.include_router(reports_router)
-app.include_router(subscribers_router)
-app.include_router(system_router)
-app.include_router(telegram_router)
-app.include_router(trade_router)
-
 
 
 @app.middleware("http")
@@ -782,6 +864,14 @@ def robot_loop_state():
     }
 
 
+@app.post("/telegram/test-owner", dependencies=[Depends(require_owner_action)])
+async def telegram_test_owner():
+    broadcaster = SignalBroadcaster()
+    await broadcaster.send_owner_alert(
+        "ROBOT V1 ONLINE",
+        "Owner alert работает. Telegram подключен."
+    )
+    return {"status": "sent"}
 
 @app.get("/robot/debug-signals", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 def debug_signals():
@@ -882,15 +972,240 @@ async def force_paper_signal():
     finally:
         db.close()
 
+@app.get("/analytics/summary", dependencies=[Depends(require_owner_action)])
+def analytics_summary():
+    db = SessionLocal()
+
+    try:
+        total = db.query(Signal).count()
+
+        closed_signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .all()
+        )
+
+        active_statuses = ["published", "opened", "tp1", "breakeven"]
+
+        active_signals = (
+            db.query(Signal)
+            .filter(Signal.status.in_(active_statuses))
+            .all()
+        )
+
+        expired = db.query(Signal).filter(Signal.status == "expired").count()
+        rejected = db.query(Signal).filter(Signal.status == "rejected").count()
+        telegram_failed = db.query(Signal).filter(Signal.status == "telegram_failed").count()
+        queued = db.query(Signal).filter(Signal.status == "queued").count()
+
+        wins = 0
+        losses = 0
+
+        total_result_pct = 0.0
+        total_net_pnl = 0.0
+        total_costs = 0.0
+
+        closed_with_money = 0
+
+        for s in closed_signals:
+            result_pct = float(s.result_pct or 0)
+            total_result_pct += result_pct
+
+            net_pnl = s.closed_net_pnl
+
+            if net_pnl is not None:
+                net_pnl = float(net_pnl)
+                total_net_pnl += net_pnl
+                closed_with_money += 1
+
+                if net_pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+            else:
+                if result_pct > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+            if s.closed_total_cost is not None:
+                total_costs += float(s.closed_total_cost)
+
+        closed_count = len(closed_signals)
+        winrate = round((wins / closed_count * 100), 2) if closed_count else 0.0
+        avg_net_pnl = round((total_net_pnl / closed_with_money), 6) if closed_with_money else 0.0
+
+        guard = ExposureGuard()
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+
+        used_margin = 0.0
+        max_allowed_margin = 0.0
+        free_margin = 0.0
+
+        if bot:
+            equity_usdt = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+            max_used_margin_pct = float(getattr(settings, "MAX_USED_MARGIN_PCT", 0.85))
+
+            used_margin = guard.used_margin(db, bot.id)
+            max_allowed_margin = round(equity_usdt * max_used_margin_pct, 6)
+            free_margin = round(max_allowed_margin - used_margin, 6)
+
+        return {
+            "total_signals": total,
+            "active_signals": len(active_signals),
+            "closed_signals": closed_count,
+            "expired_signals": expired,
+            "rejected_signals": rejected,
+            "telegram_failed_signals": telegram_failed,
+            "queued_signals": queued,
+
+            "wins": wins,
+            "losses": losses,
+            "winrate": winrate,
+
+            "total_result_pct": round(total_result_pct, 4),
+            "total_net_pnl_usdt": round(total_net_pnl, 6),
+            "avg_net_pnl_usdt": avg_net_pnl,
+            "total_costs_usdt": round(total_costs, 6),
+
+            "exposure": {
+                "used_margin": used_margin,
+                "max_allowed_margin": max_allowed_margin,
+                "free_margin": free_margin,
+                "active_signals_count": len(active_signals),
+            },
+        }
+
+    finally:
+        db.close()
 
 
 
+@app.get("/analytics/validation-gates", dependencies=[Depends(require_owner_action)])
+def analytics_validation_gates(limit: int | None = None):
+    db = SessionLocal()
+    try:
+        return ValidationGateService().evaluate(db, limit=limit)
+    finally:
+        db.close()
+
+@app.get("/analytics/reason-breakdown", dependencies=[Depends(require_owner_action)])
+def analytics_reason_breakdown(limit: int = 500):
+    """
+    Причины закрытия сделок с деньгами/метриками.
+    Нужен для быстрого контроля утечек PnL (например failed_setup_exit).
+    """
+    db = SessionLocal()
+
+    try:
+        limit = min(max(limit, 50), 5000)
+
+        signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        rows = {}
+        total_net = 0.0
+        total_count = len(signals)
+
+        for s in signals:
+            reason = str(s.closed_reason or "unknown")
+            result_pct = float(s.result_pct or 0.0)
+            net = float(s.closed_net_pnl or 0.0)
+            cost = float(s.closed_total_cost or 0.0)
+
+            total_net += net
+
+            if reason not in rows:
+                rows[reason] = {
+                    "reason": reason,
+                    "count": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "sum_result_pct": 0.0,
+                    "sum_net_pnl_usdt": 0.0,
+                    "sum_costs_usdt": 0.0,
+                }
+
+            row = rows[reason]
+            row["count"] += 1
+            row["sum_result_pct"] += result_pct
+            row["sum_net_pnl_usdt"] += net
+            row["sum_costs_usdt"] += cost
+
+            if net > 0:
+                row["wins"] += 1
+            else:
+                row["losses"] += 1
+
+        items = []
+        for reason, row in rows.items():
+            count = row["count"] or 1
+            share = round((row["count"] / total_count) * 100, 2) if total_count else 0.0
+            avg_net = row["sum_net_pnl_usdt"] / count
+            avg_result = row["sum_result_pct"] / count
+            pnl_share = round((row["sum_net_pnl_usdt"] / total_net) * 100, 2) if total_net else 0.0
+
+            items.append({
+                "reason": reason,
+                "count": row["count"],
+                "share_pct": share,
+                "wins": row["wins"],
+                "losses": row["losses"],
+                "avg_result_pct": round(avg_result, 4),
+                "sum_net_pnl_usdt": round(row["sum_net_pnl_usdt"], 6),
+                "avg_net_pnl_usdt": round(avg_net, 6),
+                "sum_costs_usdt": round(row["sum_costs_usdt"], 6),
+                "pnl_share_pct": pnl_share,
+            })
+
+        # худшие по net-pnl причины — в начале.
+        items.sort(key=lambda x: (x["sum_net_pnl_usdt"], -x["count"]))
+
+        return {
+            "status": "ok",
+            "sample_closed_signals": total_count,
+            "total_net_pnl_usdt": round(total_net, 6),
+            "items": items,
+        }
+    finally:
+        db.close()
+
+@app.get("/analytics/outcome-root-cause", dependencies=[Depends(require_owner_action)])
+def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int = 500):
+    """Root-cause report for repeated losing exit reasons (roadmap Phase 1)."""
+    db = SessionLocal()
+
+    try:
+        return OutcomeDiagnosticsService().root_cause(db, reason=reason, limit=limit)
+    finally:
+        db.close()
 
 
+@app.get("/analytics/symbol-performance", dependencies=[Depends(require_owner_action)])
+def analytics_symbol_performance(lookback: int = 12):
+    """Per-symbol profitability guard report for roadmap P1 operations."""
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        return SymbolPerformanceSummaryService().summarize(db, bot=bot, lookback=lookback)
+    finally:
+        db.close()
 
 
-
-
+@app.get("/analytics/symbol-policy-replay", dependencies=[Depends(require_owner_action)])
+def analytics_symbol_policy_replay(lookback: int = 12, sample_limit: int = 25):
+    """Replay JSONL outcomes through current per-symbol policy profiles."""
+    return SymbolPolicyReplayService().replay_path(
+        "storage/ml/trade_outcomes.jsonl",
+        lookback=lookback,
+        sample_limit=sample_limit,
+    )
 
 
 @app.post("/signals/{signal_id}/close", dependencies=[Depends(require_owner_action)])
@@ -1240,22 +1555,242 @@ async def test_lifecycle_price(payload: TestLifecyclePriceRequest):
     finally:
         db.close()
 
+@app.get("/reports/summary", dependencies=[Depends(require_owner_action)])
+def report_summary(hours: int = 24):
+    db = SessionLocal()
+
+    try:
+        service = ReportService()
+        return service.collect_stats(db, hours)
+
+    finally:
+        db.close()
 
 
+@app.post("/reports/send-owner", dependencies=[Depends(require_owner_action)])
+async def send_owner_report(hours: int = 24):
+    db = SessionLocal()
+
+    try:
+        service = ReportService()
+        stats = await service.send_owner_report(db, hours)
+        return {"status": "sent", "stats": stats}
+
+    finally:
+        db.close()
 
 
+@app.post("/reports/send-free", dependencies=[Depends(require_owner_action)])
+async def send_free_report(hours: int = 24):
+    db = SessionLocal()
+
+    try:
+        service = ReportService()
+        stats = await service.send_free_report(db, hours)
+        return {"status": "sent", "stats": stats}
+
+    finally:
+        db.close()
 
 
+@app.post("/reports/send-vip", dependencies=[Depends(require_owner_action)])
+async def send_vip_report(hours: int = 24):
+    db = SessionLocal()
+
+    try:
+        service = ReportService()
+        stats = await service.send_vip_report(db, hours)
+        return {"status": "sent", "stats": stats}
+
+    finally:
+        db.close()
 
 
+@app.post("/reports/send-all", dependencies=[Depends(require_owner_action)])
+async def send_all_reports(hours: int = 24):
+    db = SessionLocal()
+
+    try:
+        service = ReportService()
+        stats = await service.send_all_reports(db, hours)
+        return {"status": "sent", "stats": stats}
+
+    finally:
+        db.close()
+
+@app.get("/subscribers", dependencies=[Depends(require_owner_action)])
+def list_subscribers():
+    db = SessionLocal()
+
+    try:
+        now = datetime.now(timezone.utc)
+        subs = db.query(Subscriber).order_by(Subscriber.id.desc()).all()
+
+        return [
+            {
+                "id": s.id,
+                "telegram_user_id": s.telegram_user_id,
+                "username": s.username,
+                "full_name": s.full_name,
+                "plan": s.plan,
+                "status": s.status,
+                "is_trial": s.is_trial,
+                "starts_at": str(s.starts_at),
+                "expires_at": str(s.expires_at),
+                "days_left": max((s.expires_at - now).days, 0) if s.expires_at else 0,
+                "notes": s.notes,
+                "created_at": str(s.created_at),
+            }
+            for s in subs
+        ]
+
+    finally:
+        db.close()
 
 
+@app.post("/subscribers", dependencies=[Depends(require_owner_action)])
+async def create_subscriber(payload: CreateSubscriberRequest):
+    db = SessionLocal()
+
+    try:
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(days=payload.days)
+
+        existing = (
+            db.query(Subscriber)
+            .filter(Subscriber.telegram_user_id == payload.telegram_user_id)
+            .first()
+        )
+
+        if existing:
+            existing.username = payload.username or existing.username
+            existing.full_name = payload.full_name or existing.full_name
+            existing.plan = payload.plan
+            existing.status = "active"
+            existing.expires_at = expires_at
+            existing.is_trial = payload.is_trial
+            existing.notes = payload.notes
+            sub = existing
+        else:
+            sub = Subscriber(
+                telegram_user_id=payload.telegram_user_id,
+                username=payload.username,
+                full_name=payload.full_name,
+                plan=payload.plan,
+                status="active",
+                starts_at=now,
+                expires_at=expires_at,
+                is_trial=payload.is_trial,
+                notes=payload.notes,
+            )
+            db.add(sub)
+
+        db.commit()
+        db.refresh(sub)
+
+        router = TelegramRouter()
+        await router.owner_alert(
+            "SUBSCRIBER ACTIVE",
+            f"{sub.full_name or sub.username or sub.telegram_user_id}\n"
+            f"Plan: {sub.plan}\n"
+            f"Expires: {sub.expires_at}"
+        )
+
+        return {
+            "status": "ok",
+            "subscriber_id": sub.id,
+            "expires_at": str(sub.expires_at),
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
 
 
+@app.post("/subscribers/{subscriber_id}/extend", dependencies=[Depends(require_owner_action)])
+async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest):
+    db = SessionLocal()
+
+    try:
+        sub = db.query(Subscriber).filter(Subscriber.id == subscriber_id).first()
+
+        if not sub:
+            return {"status": "error", "error": "subscriber_not_found"}
+
+        now = datetime.now(timezone.utc)
+        base = sub.expires_at if sub.expires_at and sub.expires_at > now else now
+        sub.expires_at = base + timedelta(days=payload.days)
+        sub.status = "active"
+
+        db.commit()
+
+        router = TelegramRouter()
+        await router.owner_alert(
+            "SUBSCRIBER EXTENDED",
+            f"{sub.full_name or sub.username or sub.telegram_user_id}\n"
+            f"+{payload.days} days\n"
+            f"New expiry: {sub.expires_at}"
+        )
+
+        return {
+            "status": "ok",
+            "subscriber_id": sub.id,
+            "expires_at": str(sub.expires_at),
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
 
 
+@app.post("/subscribers/{subscriber_id}/status", dependencies=[Depends(require_owner_action)])
+def update_subscriber_status(subscriber_id: int, payload: UpdateSubscriberStatusRequest):
+    db = SessionLocal()
 
+    try:
+        sub = db.query(Subscriber).filter(Subscriber.id == subscriber_id).first()
 
+        if not sub:
+            return {"status": "error", "error": "subscriber_not_found"}
+
+        sub.status = payload.status
+        db.commit()
+
+        return {
+            "status": "ok",
+            "subscriber_id": sub.id,
+            "new_status": sub.status,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
+
+@app.post("/subscribers/check-expirations", dependencies=[Depends(require_owner_action)])
+async def check_subscriber_expirations():
+    db = SessionLocal()
+
+    try:
+        service = SubscriptionWatchdog()
+        result = await service.check_subscriptions(db)
+        db.commit()
+        return {"status": "ok", "result": result}
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
 
 @app.get("/system/health", dependencies=[Depends(require_owner_action)])
 def system_health():
@@ -1298,63 +1833,717 @@ def system_health():
 
 
 
+@app.post("/system/product-e2e-smoke", dependencies=[Depends(require_owner_action)])
+def system_product_e2e_smoke(payload: ProductE2ESmokeRequest | None = None):
+    db = SessionLocal()
+    request = payload or ProductE2ESmokeRequest()
+
+    try:
+        result = ProductE2ESmokeService().run(
+            db,
+            telegram_user_id=request.telegram_user_id,
+            plan_code=request.plan_code,
+        )
+        result["persisted"] = bool(request.persist)
+        if request.persist:
+            db.commit()
+        else:
+            db.rollback()
+        return result
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
+
+
+@app.get("/system/exchange-reconciliation", dependencies=[Depends(require_owner_action)])
+def exchange_reconciliation_status(symbol: str | None = None, force: bool = False):
+    db = SessionLocal()
+    try:
+        return ExchangeReconciliationService().check(db, symbol=symbol, force=force)
+    finally:
+        db.close()
+
+@app.get("/audit/events", dependencies=[Depends(require_owner_action)])
+def list_audit_events(limit: int = 100, action: str | None = None):
+    db = SessionLocal()
+    try:
+        return AuditLogService().list_events(db, limit=limit, action=action)
+    finally:
+        db.close()
+
+@app.get("/payments/plans")
+def list_payment_plans():
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        plans = service.list_plans(db)
+        db.commit()
+        return [service.serialize_plan(plan) for plan in plans]
+    finally:
+        db.close()
+
+
+@app.post("/payments/checkout", dependencies=[Depends(require_owner_action)])
+def create_payment_checkout(payload: CreateCheckoutRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment = service.create_checkout(
+            db=db,
+            telegram_user_id=payload.telegram_user_id,
+            plan_code=payload.plan_code,
+            username=payload.username,
+            full_name=payload.full_name,
+            provider=payload.provider,
+            notes=payload.notes,
+        )
+        db.commit()
+        db.refresh(payment)
+        return {"status": "ok", "payment": service.serialize_payment(payment)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments", dependencies=[Depends(require_owner_action)])
+def list_payments(limit: int = 100, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        query = db.query(Payment)
+        if status:
+            query = query.filter(Payment.status == status)
+        payments = query.order_by(Payment.id.desc()).limit(limit).all()
+        service = BillingService()
+        return {
+            "summary": service.summary(db),
+            "items": [service.serialize_payment(payment) for payment in payments],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/payments/{payment_id}/manual-confirm", dependencies=[Depends(require_owner_action)])
+async def manual_confirm_payment(payment_id: int, payload: ManualConfirmPaymentRequest | None = None):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        event = None
+        if payload and payload.provider_event_id:
+            payment, subscriber, activated, event = service.process_payment_event(
+                db=db,
+                payment_id=payment_id,
+                provider="manual",
+                provider_event_id=payload.provider_event_id,
+                status="paid",
+                raw_payload=payload.raw_payload,
+            )
+        else:
+            payment, subscriber, activated = service.confirm_payment(
+                db=db,
+                payment_id=payment_id,
+                raw_payload=payload.raw_payload if payload else None,
+            )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
+        AuditLogService().record(
+            db,
+            action="payment_manual_confirm",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"activated": activated, "subscriber_id": subscriber.id, "customer_notification": notification},
+        )
+        db.commit()
+        await TelegramRouter().owner_alert(
+            "PAYMENT CONFIRMED",
+            (
+                f"Payment #{payment.id} {payment.amount} {payment.currency}\n"
+                f"User: {subscriber.telegram_user_id}\n"
+                f"Plan: {subscriber.plan}\n"
+                f"Expires: {subscriber.expires_at}\n"
+                f"Activated now: {activated}"
+            ),
+        )
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id,
+            "expires_at": str(subscriber.expires_at),
+            "customer_notification": notification,
+            "payment_event": service.serialize_payment_event(event) if event else None,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/events", dependencies=[Depends(require_owner_action)])
+def list_payment_events(limit: int = 100):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 500)
+        service = BillingService()
+        events = db.query(PaymentEvent).order_by(PaymentEvent.id.desc()).limit(limit).all()
+        return {
+            "items": [service.serialize_payment_event(event) for event in events],
+            "summary": service.summary(db),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/payments/events", dependencies=[Depends(require_owner_action)])
+def process_payment_event(payload: PaymentEventRequest):
+    db = SessionLocal()
+    try:
+        service = BillingService()
+        payment, subscriber, activated, event = service.process_payment_event(
+            db=db,
+            payment_id=payload.payment_id,
+            provider=payload.provider,
+            provider_event_id=payload.provider_event_id,
+            status=payload.status,
+            raw_payload=payload.raw_payload,
+        )
+        notification = CustomerNotificationService().queue_payment_success(db, payment, subscriber, activated)
+        AuditLogService().record(
+            db,
+            action="payment_event_processed",
+            resource_type="payment",
+            resource_id=payment.id,
+            details={"event_id": event.id, "status": event.status, "activated": activated, "customer_notification": notification},
+        )
+        db.commit()
+        db.refresh(payment)
+        db.refresh(event)
+        return {
+            "status": "ok",
+            "activated": activated,
+            "payment": service.serialize_payment(payment),
+            "subscriber_id": subscriber.id if subscriber else None,
+            "customer_notification": notification,
+            "payment_event": service.serialize_payment_event(event),
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/summary", dependencies=[Depends(require_owner_action)])
+def payments_summary():
+    db = SessionLocal()
+    try:
+        return BillingService().summary(db)
+    finally:
+        db.close()
+
+
+@app.post("/payments/reconcile", dependencies=[Depends(require_owner_action)])
+def reconcile_payments(payload: PaymentReconcileRequest | None = None):
+    db = SessionLocal()
+    try:
+        result = PaymentReconciliationService().reconcile_pending(
+            db,
+            older_than_hours=payload.older_than_hours if payload else None,
+            audit_log=AuditLogService(),
+        )
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/payments/revenue", dependencies=[Depends(require_owner_action)])
+def payments_revenue(window_days: int = 30):
+    db = SessionLocal()
+    try:
+        window_days = min(max(window_days, 1), 365)
+        return RevenueMetricsService().summary(db, window_days=window_days)
+    finally:
+        db.close()
+
+@app.get("/funding-arb/summary", dependencies=[Depends(require_owner_action)])
+def funding_arb_summary():
+    db = SessionLocal()
+    try:
+        return FundingArbEngine().summary(db)
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/scan", dependencies=[Depends(require_owner_action)])
+def funding_arb_scan(payload: FundingArbScanRequest | None = None):
+    db = SessionLocal()
+    try:
+        result = FundingMonitorService().scan(db, symbols=payload.symbols if payload else None)
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/funding-arb/opportunities", dependencies=[Depends(require_owner_action)])
+def funding_arb_opportunities(limit: int = 50, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 200)
+        query = db.query(FundingArbOpportunity)
+        if status:
+            query = query.filter(FundingArbOpportunity.status == status)
+        items = query.order_by(FundingArbOpportunity.id.desc()).limit(limit).all()
+        monitor = FundingMonitorService()
+        return {"items": [monitor.serialize_opportunity(item) for item in items]}
+    finally:
+        db.close()
+
+
+@app.get("/funding-arb/positions", dependencies=[Depends(require_owner_action)])
+def funding_arb_positions(limit: int = 50, status: str | None = None):
+    db = SessionLocal()
+    try:
+        limit = min(max(limit, 1), 200)
+        query = db.query(FundingArbPosition)
+        if status:
+            query = query.filter(FundingArbPosition.status == status)
+        items = query.order_by(FundingArbPosition.id.desc()).limit(limit).all()
+        engine = FundingArbEngine()
+        return {"items": [engine.serialize_position(item) for item in items]}
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/open", dependencies=[Depends(require_owner_action)])
+def funding_arb_open(payload: FundingArbOpenRequest):
+    db = SessionLocal()
+    try:
+        position = FundingArbEngine().open_hedge(
+            db,
+            opportunity_id=payload.opportunity_id,
+            notional_usdt=payload.notional_usdt,
+            mode=payload.mode,
+        )
+        AuditLogService().record(
+            db,
+            action="funding_arb_opened",
+            resource_type="funding_arb_position",
+            resource_id=position.id,
+            details={"symbol": position.symbol, "notional_usdt": position.notional_usdt, "mode": position.mode},
+        )
+        db.commit()
+        db.refresh(position)
+        return {"status": "ok", "position": FundingArbEngine().serialize_position(position)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
 
 
+@app.post("/funding-arb/paper-smoke", dependencies=[Depends(require_owner_action)])
+def funding_arb_paper_smoke(payload: FundingArbPaperSmokeRequest | None = None):
+    db = SessionLocal()
+    request = payload or FundingArbPaperSmokeRequest()
+    try:
+        result = FundingArbEngine().paper_cycle_smoke(
+            db,
+            notional_usdt=request.notional_usdt,
+            funding_periods=request.funding_periods,
+        )
+        result["persisted"] = bool(request.persist)
+        if request.persist:
+            AuditLogService().record(
+                db,
+                action="funding_arb_paper_smoke",
+                resource_type="funding_arb_position",
+                resource_id=result.get("position", {}).get("id"),
+                details={"realized_pnl": result.get("position", {}).get("realized_pnl")},
+            )
+            db.commit()
+        else:
+            db.rollback()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+@app.post("/funding-arb/evaluate-exits", dependencies=[Depends(require_owner_action)])
+def funding_arb_evaluate_exits():
+    db = SessionLocal()
+    try:
+        result = FundingArbEngine().evaluate_exits(db)
+        if result.get("closed") or result.get("close_required"):
+            AuditLogService().record(
+                db,
+                action="funding_arb_exit_evaluated",
+                resource_type="funding_arb_position",
+                details={
+                    "closed": len(result.get("closed", [])),
+                    "close_required": len(result.get("close_required", [])),
+                    "errors": len(result.get("errors", [])),
+                },
+            )
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/funding-arb/{position_id}/unrealized", dependencies=[Depends(require_owner_action)])
+def funding_arb_unrealized_pnl(position_id: int):
+    """Estimate current unrealized P&L for an open funding arb position."""
+    db = SessionLocal()
+    try:
+        from models.funding_arbitrage import FundingArbPosition as FAPModel
+        position = db.query(FAPModel).filter(FAPModel.id == position_id).first()
+        if not position:
+            return {"status": "error", "error": "position_not_found"}
+        engine = FundingArbEngine()
+        result = engine.estimate_unrealized_pnl(position)
+        return {"status": "ok", "position_id": position_id, **result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/funding-arb/{position_id}/close", dependencies=[Depends(require_owner_action)])
+def funding_arb_close(position_id: int, payload: FundingArbCloseRequest):
+    db = SessionLocal()
+    try:
+        position = FundingArbEngine().close_paper(
+            db,
+            position_id=position_id,
+            spot_exit_price=payload.spot_exit_price,
+            swap_exit_price=payload.swap_exit_price,
+            funding_periods=payload.funding_periods,
+            exit_funding_rate=payload.exit_funding_rate,
+        )
+        AuditLogService().record(
+            db,
+            action="funding_arb_closed",
+            resource_type="funding_arb_position",
+            resource_id=position.id,
+            details={"symbol": position.symbol, "realized_pnl": position.realized_pnl},
+        )
+        db.commit()
+        db.refresh(position)
+        return {"status": "ok", "position": FundingArbEngine().serialize_position(position)}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+@app.get("/system/live-safety", dependencies=[Depends(require_owner_action)])
+def system_live_safety():
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        return LiveSafetyService().snapshot(db=db, bot=bot)
+
+    finally:
+        db.close()
+
+
+@app.post("/system/kill-switch", dependencies=[Depends(require_owner_action)])
+def system_kill_switch(payload: KillSwitchRequest):
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        if not bot:
+            return {"status": "error", "error": "bot_not_found"}
+
+        state = LiveSafetyService().set_kill_switch(
+            db=db,
+            bot=bot,
+            enabled=payload.enabled,
+            reason=payload.reason,
+        )
+        db.commit()
+        return {"status": "ok", "live_safety": state}
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
 
 
 
+@app.post("/system/kill-switch-smoke", dependencies=[Depends(require_owner_action)])
+def system_kill_switch_smoke(payload: KillSwitchSmokeRequest | None = None):
+    db = SessionLocal()
+
+    try:
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        if not bot:
+            return {"status": "error", "error": "bot_not_found"}
+
+        request = payload or KillSwitchSmokeRequest()
+        result = LiveSafetyService().kill_switch_smoke(db=db, bot=bot, reason=request.reason)
+        db.rollback()
+        return result
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        db.close()
+
+@app.get("/system/live-shadow/drift", dependencies=[Depends(require_owner_action)])
+def system_live_shadow_drift(limit: int = 20):
+    """Compare active paper signals with live bid/ask executable levels."""
+    db = SessionLocal()
+    try:
+        return LiveShadowDriftService().report(db, limit=limit)
+    finally:
+        db.close()
 
 
+@app.get("/system/readiness", dependencies=[Depends(require_owner_action)])
+def system_readiness():
+    db = SessionLocal()
+
+    try:
+        analytics = analytics_summary()
+        telegram_delivery = TelegramDeliveryLog().summary(db, hours=24)
+        payments_summary = BillingService().summary(db)
+        revenue = RevenueMetricsService().summary(db)
+        funding_arb = FundingArbEngine().summary(db)
+        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+        live_safety = LiveSafetyService().snapshot(db=db, bot=bot)
+        ml_outcomes = MLOutcomeStatsService().safe_summary()
+        market_connectivity = MarketConnectivityService().check("BTC/USDT")
+        exchange_reconciliation = ExchangeReconciliationService().check(db)
+        validation_gates = ValidationGateService().evaluate(db)
+
+        # Hard blockers — блокируют В ЛЮБОМ режиме (paper и live).
+        hard_blockers = list(settings.production_blockers())
+        hard_blockers.extend(live_safety.get("blockers", []))
+        if settings.ENABLE_FUNDING_ARB and not settings.ENABLE_FUTURES:
+            hard_blockers.append("funding arbitrage requires ENABLE_FUTURES=true")
+
+        # Soft warnings — показываются в дашборде, но НЕ блокируют paper/learning.
+        # Становятся hard blockers только при ENABLE_LIVE_ORDERS=true.
+        soft_warnings: list[str] = []
+        soft_warnings.extend(validation_gates.get("blockers") or [])
+        if telegram_delivery.get("failed", 0) > 0:
+            soft_warnings.append("telegram delivery has failures in the last 24h")
+        if ml_outcomes.get("stale"):
+            soft_warnings.append(
+                f"ML outcomes log is stale: latest_logged_at={ml_outcomes.get('latest_logged_at')} "
+                f"age_hours={ml_outcomes.get('latest_age_hours')}"
+            )
+        elif ml_outcomes.get("status") not in ["ok", "empty"]:
+            soft_warnings.append("ML outcomes summary is degraded")
+        if market_connectivity.get("breaker_blocked"):
+            soft_warnings.extend(market_connectivity.get("blockers") or ["market connectivity breaker is blocked"])
+        if exchange_reconciliation.get("blockers"):
+            soft_warnings.extend(exchange_reconciliation.get("blockers") or [])
+
+        # В live режиме soft_warnings тоже становятся hard blockers.
+        if settings.is_live_enabled:
+            hard_blockers.extend(soft_warnings)
+            soft_warnings = []
+
+        # Итоговый список для обратной совместимости.
+        blockers = hard_blockers + (soft_warnings if not settings.is_live_enabled else [])
+
+        is_paper_mode = not settings.is_live_enabled
+        # В paper mode статус "paper_ready" если нет hard blockers (soft warnings — не blockers).
+        effective_status = (
+            "ready" if not hard_blockers and not soft_warnings
+            else ("paper_ready" if is_paper_mode and not hard_blockers
+                  else "blocked")
+        )
+
+        return {
+            "status": effective_status,
+            "ready": not hard_blockers,
+            "paper_mode": is_paper_mode,
+            "hard_blockers": hard_blockers,
+            "warnings": soft_warnings,
+            "blockers": hard_blockers,  # обратная совместимость
+            "analytics": analytics,
+            "telegram_delivery": telegram_delivery,
+            "payments": payments_summary,
+            "revenue": revenue,
+            "funding_arb": funding_arb,
+            "live_safety": live_safety,
+            "ml_outcomes": ml_outcomes,
+            "market_connectivity": market_connectivity,
+            "exchange_reconciliation": exchange_reconciliation,
+            "validation_gates": validation_gates,
+            "required_gates": {
+                "closed_validation_signals": validation_gates.get("min_closed", 200),
+                "failed_setup_exit_share_max_pct": validation_gates.get("failed_setup_max_pct", 35.0),
+                "positive_then_negative_max_pct": validation_gates.get("positive_then_negative_max_pct", 25.0),
+                "telegram_delivery_sla_min_pct": 99.0,
+                "adaptive_mfe_capture_enabled": bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)),
+                "adaptive_mfe_capture_start_pct": getattr(settings, "MFE_CAPTURE_START_PCT", 0.65),
+                "adaptive_mfe_capture_drawdown_pct": getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30),
+                "adaptive_mfe_capture_protect_share": getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.35),
+                "market_connectivity_max_latency_ms": getattr(settings, "MARKET_CONNECTIVITY_MAX_LATENCY_MS", 5000),
+                "market_connectivity_max_spread_pct": getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75),
+            },
+        }
+
+    finally:
+        db.close()
 
 
+@app.post("/telegram/webhook")
+async def telegram_webhook(payload: TelegramWebhookRequest):
+    db = SessionLocal()
+    try:
+        response = TelegramBotMenuService().handle(
+            db=db,
+            message=payload.message,
+            callback_query=payload.callback_query,
+        )
+        db.commit()
+
+        if response.chat_id:
+            await SignalBroadcaster().send_message(
+                chat_id=response.chat_id,
+                text=response.text,
+                message_type=response.message_type,
+                reply_markup=response.reply_markup,
+            )
+
+        return {
+            "status": "ok",
+            "command": response.command,
+            "telegram_user_id": response.telegram_user_id,
+            "message_type": response.message_type,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    finally:
+        db.close()
 
 
+@app.get("/telegram/deliveries/summary", dependencies=[Depends(require_owner_action)])
+def telegram_deliveries_summary(hours: int = 24):
+    db = SessionLocal()
+    try:
+        return TelegramDeliveryLog().summary(db, hours=min(max(hours, 1), 720))
+    finally:
+        db.close()
+
+@app.post("/system/test-telegram-owner", dependencies=[Depends(require_owner_action)])
+async def test_telegram_owner():
+    router = TelegramRouter()
+    await router.owner_alert(
+        "SYSTEM HEALTH TEST",
+        "Owner Telegram alerts работают."
+    )
+    return {"status": "sent"}
 
 
+@app.post("/system/test-telegram-free", dependencies=[Depends(require_owner_action)])
+async def test_telegram_free():
+    broadcaster = SignalBroadcaster()
+    await broadcaster.send_message(
+        settings.TELEGRAM_FREE_SIGNALS_CHAT_ID,
+        "🧪 FREE channel test: система Finmt работает."
+    )
+    return {"status": "sent"}
 
 
+@app.post("/system/test-telegram-vip", dependencies=[Depends(require_owner_action)])
+async def test_telegram_vip():
+    broadcaster = SignalBroadcaster()
+    await broadcaster.send_message(
+        settings.TELEGRAM_VIP_SIGNALS_CHAT_ID,
+        "🧪 VIP channel test: система Finmt работает."
+    )
+    return {"status": "sent"}
 
+@app.post("/trade/cost-preview", dependencies=[Depends(require_owner_action)])
+def trade_cost_preview(payload: CostPreviewRequest):
+    try:
+        engine = CostEngine()
 
+        preview = engine.estimate(
+            symbol=payload.symbol,
+            market_type=payload.market_type,
+            side=payload.side,
+            entry_price=payload.entry_price,
+            exit_price=payload.exit_price,
+            qty=payload.qty,
+            liquidity=payload.liquidity,
+            holding_funding_periods=payload.holding_funding_periods,
+            leverage=payload.leverage,
+        )
 
+        return {
+            "status": "ok",
+            "cost": engine.to_dict(preview),
+            "config": {
+                "trading_mode": settings.TRADING_MODE,
+                "market_type": settings.MARKET_TYPE,
+                "enable_live_orders": settings.ENABLE_LIVE_ORDERS,
+                "enable_futures": settings.ENABLE_FUTURES,
+                "spot_taker_fee": settings.SPOT_TAKER_FEE,
+                "spot_maker_fee": settings.SPOT_MAKER_FEE,
+                "futures_taker_fee": settings.FUTURES_TAKER_FEE,
+                "futures_maker_fee": settings.FUTURES_MAKER_FEE,
+                "slippage_buffer_pct": settings.SLIPPAGE_BUFFER_PCT,
+                "funding_buffer_pct": settings.FUNDING_BUFFER_PCT,
+                "allow_shorts": settings.ALLOW_SHORTS,
+                "execution_market": settings.EXECUTION_MARKET,
+            },
+        }
 
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+        }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+@app.post("/trade/build-plan", dependencies=[Depends(require_owner_action)])
+def build_trade_plan(payload: TradePlanRequest):
+    builder = TradePlanBuilder()
+    plan = builder.build_plan(
+        symbol=payload.symbol,
+        side=payload.side,
+        entry_price=payload.entry,
+        stop_price=payload.stop,
+        tp1=payload.tp1,
+        tp2=payload.tp2,
+        balance_usdt=payload.balance_usdt
+    )
+    return {"status": "ok", "trade_plan": plan.__dict__}
 
 @app.post("/robot/force-valid-trade-signal", dependencies=[Depends(require_owner_action), Depends(require_non_production_debug)])
 async def force_valid_trade_signal():
@@ -3228,5 +4417,285 @@ def debug_exposure(payload: ExposureDebugRequest):
             },
         }
 
+    finally:
+        db.close()
+
+@app.get("/analytics/signal-quality", dependencies=[Depends(require_owner_action)])
+def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
+    db = SessionLocal()
+
+    try:
+        limit = min(max(limit, 1), 1000)
+
+        signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        total_closed = len(signals)
+
+        lifecycle_count = 0
+        legacy_count = 0
+
+        went_positive = 0
+        positive_then_negative = 0
+
+        stop_loss_count = 0
+        breakeven_count = 0
+        trailing_count = 0
+        post_tp1_stop_count = 0
+        mfe_capture_count = 0
+        tp2_count = 0
+
+        mfe_values = []
+        mae_values = []
+        missed_values = []
+        result_values = []
+        net_pnl_values = []
+        costs_values = []
+
+        by_reason = {}
+        by_reason_money = {}
+
+        items = []
+
+        trailing_reasons = {
+            "protective_trailing_stop",
+            "adaptive_trailing_stop",
+            "trend_trailing_stop",
+        }
+
+        post_tp1_reasons = {
+            "adaptive_post_tp1_stop",
+        }
+
+        mfe_capture_reasons = {
+            "adaptive_mfe_capture",
+        }
+
+        for s in signals:
+            plan = s.plan_json or {}
+            lifecycle = plan.get("lifecycle") or {}
+
+            has_lifecycle = bool(lifecycle)
+            if has_lifecycle:
+                lifecycle_count += 1
+            else:
+                legacy_count += 1
+
+            if only_lifecycle and not has_lifecycle:
+                continue
+
+            reason = s.closed_reason or lifecycle.get("close_reason") or "unknown"
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+
+            net_pnl = float(s.closed_net_pnl) if s.closed_net_pnl is not None else None
+            total_cost = float(s.closed_total_cost) if s.closed_total_cost is not None else None
+            result_pct = float(s.result_pct) if s.result_pct is not None else None
+
+            if reason not in by_reason_money:
+                by_reason_money[reason] = {
+                    "count": 0,
+                    "net_pnl": 0.0,
+                    "costs": 0.0,
+                    "avg_result_pct": 0.0,
+                    "_result_values": [],
+                }
+
+            by_reason_money[reason]["count"] += 1
+
+            if net_pnl is not None:
+                by_reason_money[reason]["net_pnl"] += net_pnl
+                net_pnl_values.append(net_pnl)
+
+            if total_cost is not None:
+                by_reason_money[reason]["costs"] += total_cost
+                costs_values.append(total_cost)
+
+            if result_pct is not None:
+                by_reason_money[reason]["_result_values"].append(result_pct)
+                result_values.append(result_pct)
+
+            if reason == "stop_loss":
+                stop_loss_count += 1
+
+            if reason == "breakeven_stop":
+                breakeven_count += 1
+
+            if reason in trailing_reasons:
+                trailing_count += 1
+
+            if reason in post_tp1_reasons:
+                post_tp1_stop_count += 1
+
+            if reason in mfe_capture_reasons:
+                mfe_capture_count += 1
+
+            if reason == "tp2_reached":
+                tp2_count += 1
+
+            if lifecycle.get("went_positive"):
+                went_positive += 1
+
+            if lifecycle.get("positive_then_negative"):
+                positive_then_negative += 1
+
+            if lifecycle.get("mfe_pct") is not None:
+                mfe_values.append(float(lifecycle.get("mfe_pct")))
+
+            if lifecycle.get("mae_pct") is not None:
+                mae_values.append(float(lifecycle.get("mae_pct")))
+
+            if lifecycle.get("missed_profit_pct") is not None:
+                missed_values.append(float(lifecycle.get("missed_profit_pct")))
+
+            items.append({
+                "id": s.id,
+                "symbol": s.symbol,
+                "side": s.side,
+                "grade": s.grade,
+                "status": s.status,
+                "result_pct": s.result_pct,
+                "closed_reason": s.closed_reason,
+                "closed_net_pnl": s.closed_net_pnl,
+                "closed_total_cost": s.closed_total_cost,
+
+                "has_lifecycle": has_lifecycle,
+                "mfe_pct": lifecycle.get("mfe_pct"),
+                "mae_pct": lifecycle.get("mae_pct"),
+                "missed_profit_pct": lifecycle.get("missed_profit_pct"),
+                "positive_then_negative": lifecycle.get("positive_then_negative"),
+
+                "entry_price": lifecycle.get("entry_price"),
+                "max_profit_price": lifecycle.get("max_profit_price"),
+                "max_drawdown_price": lifecycle.get("max_drawdown_price"),
+                "exit_price": lifecycle.get("exit_price"),
+                "close_reason": lifecycle.get("close_reason") or s.closed_reason,
+            })
+
+        def avg(values):
+            if not values:
+                return 0.0
+            return round(sum(values) / len(values), 4)
+
+        for reason, row in by_reason_money.items():
+            values = row.pop("_result_values", [])
+            row["net_pnl"] = round(row["net_pnl"], 6)
+            row["costs"] = round(row["costs"], 6)
+            row["avg_result_pct"] = avg(values)
+
+        lifecycle_total = lifecycle_count if lifecycle_count else 0
+
+        return {
+            "status": "ok",
+
+            "total_closed": total_closed,
+            "lifecycle_count": lifecycle_count,
+            "legacy_count": legacy_count,
+            "only_lifecycle": only_lifecycle,
+
+            "went_positive": went_positive,
+            "positive_then_negative": positive_then_negative,
+            "positive_then_negative_rate": round(
+                (positive_then_negative / lifecycle_total * 100), 2
+            ) if lifecycle_total else 0.0,
+
+            "stop_loss_count": stop_loss_count,
+            "breakeven_count": breakeven_count,
+            "trailing_count": trailing_count,
+            "post_tp1_stop_count": post_tp1_stop_count,
+            "mfe_capture_count": mfe_capture_count,
+            "tp2_count": tp2_count,
+
+            "tp2_rate": round((tp2_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
+            "trailing_rate": round((trailing_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
+            "post_tp1_stop_rate": round((post_tp1_stop_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
+            "mfe_capture_rate": round((mfe_capture_count / lifecycle_total * 100), 2) if lifecycle_total else 0.0,
+
+            "avg_mfe_pct": avg(mfe_values),
+            "avg_mae_pct": avg(mae_values),
+            "avg_missed_profit_pct": avg(missed_values),
+            "avg_result_pct": avg(result_values),
+            "avg_net_pnl_usdt": avg(net_pnl_values),
+            "avg_costs_usdt": avg(costs_values),
+
+            "total_net_pnl_usdt": round(sum(net_pnl_values), 6),
+            "total_costs_usdt": round(sum(costs_values), 6),
+
+            "by_reason": by_reason,
+            "by_reason_money": by_reason_money,
+
+            "items": items,
+        }
+
+    finally:
+        db.close()
+
+@app.get("/ml/outcomes/summary", dependencies=[Depends(require_owner_action)])
+def ml_outcomes_summary():
+    service = MLOutcomeStatsService()
+    return service.safe_summary()
+
+
+@app.post("/ml/outcomes/backfill", dependencies=[Depends(require_owner_action)])
+def ml_outcomes_backfill(limit: int = 500):
+    db = SessionLocal()
+    try:
+        return MLTradeLogger().log_unlogged_closed_signals(db, limit=limit)
+    finally:
+        db.close()
+
+@app.get("/analytics/grade-c-audit", dependencies=[Depends(require_owner_action)])
+def analytics_grade_c_audit(date_from: str | None = None):
+    """Count new Grade C trades/signals after a date."""
+    db = SessionLocal()
+    try:
+        q = db.query(Signal)
+        if date_from:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(str(date_from).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            q = q.filter(Signal.created_at >= dt)
+
+        total = q.count()
+        grade_c = q.filter(Signal.grade == "C").count()
+        opened_like = q.filter(Signal.status.in_(["published", "opened", "tp1", "breakeven", "closed"]))
+        opened_total = opened_like.count()
+        opened_c = opened_like.filter(Signal.grade == "C").count()
+
+        return {
+            "status": "ok",
+            "date_from": date_from,
+            "total_signals": total,
+            "grade_c_signals": grade_c,
+            "grade_c_share_pct": round((grade_c / total * 100), 2) if total else 0.0,
+            "opened_family_total": opened_total,
+            "opened_family_grade_c": opened_c,
+            "opened_family_grade_c_share_pct": round((opened_c / opened_total * 100), 2) if opened_total else 0.0,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/analytics/daily-quality-report", dependencies=[Depends(require_owner_action)])
+def analytics_daily_quality_report(hours: int = 24):
+    """
+    Daily trading quality snapshot for the owner.
+
+    Returns aggregated metrics for the last N hours:
+    net PnL, win rate, failed_setup share, Telegram SLA,
+    active signals, validation gates, live safety status.
+    """
+    db = SessionLocal()
+    try:
+        report = DailyQualityReportService(hours=hours).build(
+            db=db,
+            equity_usdt=float(getattr(settings, "RISK_EQUITY_USDT", 1000.0)),
+        )
+        return report
     finally:
         db.close()

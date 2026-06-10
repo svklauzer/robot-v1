@@ -1,4 +1,0 @@
-# CMD: git status --short --branch
-## main...origin/main [behind 2]
-?? analytics_24h/run_20260528T133826Z/
-?? analytics_24h/run_20260528T143353Z/

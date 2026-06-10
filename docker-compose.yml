@@ -9,6 +9,9 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   redis:
     image: redis:7
@@ -26,7 +29,30 @@ services:
       - "8000:8000"
     volumes:
       - ./storage/ml:/app/storage/ml
-  
+    # Публичный DNS — решает проблему с резолвингом api.telegram.org
+    # внутри Docker на хостах с ограниченным DNS провайдером.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    # Форсируем IPv4 для Telegram и HTX API.
+    # httpx AsyncClient пробует IPv6 первым (Happy Eyeballs), но Docker на Windows
+    # не маршрутизирует IPv6 — это вызывает ConnectTimeout.
+    # extra_hosts прописывает IPv4 адреса в /etc/hosts контейнера,
+    # обходя IPv6-резолвинг полностью.
+    extra_hosts:
+      - "api.telegram.org:149.154.166.110"
+    # Отключаем IPv6 на уровне ядра контейнера — финальная страховка.
+    # Вместе с extra_hosts и local_address=0.0.0.0 в httpx это
+    # полностью исключает Happy Eyeballs IPv6 timeouts.
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
+    # Увеличен ulimit для сетевых соединений.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
   web:
     build: ./apps/web
     env_file:
@@ -37,6 +63,9 @@ services:
       - api
     ports:
       - "3000:3000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
 volumes:
   pgdata:

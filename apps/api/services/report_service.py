@@ -33,16 +33,57 @@ class ReportService:
             best = max(closed, key=lambda s: s.result_pct or 0)
             worst = min(closed, key=lambda s: s.result_pct or 0)
 
+        def _signal_to_dict(s) -> dict | None:
+            if s is None:
+                return None
+            return {
+                "id": s.id,
+                "symbol": s.symbol,
+                "side": s.side,
+                "status": s.status,
+                "grade": s.grade,
+                "confidence": float(s.confidence or 0),
+                "rationale": s.rationale,
+                "closed_reason": s.closed_reason,
+                "result_pct": float(s.result_pct or 0),
+                "closed_net_pnl": float(s.closed_net_pnl or 0) if s.closed_net_pnl is not None else None,
+                "closed_total_cost": float(s.closed_total_cost or 0) if s.closed_total_cost is not None else None,
+                "closed_exit_price": float(s.closed_exit_price or 0) if s.closed_exit_price is not None else None,
+                "entry_zone_json": s.entry_zone_json,
+                "stop_price": float(s.stop_price or 0) if s.stop_price is not None else None,
+                "tp_json": s.tp_json,
+                "qty": float(s.qty or 0) if s.qty is not None else None,
+                "required_margin": float(s.required_margin or 0) if s.required_margin is not None else None,
+                "net_rr_tp2": float(s.net_rr_tp2 or 0) if s.net_rr_tp2 is not None else None,
+                "net_pnl_tp1": float(s.net_pnl_tp1 or 0) if s.net_pnl_tp1 is not None else None,
+                "net_pnl_tp2": float(s.net_pnl_tp2 or 0) if s.net_pnl_tp2 is not None else None,
+                "net_pnl_stop": float(s.net_pnl_stop or 0) if s.net_pnl_stop is not None else None,
+                "created_at": str(s.created_at) if s.created_at else None,
+                "closed_at": str(s.closed_at) if s.closed_at else None,
+            }
+
+        # Net PnL fields for richer reporting
+        total_net_pnl = sum(float(s.closed_net_pnl or 0) for s in closed if s.closed_net_pnl is not None)
+        total_costs = sum(float(s.closed_total_cost or 0) for s in closed if s.closed_total_cost is not None)
+        closed_with_pnl = [s for s in closed if s.closed_net_pnl is not None]
+        avg_net_pnl = round(total_net_pnl / len(closed_with_pnl), 6) if closed_with_pnl else 0.0
+        active_statuses = {"published", "opened", "tp1", "breakeven"}
+        active_signals = sum(1 for s in signals if s.status in active_statuses)
+
         return {
             "hours": hours,
             "total_signals": len(signals),
+            "active_signals": active_signals,
             "closed_signals": len(closed),
             "wins": len(wins),
             "losses": len(losses),
             "winrate": round(winrate, 2),
             "total_result_pct": round(total_result, 2),
-            "best": best,
-            "worst": worst,
+            "total_net_pnl_usdt": round(total_net_pnl, 6),
+            "avg_net_pnl_usdt": avg_net_pnl,
+            "total_costs_usdt": round(total_costs, 6),
+            "best": _signal_to_dict(best),
+            "worst": _signal_to_dict(worst),
         }
 
     async def send_owner_report(self, db: Session, hours: int = 24):

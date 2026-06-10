@@ -519,6 +519,20 @@ class SignalLifecycleManager:
             if self._hit_tp(side, price, tp1):
                 signal.status = "tp1"
 
+                # BREAKEVEN STOP: после TP1 стоп сдвигается на entry + fee buffer.
+                # Гарантирует нулевой убыток если цена откатится после TP1.
+                _be_position = self._get_open_position_for_signal(db, signal)
+                _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
+                _be_fee = float(settings.SPOT_TAKER_FEE) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
+                if side == "long":
+                    _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
+                    if _be_new_stop > float(signal.stop_price):
+                        signal.stop_price = _be_new_stop
+                else:
+                    _be_new_stop = round(_be_entry * (1 - _be_fee), 8)
+                    if _be_new_stop < float(signal.stop_price):
+                        signal.stop_price = _be_new_stop
+
                 self.decisions.record(
                     db,
                     symbol=signal.symbol,
@@ -532,7 +546,8 @@ class SignalLifecycleManager:
                         "price": price,
                         "tp1": tp1,
                         "entry_zone": signal.entry_zone_json,
-                        "stop_moved_to": "adaptive_post_tp1_stop",
+                        "stop_moved_to": "breakeven_after_tp1",
+                        "breakeven_stop": float(signal.stop_price),
                         "lifecycle": signal.plan_json.get("lifecycle") if signal.plan_json else None,
                     },
                 )
@@ -540,7 +555,7 @@ class SignalLifecycleManager:
                 await self.router.publish_signal_update(
                     symbol=signal.symbol,
                     text_status=f"✅ TP1 достигнут | Signal #{signal.id}",
-                    extra="TP1 достигнут. Stop теперь управляется адаптивной exit policy.",
+                    extra=f"TP1 достигнут. Стоп перенесён на breakeven {round(float(signal.stop_price), 6)}. Позиция защищена.",
                     grade=signal.grade,
                 )
 
@@ -1278,6 +1293,20 @@ class SignalLifecycleManager:
             if self._hit_tp(side, price, tp1):
                 signal.status = "tp1"
 
+                # BREAKEVEN STOP: после TP1 стоп сдвигается на entry + fee buffer.
+                # Гарантирует нулевой убыток если цена откатится после TP1.
+                _be_position = self._get_open_position_for_signal(db, signal)
+                _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
+                _be_fee = float(settings.SPOT_TAKER_FEE) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
+                if side == "long":
+                    _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
+                    if _be_new_stop > float(signal.stop_price):
+                        signal.stop_price = _be_new_stop
+                else:
+                    _be_new_stop = round(_be_entry * (1 - _be_fee), 8)
+                    if _be_new_stop < float(signal.stop_price):
+                        signal.stop_price = _be_new_stop
+
                 self.decisions.record(
                     db,
                     symbol=signal.symbol,
@@ -1291,7 +1320,8 @@ class SignalLifecycleManager:
                         "price": price,
                         "tp1": tp1,
                         "entry_zone": signal.entry_zone_json,
-                        "stop_moved_to": "adaptive_post_tp1_stop",
+                        "stop_moved_to": "breakeven_after_tp1",
+                        "breakeven_stop": float(signal.stop_price),
                         "lifecycle": signal.plan_json.get("lifecycle") if signal.plan_json else None,
                     },
                 )
@@ -1299,7 +1329,7 @@ class SignalLifecycleManager:
                 await self.router.publish_signal_update(
                     symbol=signal.symbol,
                     text_status=f"✅ TP1 достигнут | Signal #{signal.id}",
-                    extra="TP1 достигнут. Stop теперь управляется адаптивной exit policy.",
+                    extra=f"TP1 достигнут. Стоп перенесён на breakeven {round(float(signal.stop_price), 6)}. Позиция защищена.",
                     grade=signal.grade,
                 )
 
