@@ -36,6 +36,9 @@ services:
         value: production
       - key: DB_AUTO_CREATE_SCHEMA
         value: "false"
+      # Прод-домен дашборда для CORS (браузер robot-web → API)
+      - key: CORS_ORIGINS
+        value: https://robot-web-0xvm.onrender.com
       - key: TRADE_OUTCOMES_PATH
         value: /app/storage/ml/trade_outcomes.jsonl
       - key: NEWS_ENABLED
@@ -174,9 +177,12 @@ services:
     autoDeploy: true
 
     envVars:
-      # После деплоя API замени на реальный URL (например robot-api.onrender.com)
+      # Реальный URL API (Render добавил суффикс при создании сервиса).
+      # ВАЖНО: NEXT_PUBLIC_* инлайнится на этапе `npm run build`, поэтому
+      # robot-web нужно ПЕРЕсобрать (Manual Deploy → Clear cache & deploy),
+      # а переменная должна быть доступна во время сборки (см. примечание ниже).
       - key: NEXT_PUBLIC_API_URL
-        value: https://robot-api.onrender.com
+        value: https://robot-api-fx9h.onrender.com
 
   # ── Redis (Render Key Value) ────────────────────────────────────────────────
   - type: keyvalue

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     JWT_SECRET: str = "dev-jwt-secret-change-me"
     NEXT_PUBLIC_API_URL: str = "http://localhost:8000"
+    # Доп. origins для CORS (прод-домен дашборда), через запятую.
+    # localhost:3000 всегда разрешён (см. property cors_origins).
+    CORS_ORIGINS: str = ""
 
     OWNER_EMAIL: str = "owner@example.com"
     OWNER_PASSWORD: str = "owner-password-change-me"
@@ -356,6 +359,13 @@ class Settings(BaseSettings):
             f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
+
+    @property
+    def cors_origins(self) -> List[str]:
+        defaults = ["http://localhost:3000", "http://127.0.0.1:3000"]
+        extra = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        # dedupe, сохраняя порядок
+        return list(dict.fromkeys(defaults + extra))
 
     @property
     def symbols(self) -> List[str]:
