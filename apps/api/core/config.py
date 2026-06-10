@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "robot"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
+    # Optional full connection string. When set (e.g. Render's Internal
+    # Database URL), it overrides the split POSTGRES_* values above.
+    DATABASE_URL: str = ""
     DB_AUTO_CREATE_SCHEMA: bool = True
 
     REDIS_URL: str = "redis://localhost:6379"
@@ -342,6 +345,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.DATABASE_URL:
+            url = self.DATABASE_URL
+            # Render/Heroku-style URLs use the legacy "postgres://" scheme,
+            # which SQLAlchemy no longer recognizes — normalize it.
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://"):]
+            return url
         return (
             f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"

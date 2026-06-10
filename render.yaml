@@ -1,8 +1,9 @@
 # render.yaml — Infrastructure as Code для Render.com
-# Docs: https://render.com/docs/infrastructure-as-code
+# Docs: https://render.com/docs/blueprint-spec
 #
-# Deploy: Render Dashboard → New → Blueprint → выбери репозиторий
-# Redis создаётся вручную (см. RENDER_DEPLOY.md, Шаг 3.2)
+# Deploy: Render Dashboard → New → Blueprint → выбери репозиторий → Apply
+# Postgres И Redis создаются автоматически этим blueprint —
+# вручную ничего создавать не нужно (см. RENDER_DEPLOY.md).
 
 services:
 
@@ -12,10 +13,11 @@ services:
     runtime: docker
     dockerfilePath: apps/api/Dockerfile
     dockerContext: apps/api
-    plan: hobby
+    plan: starter          # $7/мес, 512 MB RAM — free засыпает, недопустимо
     region: frankfurt
     branch: main
     autoDeploy: true
+    healthCheckPath: /health   # Render ждёт 200 здесь перед маршрутизацией
 
     # Alembic миграции запускаются до каждого деплоя
     preDeployCommand: python -m alembic -c alembic.ini upgrade head
@@ -46,21 +48,18 @@ services:
       - key: OWNER_EMAIL
         sync: false
 
-      # ── Database (Internal URL из robot-db → Info) ────────────────────────
-      - key: POSTGRES_HOST
-        sync: false
-      - key: POSTGRES_DB
-        sync: false
-      - key: POSTGRES_USER
-        sync: false
-      - key: POSTGRES_PASSWORD
-        sync: false
-      - key: POSTGRES_PORT
-        value: "5432"
+      # ── Database — авто-привязка к robot-db (ничего вводить вручную) ───────
+      - key: DATABASE_URL
+        fromDatabase:
+          name: robot-db
+          property: connectionString
 
-      # ── Redis ─────────────────────────────────────────────────────────────
+      # ── Redis — авто-привязка к robot-redis (Key Value) ───────────────────
       - key: REDIS_URL
-        sync: false          # Internal Redis URL или Upstash URL
+        fromService:
+          name: robot-redis
+          type: keyvalue
+          property: connectionString
 
       # ── Telegram ──────────────────────────────────────────────────────────
       - key: TELEGRAM_BOT_TOKEN
@@ -176,11 +175,19 @@ services:
       - key: NEXT_PUBLIC_API_URL
         value: https://robot-api.onrender.com
 
+  # ── Redis (Render Key Value) ────────────────────────────────────────────────
+  - type: keyvalue
+    name: robot-redis
+    plan: free               # 25 MB, без персистентности; starter ($10) при росте
+    region: frankfurt
+    maxmemoryPolicy: noeviction
+    ipAllowList: []          # только приватная сеть (доступ изнутри Render)
+
 databases:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   - name: robot-db
-    plan: starter            # $7/мес, 1 GB storage, 97 connections
+    plan: basic-256mb        # $6/мес; basic-1gb при росте, free для теста
     databaseName: robot
     user: robot
     region: frankfurt
