@@ -12,7 +12,7 @@ services:
     runtime: docker
     dockerfilePath: apps/api/Dockerfile
     dockerContext: apps/api
-    plan: starter
+    plan: hobby
     region: frankfurt
     branch: main
     autoDeploy: true
