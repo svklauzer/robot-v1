@@ -19,6 +19,14 @@ class TelegramBotResponse:
     text: str
     reply_markup: dict | None = None
     message_type: str = "bot_menu"
+    # Когда задано — роутер вместо обычного sendMessage выставляет счёт Stars.
+    # Формат: {chat_id, title, description, payload, stars_amount}
+    invoice: dict | None = None
+    # Когда True — роутер генерирует одноразовый VIP-invite и дописывает в текст.
+    vip_invite_request: bool = False
+    # Когда задано — роутер проверяет HTX UID через affiliate-API и при успехе
+    # выдаёт триал. Формат: {uid, telegram_user_id, username, full_name, chat_id}
+    htx_verify: dict | None = None
 
 
 class TelegramBotMenuService:
@@ -42,11 +50,32 @@ class TelegramBotMenuService:
         chat_id = str(chat.get("id") or user.get("id") or "") or None
         telegram_user_id = str(user.get("id") or chat_id or "") or None
         profile = self._upsert_profile(db, user=user, chat_id=chat_id, raw_text=raw_text)
+        prev_stage = profile.funnel_stage
         subscriber = self._find_subscriber(db, telegram_user_id)
         command, args = self._parse_command(raw_text)
 
+        # Пользователь прислал HTX UID после запроса (HTX_AFFILIATE_VERIFY_ENABLED).
+        if prev_stage == "awaiting_htx_uid" and raw_text.strip().isdigit():
+            profile.funnel_stage = "htx_uid_submitted"
+            resp = self._response(
+                chat_id, telegram_user_id, "/htx-verify",
+                "⏳ Проверяю вашу регистрацию в HTX по партнёрской ссылке...", None,
+            )
+            resp.htx_verify = {
+                "uid": raw_text.strip(),
+                "telegram_user_id": telegram_user_id,
+                "username": user.get("username"),
+                "full_name": self._full_name(user),
+                "chat_id": chat_id,
+            }
+            return resp
+
         if command in ["/start", "/menu"]:
             profile.funnel_stage = "started"
+            # Deep-link из FREE-тизера: /start vip → сразу показываем тарифы.
+            if command == "/start" and args and args[0].lower() in ("vip", "plans", "buy"):
+                profile.funnel_stage = "viewed_plans"
+                return self._response(chat_id, telegram_user_id, "/plans", self._plans_text(db), self._plans_keyboard(db))
             return self._response(chat_id, telegram_user_id, command, self._menu_text(subscriber), self._main_keyboard())
 
         if command == "/plans":
@@ -69,16 +98,36 @@ class TelegramBotMenuService:
                 return self._response(chat_id, telegram_user_id, command, "Не удалось определить Telegram ID. Нажмите /start.", self._main_keyboard())
 
             try:
+                stars = settings.stars_price_for_plan(plan_code)
                 payment = self.billing.create_checkout(
                     db=db,
                     telegram_user_id=telegram_user_id,
                     plan_code=plan_code,
                     username=user.get("username"),
                     full_name=self._full_name(user),
-                    provider="manual",
-                    notes="telegram_menu_checkout",
+                    provider="telegram_stars" if stars > 0 else "manual",
+                    notes="telegram_stars_checkout" if stars > 0 else "telegram_menu_checkout",
                 )
                 profile.funnel_stage = "checkout_pending"
+
+                if stars > 0:
+                    plan = self.billing.get_plan(db, plan_code)
+                    resp = self._response(
+                        chat_id, telegram_user_id, command,
+                        f"💫 Счёт на {stars} ⭐ отправлен — оплатите прямо в Telegram.",
+                        None,
+                    )
+                    resp.message_type = "stars_invoice"
+                    resp.invoice = {
+                        "chat_id": chat_id,
+                        "title": (plan.title if plan else plan_code),
+                        "description": f"VIP-доступ Finmt на {plan.duration_days if plan else ''} дней. Полные сигналы: входы, стопы, тейки.",
+                        "payload": f"vip:{payment.id}",
+                        "stars_amount": stars,
+                    }
+                    return resp
+
+                # Stars-цена не задана для тарифа → fallback на ручной checkout
                 return self._response(chat_id, telegram_user_id, command, self._checkout_text(payment), self._after_checkout_keyboard())
             except Exception as exc:
                 db.rollback()
@@ -97,6 +146,16 @@ class TelegramBotMenuService:
             return self._response(chat_id, telegram_user_id, command, self._htx_affiliate_text(), self._htx_affiliate_keyboard())
 
         if command == "/affiliate-registered":
+            # Если включена авто-верификация — просим HTX UID, активируем после проверки.
+            if settings.HTX_AFFILIATE_VERIFY_ENABLED:
+                profile.funnel_stage = "awaiting_htx_uid"
+                return self._response(
+                    chat_id, telegram_user_id, command,
+                    "🔎 Для активации бесплатного VIP пришлите ваш HTX UID "
+                    "(числовой ID из профиля HTX). Мы проверим, что регистрация "
+                    "сделана по нашей партнёрской ссылке.",
+                    None,
+                )
             subscriber, activated, reason = self.affiliate.activate_htx_trial(
                 db=db,
                 telegram_user_id=telegram_user_id or "",
@@ -104,13 +163,15 @@ class TelegramBotMenuService:
                 full_name=self._full_name(user),
             )
             profile.funnel_stage = "affiliate_trial_active" if activated else "affiliate_trial_blocked"
-            return self._response(
+            resp = self._response(
                 chat_id,
                 telegram_user_id,
                 command,
                 self._affiliate_trial_text(subscriber, activated, reason),
                 self._main_keyboard(),
             )
+            resp.vip_invite_request = bool(activated)
+            return resp
 
         if command in ["/status", "/subscription_status"]:
             profile.funnel_stage = "active" if subscriber and subscriber.status == "active" else "status_checked"
@@ -254,11 +315,11 @@ class TelegramBotMenuService:
     def _affiliate_trial_text(self, subscriber: Subscriber | None, activated: bool, reason: str) -> str:
         invite = settings.VIP_INVITE_LINK or "VIP invite будет выдан owner/admin."
         if activated and subscriber:
+            # Сама invite-ссылка дописывается роутером (одноразовая, см. vip_invite_request).
             return (
                 "✅ HTX affiliate VIP активирован\n\n"
                 f"Период: {settings.AFFILIATE_FREE_VIP_DAYS} дней\n"
-                f"Доступ до: {subscriber.expires_at}\n"
-                f"VIP invite: {invite}\n\n"
+                f"Доступ до: {subscriber.expires_at}\n\n"
                 "Проверить статус можно через /status."
             )
         if reason == "paid_subscription_already_active":

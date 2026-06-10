@@ -3,11 +3,13 @@ from sqlalchemy.orm import Session
 
 from models.subscriber import Subscriber
 from services.telegram_router import TelegramRouter
+from services.customer_notifications import CustomerNotificationService
 
 
 class SubscriptionWatchdog:
     def __init__(self):
         self.telegram = TelegramRouter()
+        self.customer = CustomerNotificationService()
 
     async def check_subscriptions(self, db: Session) -> dict:
         now = datetime.now(timezone.utc)
@@ -39,6 +41,8 @@ class SubscriptionWatchdog:
                     "SUBSCRIPTION EXPIRED",
                     self._sub_text(sub)
                 )
+                # Зовём клиента к оплате (триал или платная — текст адаптируется).
+                self.customer.queue_expiry(db, sub)
                 continue
 
             if days_left == 1:

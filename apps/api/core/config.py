@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # TELEGRAM
     # =========================
     TELEGRAM_BOT_TOKEN: str = ""
+    # Username бота без @ (например finmt_bot) — для deep-link в FREE-тизере.
+    TELEGRAM_BOT_USERNAME: str = ""
     TELEGRAM_OWNER_CHAT_ID: int = 0
     TELEGRAM_SIGNALS_CHAT_ID: int = 0
     TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
@@ -297,10 +299,35 @@ class Settings(BaseSettings):
     AFFILIATE_FREE_VIP_DAYS: int = 30
     VIP_INVITE_LINK: str = ""
 
+    # ── HTX affiliate auto-verification ──────────────────────────────────────
+    # Когда True — перед выдачей триала бот спрашивает HTX UID и проверяет его
+    # через affiliate-API. Когда False — прежнее поведение (self-claim).
+    HTX_AFFILIATE_VERIFY_ENABLED: bool = False
+    HTX_AFFILIATE_API_KEY: str = ""
+    HTX_AFFILIATE_API_SECRET: str = ""
+    HTX_AFFILIATE_API_HOST: str = "api.huobi.pro"
+    # Путь эндпоинта со списком приглашённых — ПОДСТАВИТЬ из affiliate-доков HTX.
+    # Должен возвращать список UID, приглашённых владельцем ключа.
+    HTX_AFFILIATE_INVITEES_PATH: str = "/v2/affiliate/invitees"
+
     # =========================
     # PAYMENTS / CHECKOUTS
     # =========================
     PAYMENT_PENDING_EXPIRE_HOURS: int = 48
+
+    # ── Telegram Stars (XTR) ─────────────────────────────────────────────────
+    # Цена каждого тарифа в звёздах Telegram (целое число XTR).
+    # Задать реальные значения в env; 0 = тариф недоступен для Stars-оплаты.
+    VIP_STARS_PRICE_30: int = 0
+    VIP_STARS_PRICE_90: int = 0
+    # Сколько часов живёт одноразовая invite-ссылка в приватный VIP-канал.
+    VIP_INVITE_EXPIRE_HOURS: int = 24
+
+    def stars_price_for_plan(self, plan_code: str) -> int:
+        return {
+            "vip_30": self.VIP_STARS_PRICE_30,
+            "vip_90": self.VIP_STARS_PRICE_90,
+        }.get(plan_code, 0)
 
     # =========================
     # MARKET CONNECTIVITY

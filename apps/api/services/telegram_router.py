@@ -192,13 +192,19 @@ class TelegramRouter:
         emoji = "🟢" if side == "LONG" else "🔴"
         signal_ref = f"#{signal_id}" if signal_id else ""
 
+        bot_username = (settings.TELEGRAM_BOT_USERNAME or "").lstrip("@")
+        if bot_username:
+            cta = f"👉 Полный сигнал и VIP-доступ: https://t.me/{bot_username}?start=vip"
+        else:
+            cta = "👉 Полный сигнал и VIP-доступ — напишите боту команду /plans"
+
         return (
             f"{emoji} FREE SIGNAL TEASER {signal_ref}\n"
             f"{signal['symbol']} {side}\n\n"
             f"🏆 Класс: {grade}\n"
             f"📊 Уверенность: {round(confidence, 1)}%\n\n"
             f"Полные уровни входа, стопа и тейков доступны в VIP.\n"
-            f"VIP: @finmt_vip"
+            f"{cta}"
         )
 
     async def _send_vip_full_signal(
