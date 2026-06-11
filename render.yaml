@@ -38,7 +38,7 @@ services:
         value: "false"
       # Прод-домен дашборда для CORS (браузер robot-web → API)
       - key: CORS_ORIGINS
-        value: https://robot-web-0xvm.onrender.com
+        value: https://robot-web-ap8n.onrender.com
       - key: TRADE_OUTCOMES_PATH
         value: /app/storage/ml/trade_outcomes.jsonl
       - key: NEWS_ENABLED
@@ -184,7 +184,7 @@ services:
       # Backend URL для серверного прокси (app/api/proxy). Читается на сервере
       # в рантайме — пересборка не требуется при смене значения.
       - key: API_BASE_URL
-        value: https://robot-api-fx9h.onrender.com
+        value: https://robot-api-1rgi.onrender.com
       # Owner-токен — ТОЛЬКО на сервере (без NEXT_PUBLIC), в клиент не попадает.
       # Должен совпадать с OWNER_API_TOKEN у robot-api.
       - key: OWNER_API_TOKEN
@@ -215,7 +215,7 @@ services:
       - key: OWNER_API_TOKEN
         sync: false          # тот же токен, что у robot-api
       - key: REPORT_API_URL
-        value: https://robot-api-fx9h.onrender.com
+        value: https://robot-api-1rgi.onrender.com
 
 databases:
 
