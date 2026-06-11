@@ -144,9 +144,14 @@ class HTXClient:
         return self._retry(self.exchange.fetch_balance)
 
     def fetch_ticker(self, symbol: str):
+        # Прогреваем кросс-инстансный кэш рынков, иначе ccxt дергает полный
+        # load_markets() внутри каждого fetch_ticker (сотни символов = ~3-4с).
+        # После первого раза это no-op (фаст-путь по _cached_markets).
+        self.load_markets()
         return self._retry(self.exchange.fetch_ticker, symbol)
 
     def fetch_ohlcv(self, symbol: str, timeframe="5m", limit=200):
+        self.load_markets()
         return self._retry(
             self.exchange.fetch_ohlcv,
             symbol,
