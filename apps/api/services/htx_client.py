@@ -1,12 +1,27 @@
 import logging
 import random
+import socket
 import time
 
 import ccxt
+import urllib3.util.connection as _urllib3_connection
 from core.config import settings
 from core.logging import get_logger, log_event
 
 logger = get_logger(__name__)
+
+
+# ── Force IPv4 for ccxt/requests traffic ──────────────────────────────────────
+# ccxt uses requests/urllib3 synchronously. On dual-stack hosts an IPv6 attempt
+# can stall on connect (Happy Eyeballs) before falling back to IPv4, adding
+# seconds of latency (and triggering our retry/backoff). The Telegram httpx
+# client already forces IPv4 for the same reason; this does it for ccxt by
+# making urllib3 resolve only A (IPv4) records.
+def _allowed_gai_family_ipv4_only():
+    return socket.AF_INET
+
+
+_urllib3_connection.allowed_gai_family = _allowed_gai_family_ipv4_only
 
 
 class HTXClient:
