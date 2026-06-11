@@ -53,6 +53,11 @@ class HTXClient:
         # ccxt supports HTTP/SOCKS5 proxies via 'proxies' dict.
         # Set HTX_PROXY_URL=http://user:pass@host:port  or
         #     HTX_PROXY_URL=socks5://user:pass@host:port
+        # Переопределение хоста (например api-aws.huobi.pro для AWS-регионов).
+        hostname = str(getattr(settings, "HTX_API_HOSTNAME", "") or "").strip()
+        if hostname:
+            exchange_config["hostname"] = hostname
+
         if proxy_url:
             exchange_config["proxies"] = {
                 "http": proxy_url,

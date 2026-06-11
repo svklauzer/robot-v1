@@ -14,7 +14,7 @@ services:
     dockerfilePath: apps/api/Dockerfile
     dockerContext: apps/api
     plan: starter          # $7/мес, 512 MB RAM — free засыпает, недопустимо
-    region: frankfurt
+    region: singapore
     branch: main
     autoDeploy: true
     healthCheckPath: /health   # Render ждёт 200 здесь перед маршрутизацией
@@ -86,6 +86,10 @@ services:
         sync: false
       - key: HTX_API_SECRET
         sync: false
+      # AWS-оптимизированный хост HTX (сервера HTX в AWS Tokyo) — ниже задержка
+      # из региона Singapore. Если окажется хуже — поставь api.huobi.pro.
+      - key: HTX_API_HOSTNAME
+        value: api-aws.huobi.pro
       - key: HTX_MARKET_TYPE
         value: spot
       - key: HTX_SYMBOLS
@@ -172,7 +176,7 @@ services:
     dockerfilePath: apps/web/Dockerfile
     dockerContext: apps/web
     plan: starter
-    region: frankfurt
+    region: singapore
     branch: main
     autoDeploy: true
 
@@ -190,7 +194,7 @@ services:
   - type: keyvalue
     name: robot-redis
     plan: free               # 25 MB, без персистентности; starter ($10) при росте
-    region: frankfurt
+    region: singapore
     maxmemoryPolicy: noeviction
     ipAllowList: []          # только приватная сеть (доступ изнутри Render)
 
@@ -203,7 +207,7 @@ services:
     dockerfilePath: apps/api/Dockerfile
     dockerContext: apps/api
     plan: starter
-    region: frankfurt
+    region: singapore
     branch: main
     schedule: "0 3 * * *"
     dockerCommand: python send_daily_report.py   # 2 токена — безопасно для парсера Render
@@ -220,4 +224,4 @@ databases:
     plan: basic-256mb        # $6/мес; basic-1gb при росте, free для теста
     databaseName: robot
     user: robot
-    region: frankfurt
+    region: singapore

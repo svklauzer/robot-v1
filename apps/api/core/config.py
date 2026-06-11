@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # =========================
     HTX_API_KEY: str = ""
     HTX_API_SECRET: str = ""
+    # Переопределение хоста HTX API. Для клиентов в AWS HTX рекомендует
+    # api-aws.huobi.pro (ниже задержка, сервера HTX в AWS Tokyo). Пусто = дефолт ccxt.
+    HTX_API_HOSTNAME: str = ""
     HTX_MARKET_TYPE: str = "spot"
     HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT"
     ALLOW_MARKET_MOCK: bool = False
