@@ -21,7 +21,10 @@ class MarketConnectivityService:
         max_spread_pct = float(getattr(settings, "MARKET_CONNECTIVITY_MAX_SPREAD_PCT", 0.75))
 
         try:
-            snap = self.market.snapshot(symbol)
+            # Лёгкая проба: только тикер (bid/ask/last), без 200 свечей OHLCV.
+            # Так latency_ms отражает реальный round-trip одного вызова, а не
+            # время скачивания свечей + паузу rate-limit между двумя запросами.
+            snap = self.market.ticker_snapshot(symbol)
             latency_ms = round((perf_counter() - started) * 1000, 2)
             bid = self._to_float(snap.get("bid"))
             ask = self._to_float(snap.get("ask"))

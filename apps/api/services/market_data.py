@@ -32,6 +32,21 @@ class MarketDataService:
             print(f"[MARKET DATA ERROR] {symbol}: {e}")
             raise
 
+    def ticker_snapshot(self, symbol: str) -> dict:
+        """Лёгкая проба коннекта: только тикер (без 200 свечей OHLCV).
+
+        Используется health/connectivity-проверками, где нужны лишь bid/ask/last.
+        Один HTTP-вызов вместо двух → корректный замер реальной задержки.
+        """
+        ticker = self.client.fetch_ticker(symbol)
+        return {
+            "symbol": symbol,
+            "last": ticker.get("last"),
+            "bid": ticker.get("bid"),
+            "ask": ticker.get("ask"),
+            "source": "htx",
+        }
+
     def mock_snapshot(self, symbol: str) -> dict:
         base_price = {
             "BTC/USDT": 64000,
