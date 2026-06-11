@@ -18,8 +18,13 @@ def is_retryable_telegram_error(exc: Exception | str | None) -> bool:
     if exc is None:
         return True
 
-    if isinstance(exc, httpx.HTTPStatusError):
-        status_code = exc.response.status_code if exc.response is not None else None
+    # Defensive: never let an httpx attribute quirk crash the caller's error
+    # handler (seen in prod as "module 'httpx' has no attribute 'HTTPStatusError'").
+    # The string-based markers below cover the same status codes as a fallback.
+    http_status_error = getattr(httpx, "HTTPStatusError", None)
+    if http_status_error is not None and isinstance(exc, http_status_error):
+        response = getattr(exc, "response", None)
+        status_code = response.status_code if response is not None else None
         if status_code in NON_RETRYABLE_STATUS_CODES:
             return False
         if status_code == 429 or (status_code is not None and status_code >= 500):
