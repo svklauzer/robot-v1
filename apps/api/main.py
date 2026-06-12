@@ -385,7 +385,7 @@ async def lifespan(app: FastAPI):
             ob_db = SessionLocal()
             try:
                 ob_bot = ob_db.query(Bot).filter(Bot.name == "Main Robot").first()
-                ob_symbols = list((ob_bot.config or {}).get("symbols", [])) if ob_bot else []
+                ob_symbols = list((ob_bot.config_json or {}).get("symbols", [])) if ob_bot else []
             finally:
                 ob_db.close()
             if not ob_symbols:
