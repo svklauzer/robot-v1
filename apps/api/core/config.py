@@ -158,6 +158,25 @@ class Settings(BaseSettings):
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
     RANGE_STOP_ATR_MULT: float = 0.5        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
+    # Range-шорт от верхней границы коридора (требует futures-исполнения).
+    RANGE_ALLOW_SHORT: bool = False
+
+    # =========================
+    # FUTURES EXECUTION & SMART LEVERAGE — Фаза 4 (каркас, OFF по умолчанию)
+    # =========================
+    # Перевод основной стратегии на futures (открывает шорты + плечо).
+    # Включать ТОЛЬКО на доказанном edge (net PnL > 0 на paper).
+    ENABLE_FUTURES_EXECUTION: bool = False
+    # Динамическое плечо по conviction (грейд × сила тренда × волатильность).
+    # OFF → плечо всегда 1.0 (без эффекта).
+    ENABLE_SMART_LEVERAGE: bool = False
+    MAX_LEVERAGE: float = 3.0               # жёсткий потолок плеча (догма)
+    # Суммарный риск по ВСЕМ открытым сделкам, % эквити (портфельный бюджет).
+    PORTFOLIO_RISK_BUDGET_PCT: float = 6.0
+    # Множители conviction по грейду (вклад в плечо).
+    LEVERAGE_GRADE_A_PLUS: float = 1.0
+    LEVERAGE_GRADE_A: float = 0.7
+    LEVERAGE_GRADE_B: float = 0.4
 
     # =========================
     # SYMBOL PERFORMANCE GUARD

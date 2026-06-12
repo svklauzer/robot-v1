@@ -76,47 +76,65 @@ class RangeStrategyService:
         if width_pct < min_width:
             return None
 
-        # 3) Цена у нижней границы (зона лонга).
         pos = (price - low) / (high - low)   # 0 = поддержка, 1 = сопротивление
         support_zone = float(getattr(settings, "RANGE_SUPPORT_ZONE", 0.30))
-        if pos > support_zone:
-            return None
-
-        # 4) Подтверждение разворота: 15m RSI в зоне «перепродан→нейтрально».
         rsi15 = float(_v(m15, "rsi14", 50.0))
         rsi_min = float(getattr(settings, "RANGE_ENTRY_RSI_MIN", 25.0))
         rsi_max = float(getattr(settings, "RANGE_ENTRY_RSI_MAX", 52.0))
-        reversal_ok = rsi_min <= rsi15 <= rsi_max
-
-        # 5) Уровни.
-        buffer = max(atr * float(getattr(settings, "RANGE_STOP_ATR_MULT", 0.5)), low * 0.002)
-        stop = low - buffer
+        atr_mult = float(getattr(settings, "RANGE_STOP_ATR_MULT", 0.5))
         mid = (low + high) / 2.0
-        tp1 = mid
-        tp2 = high - (high - low) * float(getattr(settings, "RANGE_TP2_RESISTANCE_BUFFER", 0.10))
-        entry_low = price
-        entry_high = price * 1.001
-
-        # 6) Проверка: до TP1 хватает хода после round-trip комиссий.
+        tp2_buf = (high - low) * float(getattr(settings, "RANGE_TP2_RESISTANCE_BUFFER", 0.10))
         fee_round_pct = float(settings.SPOT_TAKER_FEE) * 2 * 100.0
-        tp1_move_pct = (tp1 - price) / price * 100.0
         min_tp1_net = float(getattr(settings, "RANGE_MIN_TP1_NET_PCT", 0.8))
-        if (tp1_move_pct - fee_round_pct) < min_tp1_net:
-            return None
-
-        # 7) Скоринг range-сетапа (без trend_alignment — он тут не нужен).
-        proximity = (1.0 - pos) * 40.0                              # ближе к поддержке → до 40
-        width_score = min(width_pct / min_width, 2.0) * 15.0        # до 30
-        reversal_score = 20.0 if reversal_ok else 5.0
         vol_state = str(_v(m15, "volume_state", "weak"))
         vol_score = {"strong": 10.0, "normal": 6.0}.get(vol_state, 2.0)
-        final_score = round(proximity + width_score + reversal_score + vol_score, 2)
-
+        width_score = min(width_pct / min_width, 2.0) * 15.0
         min_score = float(getattr(settings, "RANGE_MIN_SETUP_SCORE", 60.0))
+
+        # 4) ЛОНГ от нижней границы (спот).
+        if pos <= support_zone:
+            reversal_ok = rsi_min <= rsi15 <= rsi_max
+            buffer = max(atr * atr_mult, low * 0.002)
+            stop = low - buffer
+            tp1 = mid
+            tp2 = high - tp2_buf
+            if (((tp1 - price) / price * 100.0) - fee_round_pct) < min_tp1_net:
+                return None
+            proximity = (1.0 - pos) * 40.0
+            return self._mk_signal(
+                "long", price, stop, tp1, tp2, pos, low, high, width_pct,
+                proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
+                comment="range_long_at_support", reason="range_long_support_bounce",
+            )
+
+        # 5) ШОРТ от верхней границы — только на futures (RANGE_ALLOW_SHORT).
+        if bool(getattr(settings, "RANGE_ALLOW_SHORT", False)) and pos >= (1.0 - support_zone):
+            # У сопротивления хотим «перекуплено→нейтрально».
+            reversal_ok = (100.0 - rsi_max) <= rsi15 <= (100.0 - rsi_min)
+            buffer = max(atr * atr_mult, high * 0.002)
+            stop = high + buffer
+            tp1 = mid
+            tp2 = low + tp2_buf
+            if (((price - tp1) / price * 100.0) - fee_round_pct) < min_tp1_net:
+                return None
+            proximity = pos * 40.0
+            return self._mk_signal(
+                "short", price, stop, tp1, tp2, pos, low, high, width_pct,
+                proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
+                comment="range_short_at_resistance", reason="range_short_resistance_reject",
+            )
+
+        return None
+
+    def _mk_signal(self, action, price, stop, tp1, tp2, pos, low, high, width_pct,
+                   proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
+                   *, comment, reason) -> RangeSignal:
+        reversal_score = 20.0 if reversal_ok else 5.0
+        final_score = round(proximity + width_score + reversal_score + vol_score, 2)
         decision = "approve" if (final_score >= min_score and reversal_ok) else "wait"
-
         confidence = round(min(50.0 + final_score * 0.3, 80.0), 2)
-
+        entry_low = min(price, price * 1.001)
+        entry_high = max(price, price * 1.001)
         setup_quality = {
             "strategy": "range_mean_reversion",
             "range_low": round(low, 8),
@@ -130,17 +148,16 @@ class RangeStrategyService:
             "rsi_15m": round(rsi15, 2),
             "final_score": final_score,
             "decision": decision,
-            "comment": "range_long_at_support",
+            "comment": comment,
         }
-
         return RangeSignal(
-            action="long",
+            action=action,
             regime="range",
             entry_zone=[round(entry_low, 8), round(entry_high, 8)],
             stop_price=round(stop, 8),
             tp={"tp1": round(tp1, 8), "tp2": round(tp2, 8)},
             confidence_hint=confidence,
-            reason="range_long_support_bounce",
+            reason=reason,
             setup_quality=setup_quality,
             setup_decision=decision,
         )
