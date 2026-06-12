@@ -182,6 +182,13 @@ class Settings(BaseSettings):
     SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
     SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.5  # выходим, отдав эту долю пика MFE
 
+    # --- Split cadence: медленный SCAN (поиск входов) + быстрый MANAGE (выходы) ---
+    # Сканирование сетапов на 4h-биасе не нужно чаще раза в минуту, а ведение
+    # открытых позиций (скальп-замок, трейлы) должно реагировать быстро. HTX REST
+    # допускает до 800 req/s на IP — мы далеко от лимита, узкое место было своё.
+    SCAN_INTERVAL_SEC: int = 60
+    MANAGE_INTERVAL_SEC: int = 10
+
     # =========================
     # FUTURES EXECUTION & SMART LEVERAGE — Фаза 4 (каркас, OFF по умолчанию)
     # =========================

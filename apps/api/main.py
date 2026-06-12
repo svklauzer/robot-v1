@@ -110,6 +110,12 @@ payment_reconciliation_loop_enabled = True
 funding_arb_task = None
 funding_arb_loop_enabled = True
 
+manage_task = None
+manage_loop_enabled = True
+# Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
+# чтобы одну позицию не обрабатывали два цикла одновременно.
+position_manage_lock = asyncio.Lock()
+
 logger = get_logger(__name__)
 
 
@@ -138,14 +144,15 @@ async def background_robot_loop():
                         db.commit()
                         log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
                     else:
-                        await loop.step(
-                            db=db,
-                            bot=bot,
-                            headlines=[],
-                            balance_usdt=1000,
-                            daily_loss_pct=safety.get("daily_loss_pct", 0),
-                            drawdown_pct=0,
-                        )
+                        async with position_manage_lock:
+                            await loop.step(
+                                db=db,
+                                bot=bot,
+                                headlines=[],
+                                balance_usdt=1000,
+                                daily_loss_pct=safety.get("daily_loss_pct", 0),
+                                drawdown_pct=0,
+                            )
                         ml_backfill = loop.ml_trade_logger.log_unlogged_closed_signals(db)
                         db.commit()
                         log_event(
@@ -166,7 +173,37 @@ async def background_robot_loop():
         finally:
             db.close()
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(int(getattr(settings, "SCAN_INTERVAL_SEC", 60)))
+
+
+async def background_manage_loop():
+    """Быстрый цикл ведения открытых позиций (выходы/скальп-замок/трейлы).
+
+    Сканирование входов остаётся в background_robot_loop (медленно, по 4h-биасу),
+    а этот цикл часто пересматривает уже открытые позиции по свежей цене, чтобы
+    scalp_breakeven_lock и трейлы реагировали в секундах, а не раз в минуту.
+    """
+    global manage_loop_enabled
+
+    await asyncio.sleep(8)
+
+    loop = RobotLoop()
+
+    while manage_loop_enabled:
+        db = SessionLocal()
+        try:
+            bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+            if bot and bot.status == "running":
+                async with position_manage_lock:
+                    await loop.lifecycle.process_open_signals(db, bot)
+                    db.commit()
+        except Exception as e:
+            db.rollback()
+            log_event(logger, logging.ERROR, "manage_loop_error", error_type=type(e).__name__, error=str(e))
+        finally:
+            db.close()
+
+        await asyncio.sleep(int(getattr(settings, "MANAGE_INTERVAL_SEC", 10)))
 
 
 async def background_subscription_loop():
@@ -326,7 +363,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -334,6 +371,9 @@ async def lifespan(app: FastAPI):
 
     robot_loop_enabled = True
     robot_task = asyncio.create_task(background_robot_loop())
+
+    manage_loop_enabled = True
+    manage_task = asyncio.create_task(background_manage_loop())
 
     subscription_loop_enabled = True
     subscription_task = asyncio.create_task(background_subscription_loop())
@@ -353,6 +393,10 @@ async def lifespan(app: FastAPI):
     robot_loop_enabled = False
     if robot_task:
         robot_task.cancel()
+
+    manage_loop_enabled = False
+    if manage_task:
+        manage_task.cancel()
 
     subscription_loop_enabled = False
     if subscription_task:
