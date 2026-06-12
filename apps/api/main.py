@@ -668,6 +668,43 @@ def stop_bot():
         db.close()
 
 
+@app.get("/orderbook/state", dependencies=[Depends(require_owner_action)])
+def orderbook_state():
+    """Живой снимок стакана по символам: spread / OBI / стенки / CVD / возраст
+    данных. Для контроля, что WS-фид жив, и подбора порогов depth-движка."""
+    from services.orderbook_feed import ORDERBOOK_STORE
+    from services.orderbook_analyzer import OrderBookAnalyzer
+
+    levels = int(getattr(settings, "OB_DEPTH_LEVELS", 10))
+    max_age = float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0))
+    stats = ORDERBOOK_STORE.stats()
+
+    symbols = {}
+    for sym in stats.get("symbols", []):
+        snap = ORDERBOOK_STORE.snapshot(sym)
+        sig = OrderBookAnalyzer.analyze(snap, levels=levels)
+        row = sig.as_dict()
+        age = snap.get("age_sec") if snap else None
+        row["age_sec"] = round(age, 2) if age is not None else None
+        row["stale"] = (snap is None) or (age is not None and age > max_age)
+        symbols[sym] = row
+
+    return {
+        "enabled": bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)),
+        "gate_entries": bool(getattr(settings, "OB_GATE_ENTRIES", True)),
+        "accelerate_exits": bool(getattr(settings, "OB_ACCELERATE_EXITS", True)),
+        "thresholds": {
+            "max_spread_pct": getattr(settings, "OB_MAX_SPREAD_PCT", 0.08),
+            "obi_confirm": getattr(settings, "OB_OBI_CONFIRM", 0.15),
+            "wall_confirm_share": getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30),
+            "data_max_age_sec": max_age,
+            "cvd_exit_ratio": getattr(settings, "OB_CVD_EXIT_RATIO", 0.6),
+        },
+        "stats": stats,
+        "symbols": symbols,
+    }
+
+
 @app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()
