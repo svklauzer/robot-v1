@@ -23,6 +23,7 @@ class DepthSignal:
     ask_wall_share: float
     cvd: float                  # cumulative volume delta за окно (+ = агрессивные покупки)
     cvd_ratio: float            # cvd / суммарный объём окна, -1..1
+    cvd_trades: int             # число сделок в окне (мало → CVD не сигнал)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -68,7 +69,7 @@ class OrderBookAnalyzer:
 
     @staticmethod
     def cvd(trades):
-        delta = 0.0; total = 0.0
+        delta = 0.0; total = 0.0; n = 0
         for t in trades or []:
             try:
                 amt = float(t.get("amount", 0.0))
@@ -79,22 +80,23 @@ class OrderBookAnalyzer:
             side = str(t.get("side", "")).lower()
             total += amt
             delta += amt if side == "buy" else -amt if side == "sell" else 0.0
+            n += 1
         ratio = 0.0 if total <= 0 else delta / total
-        return delta, ratio
+        return delta, ratio, n
 
     @classmethod
     def analyze(cls, snapshot: dict | None, levels: int = 10) -> DepthSignal:
         if not snapshot:
-            return DepthSignal(False, None, None, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return DepthSignal(False, None, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
         bids = snapshot.get("bids"); asks = snapshot.get("asks")
         trades = snapshot.get("trades", [])
         spread, mid = cls.spread_pct(bids, asks)
         obi = cls.imbalance(bids, asks, levels)
         bid_wall = cls.wall_share(bids, levels)
         ask_wall = cls.wall_share(asks, levels)
-        cvd_v, cvd_r = cls.cvd(trades)
+        cvd_v, cvd_r, cvd_n = cls.cvd(trades)
         fresh = spread is not None
-        return DepthSignal(fresh, spread, mid, obi, bid_wall, ask_wall, cvd_v, cvd_r)
+        return DepthSignal(fresh, spread, mid, obi, bid_wall, ask_wall, cvd_v, cvd_r, cvd_n)
 
     # ── Подтверждение ВХОДА ───────────────────────────────────────────────────
     @classmethod
@@ -121,9 +123,11 @@ class OrderBookAnalyzer:
 
     # ── Ускоритель ВЫХОДА (поток против позиции) ──────────────────────────────
     @classmethod
-    def flow_against(cls, side: str, sig: DepthSignal, *, cvd_exit_ratio: float) -> bool:
-        """True, если агрессивный поток сделок развернулся ПРОТИВ позиции."""
-        if not sig.fresh:
+    def flow_against(cls, side: str, sig: DepthSignal, *, cvd_exit_ratio: float,
+                     min_trades: int = 15) -> bool:
+        """True, если агрессивный поток сделок развернулся ПРОТИВ позиции.
+        На тонкой выборке (< min_trades сделок) CVD — шум, сигнал не даём."""
+        if not sig.fresh or sig.cvd_trades < int(min_trades):
             return False
         s = str(side).lower()
         if s in ("long", "buy"):

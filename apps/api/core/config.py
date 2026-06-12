@@ -202,6 +202,7 @@ class Settings(BaseSettings):
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
     OB_CVD_EXIT_RATIO: float = 0.6        # поток против позиции на эту долю → ускоряем выход
+    OB_CVD_MIN_TRADES: int = 15           # меньше сделок в окне → CVD это шум, не сигнал
     OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
     OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
 

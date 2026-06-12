@@ -43,7 +43,9 @@ def _depth_flow_against(signal, side: str) -> bool:
             snap = None
         sig = OrderBookAnalyzer.analyze(snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
         return OrderBookAnalyzer.flow_against(
-            side, sig, cvd_exit_ratio=float(getattr(settings, "OB_CVD_EXIT_RATIO", 0.6))
+            side, sig,
+            cvd_exit_ratio=float(getattr(settings, "OB_CVD_EXIT_RATIO", 0.6)),
+            min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 15)),
         )
     except Exception:
         return False
