@@ -161,8 +161,16 @@ class MarketIntelligenceEngine:
 
         atr14 = self._atr(high, low, close, 14)
 
-        volume_ma20 = volume.rolling(20).mean().iloc[-1]
-        last_volume = volume.iloc[-1]
+        # Volume confirmation должен считаться по ПОСЛЕДНЕЙ ЗАКРЫТОЙ свече.
+        # ccxt fetch_ohlcv отдаёт текущую (формирующуюся) свечу последней строкой;
+        # в начале периода её объём почти нулевой и хронически занижал volume_ratio,
+        # из-за чего setup застревал в "wait_more_confirmation" (неделя без сигналов).
+        if len(volume) >= 2:
+            last_volume = float(volume.iloc[-2])
+            volume_ma20 = volume.iloc[:-1].rolling(20).mean().iloc[-1]
+        else:
+            last_volume = float(volume.iloc[-1])
+            volume_ma20 = volume.rolling(20).mean().iloc[-1]
         volume_ratio = last_volume / volume_ma20 if volume_ma20 and volume_ma20 > 0 else 0.0
 
         support = low.tail(50).min()
