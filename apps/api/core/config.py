@@ -145,6 +145,21 @@ class Settings(BaseSettings):
     VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
 
     # =========================
+    # RANGE STRATEGY — mean-reversion скальп для боковика
+    # =========================
+    # Включается, когда трендовый путь простаивает (4h не в тренде). На споте —
+    # только лонг от нижней границы коридора. Включить после обкатки на paper.
+    ENABLE_RANGE_STRATEGY: bool = False
+    RANGE_MIN_WIDTH_PCT: float = 2.5        # мин. ширина коридора (нужно куда ехать после комиссий)
+    RANGE_SUPPORT_ZONE: float = 0.30        # входим, если цена в нижних 30% диапазона (0=поддержка)
+    RANGE_ENTRY_RSI_MIN: float = 25.0       # зона разворота у поддержки
+    RANGE_ENTRY_RSI_MAX: float = 52.0
+    RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
+    RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
+    RANGE_STOP_ATR_MULT: float = 0.5        # стоп = поддержка − 0.5·ATR
+    RANGE_MIN_SETUP_SCORE: float = 60.0
+
+    # =========================
     # SYMBOL PERFORMANCE GUARD
     # =========================
     SYMBOL_PERF_LOOKBACK: int = 12

@@ -5,6 +5,7 @@ import pandas as pd
 
 from core.config import settings
 from services.market_data import MarketDataService
+from services.range_strategy import RangeStrategyService
 
 
 
@@ -137,6 +138,37 @@ class MarketIntelligenceEngine:
             scores=scores,
             regime=regime,
         )
+
+        # ── RANGE-стратегия (скальп в боковике) ──────────────────────────────
+        # Если трендовый путь не дал торгуемого кандидата (hold или не approve),
+        # а 4h в боковике — пробуем range-вход от поддержки. Под флагом, OFF по
+        # умолчанию. Range-сделка несёт regime="range" → trade_mode="scalp".
+        if bool(getattr(settings, "ENABLE_RANGE_STRATEGY", False)) and (
+            candidate.action == "hold" or candidate.setup_decision != "approve"
+        ):
+            try:
+                range_sig = RangeStrategyService().evaluate(contexts, symbol)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[RANGE STRATEGY ERROR] {symbol}: {exc}")
+                range_sig = None
+
+            if range_sig is not None and range_sig.setup_decision == "approve":
+                candidate = MarketIntelligenceResult(
+                    symbol=symbol,
+                    source=source,
+                    action=range_sig.action,
+                    regime=range_sig.regime,
+                    entry_zone=range_sig.entry_zone,
+                    stop_price=range_sig.stop_price,
+                    tp=range_sig.tp,
+                    confidence_hint=range_sig.confidence_hint,
+                    reason=range_sig.reason,
+                    scores=scores,
+                    timeframes=candidate.timeframes,
+                    setup_quality=range_sig.setup_quality,
+                    setup_decision=range_sig.setup_decision,
+                    radar_state="range",
+                )
 
         return candidate
 
