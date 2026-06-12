@@ -123,6 +123,12 @@ class MLTradeLogger:
             "status": signal.status,
             "closed_reason": closed_reason,
 
+            # Контекст входа для обучения: режим и микроструктура стакана.
+            "regime": plan.get("regime"),
+            "trade_mode": plan.get("trade_mode"),
+            "radar_state": plan.get("radar_state"),
+            "entry_depth": plan.get("entry_depth"),
+
             "entry_zone": signal.entry_zone_json,
             "stop_price": signal.stop_price,
             "tp": signal.tp_json,

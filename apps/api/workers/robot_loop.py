@@ -616,6 +616,17 @@ class RobotLoop:
                     # Режим сделки для exit-политики: trend → ride (едем движение),
                     # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
                     "trade_mode": "scalp" if "range" in str(result.regime or "") else "trend",
+                    # Контекст для ML-датасета (фичи на момент входа).
+                    "regime": str(result.regime or ""),
+                    "radar_state": str(getattr(result, "radar_state", "") or ""),
+                    "entry_depth": (
+                        OrderBookAnalyzer.analyze(
+                            ORDERBOOK_STORE.snapshot(symbol),
+                            levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                        ).as_dict()
+                        if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False))
+                        else None
+                    ),
                 },
             )
 

@@ -745,6 +745,58 @@ def orderbook_state():
     }
 
 
+@app.get("/ml/outcomes/stats", dependencies=[Depends(require_owner_action)])
+def ml_outcomes_stats():
+    """Статистика ML-датасета (trade_outcomes.jsonl на персистентном диске):
+    сколько строк, последняя запись, баланс win/loss, есть ли depth-фичи."""
+    import json as _json
+    from services.ml_trade_logger import MLTradeLogger
+
+    p = MLTradeLogger().path
+    if not p.exists():
+        return {"path": str(p), "exists": False, "count": 0, "last_logged_at": None}
+
+    count = wins = losses = with_depth = with_regime = 0
+    last_logged_at = last_symbol = last_reason = None
+    for line in p.open("r", encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = _json.loads(line)
+        except Exception:
+            continue
+        count += 1
+        lab = d.get("labels") or {}
+        if lab.get("is_win"):
+            wins += 1
+        elif lab.get("is_loss"):
+            losses += 1
+        if d.get("entry_depth"):
+            with_depth += 1
+        if d.get("regime"):
+            with_regime += 1
+        last_logged_at = d.get("logged_at") or last_logged_at
+        last_symbol = d.get("symbol") or last_symbol
+        last_reason = d.get("closed_reason") or last_reason
+
+    return {
+        "path": str(p),
+        "exists": True,
+        "count": count,
+        "wins": wins,
+        "losses": losses,
+        "winrate_pct": round(wins / count * 100, 2) if count else 0.0,
+        "with_entry_depth": with_depth,
+        "with_regime": with_regime,
+        "last_logged_at": last_logged_at,
+        "last_symbol": last_symbol,
+        "last_reason": last_reason,
+        "size_bytes": p.stat().st_size,
+        "target_for_training": 200,
+    }
+
+
 @app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()
