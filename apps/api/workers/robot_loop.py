@@ -117,7 +117,9 @@ class RobotLoop:
             # генерик-защиту: plan/RR, symbol-performance, exposure, anti-drain.
             is_range = str(getattr(result, "regime", "")) == "range"
 
-            if result.action == "short" and not settings.ALLOW_SHORTS:
+            # Range-шорт включается своим флагом RANGE_ALLOW_SHORT и не зависит
+            # от трендового ALLOW_SHORTS — поэтому range его не блокирует.
+            if result.action == "short" and not settings.ALLOW_SHORTS and not is_range:
                 if self._should_send_short_block_alert(db, symbol):
                     await self.broadcast.send_owner_alert(
                         "SHORT CANDIDATE OBSERVED",
