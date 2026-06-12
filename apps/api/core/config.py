@@ -189,6 +189,10 @@ class Settings(BaseSettings):
     SCAN_INTERVAL_SEC: int = 60
     MANAGE_INTERVAL_SEC: int = 10
 
+    # Периодический дайджест состояния в Telegram (owner). 7200с = каждые 2 часа.
+    ENABLE_DIGEST: bool = True
+    DIGEST_INTERVAL_SEC: int = 7200
+
     # --- Order-book / depth engine (HTX WebSocket) ---
     # Не HFT: используем устойчивые дисбалансы стакана как ПОДТВЕРЖДЕНИЕ входов
     # (spread-гейт + OBI + стенки) и ускоритель скальп-выхода (CVD). За флагом;

@@ -115,6 +115,9 @@ manage_loop_enabled = True
 
 orderbook_feed_task = None
 orderbook_feed_enabled = True
+
+digest_task = None
+digest_loop_enabled = True
 # Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
 # чтобы одну позицию не обрабатывали два цикла одновременно.
 position_manage_lock = asyncio.Lock()
@@ -207,6 +210,36 @@ async def background_manage_loop():
             db.close()
 
         await asyncio.sleep(int(getattr(settings, "MANAGE_INTERVAL_SEC", 10)))
+
+
+async def background_digest_loop():
+    """Периодическая короткая сводка состояния робота в Telegram (owner).
+
+    Сеть Cowork не достаёт до Render API, поэтому дайджест собирается на стороне
+    робота (БД + стакан в памяти) и шлётся через owner_alert. Первый прогон —
+    вскоре после старта (подтверждение, что работает), далее раз в DIGEST_INTERVAL_SEC.
+    """
+    global digest_loop_enabled
+
+    await asyncio.sleep(25)
+
+    from services.digest_service import build_digest_text
+    from services.telegram_router import TelegramRouter
+    tg = TelegramRouter()
+
+    while digest_loop_enabled:
+        db = SessionLocal()
+        try:
+            if bool(getattr(settings, "ENABLE_DIGEST", True)):
+                window_h = max(1, int(getattr(settings, "DIGEST_INTERVAL_SEC", 7200)) // 3600)
+                text = build_digest_text(db, window_hours=window_h)
+                await tg.owner_alert("ROBOT DIGEST", text)
+        except Exception as e:
+            log_event(logger, logging.ERROR, "digest_loop_error", error_type=type(e).__name__, error=str(e))
+        finally:
+            db.close()
+
+        await asyncio.sleep(int(getattr(settings, "DIGEST_INTERVAL_SEC", 7200)))
 
 
 async def background_subscription_loop():
@@ -366,7 +399,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -377,6 +410,9 @@ async def lifespan(app: FastAPI):
 
     manage_loop_enabled = True
     manage_task = asyncio.create_task(background_manage_loop())
+
+    digest_loop_enabled = True
+    digest_task = asyncio.create_task(background_digest_loop())
 
     orderbook_feed_enabled = True
     if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)):
@@ -418,6 +454,10 @@ async def lifespan(app: FastAPI):
     manage_loop_enabled = False
     if manage_task:
         manage_task.cancel()
+
+    digest_loop_enabled = False
+    if digest_task:
+        digest_task.cancel()
 
     orderbook_feed_enabled = False
     if orderbook_feed_task:
