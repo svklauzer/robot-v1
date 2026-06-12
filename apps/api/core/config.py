@@ -239,6 +239,18 @@ class Settings(BaseSettings):
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 55.0
 
+    # =========================
+    # TREND RIDE — режим-зависимый выход
+    # =========================
+    # В трендовом режиме НЕ выходим у безубытка на микроплюсе и не фиксируем ранний
+    # capture — даём поездке развиться и трейлим шире, чтобы забирать движение
+    # до слома/разворота. В scalp/range-режиме поведение прежнее (быстрый выход).
+    TREND_RIDE_ENABLED: bool = True
+    # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога (%).
+    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 1.2
+    # В тренде выходим, отдав эту долю от MFE (шире, чем обычный ~0.35 → едем дольше).
+    TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
+
     # Минимальная защищаемая прибыль для exit-политики, чтобы не фиксировать микро-движения.
     MIN_PROTECTIVE_EXIT_PCT: float = 1.80
     MIN_POST_TP1_EXIT_PCT: float = 0.80

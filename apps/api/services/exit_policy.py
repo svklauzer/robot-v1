@@ -143,6 +143,7 @@ class ExitPolicyService:
         market_type: str | None = None,
         position_notional_usdt: float | None = None,
         signal_age_sec: float | None = None,
+        trade_mode: str = "default",
     ) -> ExitDecision:
         side = str(side).lower()
         entry_price = float(entry_price)
@@ -193,6 +194,33 @@ class ExitPolicyService:
                     exit_price=current_price,
                     note=f"deep: mfe={mfe:.4f}<{thr['failed_mfe_deep']:.4f} loss={current_pct:.4f}<={thr['failed_loss_deep']:.4f} src={threshold_source}",
                 )
+
+        # ── Трендовый режим (ride) ────────────────────────────────────────────
+        # Едем движение: НЕ выходим у безубытка на микроплюсе и не фиксируем ранний
+        # capture. Держим, пока MFE не отдаст широкую долю (trail_dd) — иначе hold.
+        # Hard stop и failed_setup_exit (выше) продолжают защищать от убытка.
+        ride = (
+            bool(getattr(settings, "TREND_RIDE_ENABLED", True))
+            and str(trade_mode or "default").lower() in ("trend", "trend_up", "trend_down", "ride")
+        )
+        if ride:
+            ride_min_mfe = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 1.2))
+            ride_trail_dd = float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50))
+            if mfe >= ride_min_mfe and drawdown_from_mfe >= mfe * ride_trail_dd:
+                protected_pct = max(mfe * (1.0 - ride_trail_dd), net_safe_pct, min_protective_exit_pct)
+                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+                if est_net is not None and est_net < min_protective_net_usdt:
+                    return ExitDecision(exit=False)
+                exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+                return ExitDecision(
+                    exit=True, reason="trend_ride_trailing_stop",
+                    exit_price=round(exit_price, 8),
+                    note=(
+                        f"ride mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
+                        f"prot={protected_pct:.4f} min_mfe={ride_min_mfe} trail_dd={ride_trail_dd}"
+                    ),
+                )
+            return ExitDecision(exit=False)
 
         if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)):
             capture_drawdown = float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30))

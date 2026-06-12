@@ -573,6 +573,9 @@ class RobotLoop:
                     "is_valid": plan.is_valid,
                     "reject_reason": plan.reject_reason,
                     "performance_guard": performance_adjustment,
+                    # Режим сделки для exit-политики: trend → ride (едем движение),
+                    # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
+                    "trade_mode": "scalp" if "range" in str(result.regime or "") else "trend",
                 },
             )
 

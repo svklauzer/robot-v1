@@ -500,6 +500,7 @@ class SignalLifecycleManager:
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
                 signal_age_sec=self._signal_age_sec(lifecycle),
+                trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
             )
 
             if exit_decision.exit:
@@ -1274,6 +1275,7 @@ class SignalLifecycleManager:
                 symbol=signal.symbol,
                 market_type=settings.MARKET_TYPE,
                 signal_age_sec=self._signal_age_sec(lifecycle),
+                trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
             )
 
             if exit_decision.exit:
