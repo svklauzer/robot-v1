@@ -234,6 +234,7 @@ class RobotLoop:
                 tp1=tp1,
                 tp2=tp2,
                 balance_usdt=balance_usdt,
+                scalp=is_range,
             )
 
             if not plan.is_valid:
@@ -445,10 +446,10 @@ class RobotLoop:
             if bool(getattr(settings, "ANTI_DRAIN_ENABLED", True)):
                 anti_cfg = AntiDrainConfig(
                     min_confidence=float(getattr(settings, "ANTI_DRAIN_MIN_CONFIDENCE", 55.0)),
-                    min_net_rr_tp1=float(getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 0.40)),
-                    min_net_rr_tp2=float(getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 0.85)),
-                    min_expected_edge_after_costs_usdt=float(getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.80)),
-                    max_position_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 12.0)),
+                    min_net_rr_tp1=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP1", 0.40) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 0.40)),
+                    min_net_rr_tp2=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP2", 0.85) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 0.85)),
+                    min_expected_edge_after_costs_usdt=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.0) if is_range else getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.80)),
+                    max_position_margin_pct=float(getattr(settings, "SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 20.0) if is_range else getattr(settings, "ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 12.0)),
                     max_used_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_USED_MARGIN_PCT", 30.0)),
                     max_open_positions=int(getattr(settings, "ANTI_DRAIN_MAX_OPEN_POSITIONS", 2)),
                     max_active_signals_per_symbol=int(getattr(settings, "ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL", 1)),
@@ -838,32 +839,4 @@ class RobotLoop:
         minutes = getattr(settings, "SHORT_ALERT_THROTTLE_MINUTES", 60)
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
-        recent = (
-            db.query(IntelligenceEvent)
-            .filter(
-                IntelligenceEvent.symbol == symbol,
-                IntelligenceEvent.status == "blocked",
-                IntelligenceEvent.decision == "robot_short_candidate_alert_sent",
-                IntelligenceEvent.created_at >= since,
-            )
-            .first()
-        )
-
-        return recent is None
-
-    def _should_send_plan_reject_alert(self, db: Session, symbol: str, reject_reason: str) -> bool:
-        minutes = int(getattr(settings, "PLAN_REJECT_ALERT_THROTTLE_MINUTES", 30))
-        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-
-        recent = (
-            db.query(IntelligenceEvent)
-            .filter(
-                IntelligenceEvent.symbol == symbol,
-                IntelligenceEvent.status == "rejected",
-                IntelligenceEvent.decision == reject_reason,
-                IntelligenceEvent.created_at >= since,
-            )
-            .first()
-        )
-
-        return recent is None
+   

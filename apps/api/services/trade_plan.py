@@ -47,6 +47,7 @@ class TradePlanBuilder:
         balance_usdt: float,
         risk_pct: float | None = None,
         leverage: int | None = None,
+        scalp: bool = False,
     ) -> TradePlan:
         risk_pct_value = risk_pct if risk_pct is not None else settings.RISK_PER_TRADE_PCT
 
@@ -98,7 +99,10 @@ class TradePlanBuilder:
 
         # Дополнительный предохранитель: не даём одной сделке занимать
         # слишком большую долю капитала/маржи.
-        max_position_margin_pct = float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.35))
+        if scalp:
+            max_position_margin_pct = float(getattr(settings, "SCALP_MAX_POSITION_MARGIN_PCT", 0.10))
+        else:
+            max_position_margin_pct = float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.35))
         max_position_margin_usdt = balance_usdt * max(0.01, min(max_position_margin_pct, 1.0))
         max_position_notional = max_position_margin_usdt * leverage_value
         qty_by_position_cap = max_position_notional / entry_price
@@ -263,8 +267,12 @@ class TradePlanBuilder:
             reject_reason = "tp2_net_pnl_not_positive"
 
         else:
-            base_min_tp1 = float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5))
-            base_min_tp2 = float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0))
+            if scalp:
+                base_min_tp1 = float(getattr(settings, "SCALP_MIN_NET_PNL_TP1_USDT", 0.5))
+                base_min_tp2 = float(getattr(settings, "SCALP_MIN_NET_PNL_TP2_USDT", 1.0))
+            else:
+                base_min_tp1 = float(getattr(settings, "MIN_NET_PNL_TP1_USDT", 2.5))
+                base_min_tp2 = float(getattr(settings, "MIN_NET_PNL_TP2_USDT", 6.0))
             relax_margin_pct = max(float(getattr(settings, "MIN_NET_PNL_RELAX_MARGIN_PCT", 0.01)), 0.0)
             relaxed_min_tp1 = required_margin * relax_margin_pct
             relaxed_min_tp2 = relaxed_min_tp1 * 1.5
@@ -279,7 +287,7 @@ class TradePlanBuilder:
                 is_valid = False
                 reject_reason = "tp2_net_pnl_below_min_usdt"
 
-            elif net_rr_tp2 < 1.2:
+            elif net_rr_tp2 < (float(getattr(settings, "SCALP_MIN_NET_RR_TP2", 1.0)) if scalp else 1.2):
                 is_valid = False
                 reject_reason = "net_rr_too_low"
 

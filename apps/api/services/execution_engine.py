@@ -152,6 +152,7 @@ class ExecutionEngine:
                 tp2=tp2,
                 balance_usdt=balance_usdt,
                 leverage=settings.execution_leverage,
+                scalp=str((signal.plan_json or {}).get("trade_mode", "")) == "scalp",
             )
 
         if not plan.is_valid:
