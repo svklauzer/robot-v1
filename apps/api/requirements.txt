@@ -19,3 +19,4 @@ alembic
 anyio[trio]>=4.0
 pytest-anyio>=0.0.0
 pytest
+websockets>=12.0

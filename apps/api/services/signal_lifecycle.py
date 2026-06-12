@@ -26,6 +26,27 @@ from core.config import settings
 
 from models.bot import Bot
 from models.position import Position
+from services.orderbook_analyzer import OrderBookAnalyzer
+from services.orderbook_feed import ORDERBOOK_STORE
+
+
+def _depth_flow_against(signal, side: str) -> bool:
+    """CVD из стакана развернулся против позиции → ускорить выход. Без движка
+    или без свежих данных — False (поведение как раньше)."""
+    if not bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)):
+        return False
+    if not bool(getattr(settings, "OB_ACCELERATE_EXITS", True)):
+        return False
+    try:
+        snap = ORDERBOOK_STORE.snapshot(signal.symbol)
+        if snap and snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
+            snap = None
+        sig = OrderBookAnalyzer.analyze(snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+        return OrderBookAnalyzer.flow_against(
+            side, sig, cvd_exit_ratio=float(getattr(settings, "OB_CVD_EXIT_RATIO", 0.6))
+        )
+    except Exception:
+        return False
 
 
 class SignalLifecycleManager:
@@ -501,6 +522,7 @@ class SignalLifecycleManager:
                 market_type=settings.MARKET_TYPE,
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
+                flow_against=_depth_flow_against(signal, side),
             )
 
             if exit_decision.exit:
@@ -1276,6 +1298,7 @@ class SignalLifecycleManager:
                 market_type=settings.MARKET_TYPE,
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
+                flow_against=_depth_flow_against(signal, side),
             )
 
             if exit_decision.exit:

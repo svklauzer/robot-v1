@@ -112,6 +112,9 @@ funding_arb_loop_enabled = True
 
 manage_task = None
 manage_loop_enabled = True
+
+orderbook_feed_task = None
+orderbook_feed_enabled = True
 # Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
 # чтобы одну позицию не обрабатывали два цикла одновременно.
 position_manage_lock = asyncio.Lock()
@@ -363,7 +366,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -374,6 +377,24 @@ async def lifespan(app: FastAPI):
 
     manage_loop_enabled = True
     manage_task = asyncio.create_task(background_manage_loop())
+
+    orderbook_feed_enabled = True
+    if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)):
+        try:
+            from services.orderbook_feed import run_htx_orderbook_feed
+            ob_db = SessionLocal()
+            try:
+                ob_bot = ob_db.query(Bot).filter(Bot.name == "Main Robot").first()
+                ob_symbols = list((ob_bot.config or {}).get("symbols", [])) if ob_bot else []
+            finally:
+                ob_db.close()
+            if not ob_symbols:
+                ob_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "DOT/USDT"]
+            orderbook_feed_task = asyncio.create_task(
+                run_htx_orderbook_feed(ob_symbols, lambda: orderbook_feed_enabled)
+            )
+        except Exception as e:
+            log_event(logger, logging.ERROR, "orderbook_feed_start_error", error_type=type(e).__name__, error=str(e))
 
     subscription_loop_enabled = True
     subscription_task = asyncio.create_task(background_subscription_loop())
@@ -397,6 +418,10 @@ async def lifespan(app: FastAPI):
     manage_loop_enabled = False
     if manage_task:
         manage_task.cancel()
+
+    orderbook_feed_enabled = False
+    if orderbook_feed_task:
+        orderbook_feed_task.cancel()
 
     subscription_loop_enabled = False
     if subscription_task:

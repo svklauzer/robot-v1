@@ -189,6 +189,22 @@ class Settings(BaseSettings):
     SCAN_INTERVAL_SEC: int = 60
     MANAGE_INTERVAL_SEC: int = 10
 
+    # --- Order-book / depth engine (HTX WebSocket) ---
+    # Не HFT: используем устойчивые дисбалансы стакана как ПОДТВЕРЖДЕНИЕ входов
+    # (spread-гейт + OBI + стенки) и ускоритель скальп-выхода (CVD). За флагом;
+    # если WS молчит — анализатор уходит в pass-through, торговля как обычно.
+    ENABLE_ORDERBOOK_ENGINE: bool = False
+    OB_WS_URL: str = "wss://api-aws.huobi.pro/ws"
+    OB_DEPTH_LEVELS: int = 10
+    OB_MAX_SPREAD_PCT: float = 0.08       # шире — скип (слиппедж съест скальп)
+    OB_OBI_CONFIRM: float = 0.15          # нужный перекос стакана в сторону входа
+    OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
+    OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
+    OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
+    OB_CVD_EXIT_RATIO: float = 0.6        # поток против позиции на эту долю → ускоряем выход
+    OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
+    OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
+
     # =========================
     # FUTURES EXECUTION & SMART LEVERAGE — Фаза 4 (каркас, OFF по умолчанию)
     # =========================

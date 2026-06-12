@@ -144,6 +144,7 @@ class ExitPolicyService:
         position_notional_usdt: float | None = None,
         signal_age_sec: float | None = None,
         trade_mode: str = "default",
+        flow_against: bool = False,
     ) -> ExitDecision:
         side = str(side).lower()
         entry_price = float(entry_price)
@@ -184,14 +185,18 @@ class ExitPolicyService:
         if scalp:
             scalp_arm = float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5))
             scalp_give = float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.5))
-            if mfe >= scalp_arm and drawdown_from_mfe >= mfe * scalp_give:
+            gave_back = drawdown_from_mfe >= mfe * scalp_give
+            # Поток сделок развернулся против позиции (CVD) → не ждём полного
+            # отката, фиксируем у пика. Иначе — обычный трейл-замок.
+            if mfe >= scalp_arm and (gave_back or flow_against):
+                reason = "scalp_breakeven_lock" if gave_back else "scalp_flow_exit"
                 return ExitDecision(
                     exit=True,
-                    reason="scalp_breakeven_lock",
+                    reason=reason,
                     exit_price=current_price,
                     note=(
-                        f"scalp lock mfe={mfe:.4f} cur={current_pct:.4f} "
-                        f"dd={drawdown_from_mfe:.4f} arm={scalp_arm} give={scalp_give}"
+                        f"{reason} mfe={mfe:.4f} cur={current_pct:.4f} "
+                        f"dd={drawdown_from_mfe:.4f} arm={scalp_arm} give={scalp_give} flow_against={flow_against}"
                     ),
                 )
 

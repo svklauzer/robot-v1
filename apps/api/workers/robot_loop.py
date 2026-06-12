@@ -21,6 +21,8 @@ from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
+from services.orderbook_analyzer import OrderBookAnalyzer
+from services.orderbook_feed import ORDERBOOK_STORE
 from services.ml_trade_logger import MLTradeLogger
 
 from models.signal import Signal
@@ -225,6 +227,36 @@ class RobotLoop:
                     )
                 )
                 continue
+
+            # ── Depth-гейт (стакан): спред + OBI/стенки подтверждают вход ──────
+            # Нет свежих WS-данных → pass-through (не блокируем торговлю).
+            if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)) and bool(getattr(settings, "OB_GATE_ENTRIES", True)):
+                ob_snap = ORDERBOOK_STORE.snapshot(symbol)
+                if ob_snap and ob_snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
+                    ob_snap = None
+                ob_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+                ob_ok, ob_reason = OrderBookAnalyzer.entry_gate(
+                    result.action, ob_sig,
+                    max_spread_pct=float(getattr(settings, "OB_MAX_SPREAD_PCT", 0.08)),
+                    obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
+                    wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
+                )
+                if not ob_ok:
+                    db.add(
+                        IntelligenceEvent(
+                            symbol=symbol,
+                            status="blocked",
+                            decision="blocked_depth_gate",
+                            action=result.action,
+                            regime=result.regime,
+                            radar_state=result.radar_state,
+                            confidence_hint=result.confidence_hint,
+                            setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                            payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_depth_gate", "reason": ob_reason, "depth": ob_sig.as_dict()},
+                        )
+                    )
+                    db.flush()
+                    continue
 
             plan = self.trade_plan_builder.build_plan(
                 symbol=symbol,
