@@ -2114,7 +2114,9 @@ def intelligence_scan_readonly():
 
                 item["grade"] = grade
 
-                if not quality.should_publish_to_clients(
+                # RANGE-кандидат обходит трендовый quality-гейт (как в robot_loop).
+                is_range = str(getattr(result, "regime", "")) == "range"
+                if not is_range and not quality.should_publish_to_clients(
                     grade,
                     setup_score=setup_score,
                     effective_confidence=item["effective_confidence"],
