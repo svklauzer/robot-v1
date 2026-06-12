@@ -112,6 +112,11 @@ class RobotLoop:
             if result.setup_decision != "approve":
                 continue
 
+            # RANGE-скальп идёт по своему скорингу. Он обходит трендовые гейты
+            # (grade-публикация, production_gate, symbol-policy), но проходит
+            # генерик-защиту: plan/RR, symbol-performance, exposure, anti-drain.
+            is_range = str(getattr(result, "regime", "")) == "range"
+
             if result.action == "short" and not settings.ALLOW_SHORTS:
                 if self._should_send_short_block_alert(db, symbol):
                     await self.broadcast.send_owner_alert(
@@ -194,7 +199,7 @@ class RobotLoop:
 
             expires_at = self.quality.expiry_time(grade)
 
-            should_publish = self.quality.should_publish_to_clients(
+            should_publish = is_range or self.quality.should_publish_to_clients(
                 grade=grade,
                 setup_score=setup_score,
                 effective_confidence=effective_confidence,
@@ -345,7 +350,7 @@ class RobotLoop:
                 priority_score=100.0,
             )
 
-            if not production_decision.allowed:
+            if not is_range and not production_decision.allowed:
                 db.add(
                     IntelligenceEvent(
                         symbol=symbol,
@@ -386,7 +391,7 @@ class RobotLoop:
 
             policy_profile = self.symbol_performance_guard.policy_profile(performance)
             policy_decision = self._check_symbol_policy_profile(policy_profile, production_decision.payload)
-            if not policy_decision["allowed"]:
+            if not is_range and not policy_decision["allowed"]:
                 db.add(
                     IntelligenceEvent(
                         symbol=symbol,
