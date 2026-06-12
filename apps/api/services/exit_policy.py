@@ -172,6 +172,29 @@ class ExitPolicyService:
             else None
         )
 
+        # ── Скальп-режим: безубыток-замок (до failed_setup_exit) ─────────────
+        # Маленькая позиция + мелкое движение: тренд-пороги capture/protective
+        # не вооружаются, и зелёный скальп отдаёт прибыль и переворачивается в
+        # минус. Трейлим от MFE: как только отдали заданную долю пика — выходим
+        # в текущую цену (реальный филл), фиксируя остаток прибыли.
+        scalp = (
+            bool(getattr(settings, "SCALP_BREAKEVEN_ENABLED", True))
+            and str(trade_mode or "default").lower() in ("scalp", "range")
+        )
+        if scalp:
+            scalp_arm = float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5))
+            scalp_give = float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.5))
+            if mfe >= scalp_arm and drawdown_from_mfe >= mfe * scalp_give:
+                return ExitDecision(
+                    exit=True,
+                    reason="scalp_breakeven_lock",
+                    exit_price=current_price,
+                    note=(
+                        f"scalp lock mfe={mfe:.4f} cur={current_pct:.4f} "
+                        f"dd={drawdown_from_mfe:.4f} arm={scalp_arm} give={scalp_give}"
+                    ),
+                )
+
         if mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
             if mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:
                 return ExitDecision(
@@ -378,5 +401,3 @@ class ExitPolicyService:
                     f"prot={protected_pct:.4f} fee={fee_source}"
                 ),
             )
-
-        return ExitDecision(exit=False)

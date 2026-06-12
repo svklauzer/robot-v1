@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 20.0   # маржевый лимит anti-drain для скальпа
     SCALP_ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.40
     SCALP_ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.85
+    # Scalp exit: безубыток-замок (трейл от MFE). Тренд-пороги capture (~0.95%)
+    # и protective (1.2% / 1.5 USDT) под маленький скальп не вооружаются — и
+    # зелёная сделка переворачивается в убыток (кейс LINK: +0.72% → −1.18%).
+    # Замок трейлит от пика и фиксирует остаток в плюсе.
+    SCALP_BREAKEVEN_ENABLED: bool = True
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.5  # выходим, отдав эту долю пика MFE
 
     # =========================
     # FUTURES EXECUTION & SMART LEVERAGE — Фаза 4 (каркас, OFF по умолчанию)
