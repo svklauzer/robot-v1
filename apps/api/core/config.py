@@ -386,6 +386,19 @@ class Settings(BaseSettings):
     EXCHANGE_RECONCILIATION_ENABLED: bool = False
 
 
+    @property
+    def execution_market_type(self) -> str:
+        """Рынок исполнения. ENABLE_FUTURES_EXECUTION → swap (шорты), иначе MARKET_TYPE."""
+        return "swap" if self.ENABLE_FUTURES_EXECUTION else self.MARKET_TYPE
+
+    @property
+    def execution_leverage(self) -> int:
+        """Плечо исполнения. Сейчас всегда 1 — smart leverage не подключён к сайзингу
+        (Фаза 4 активация). Догма: плечо только на доказанном edge."""
+        if self.ENABLE_FUTURES_EXECUTION:
+            return max(int(self.FUTURES_LEVERAGE), 1)
+        return 1
+
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []
 

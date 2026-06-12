@@ -38,7 +38,7 @@ class ExecutionEngine:
             stop_price=float(signal.stop_price),
             tp1=float(signal.tp_json["tp1"]),
             tp2=float(signal.tp_json["tp2"]),
-            leverage=settings.FUTURES_LEVERAGE if settings.ENABLE_FUTURES else 1,
+            leverage=settings.execution_leverage,
 
             balance_usdt=plan_json.get("balance_usdt"),
             risk_usdt=plan_json.get("risk_usdt"),
@@ -151,7 +151,7 @@ class ExecutionEngine:
                 tp1=tp1,
                 tp2=tp2,
                 balance_usdt=balance_usdt,
-                leverage=settings.FUTURES_LEVERAGE if settings.ENABLE_FUTURES else 1,
+                leverage=settings.execution_leverage,
             )
 
         if not plan.is_valid:
@@ -251,14 +251,14 @@ class ExecutionEngine:
 
         preview = self.cost_engine.estimate(
             symbol=position.symbol,
-            market_type=settings.MARKET_TYPE,
+            market_type=settings.execution_market_type,
             side=position.side,
             entry_price=float(position.entry_price),
             exit_price=float(exit_price),
             qty=float(position.qty),
             liquidity="taker",
             holding_funding_periods=1,
-            leverage=settings.FUTURES_LEVERAGE if settings.ENABLE_FUTURES else 1,
+            leverage=settings.execution_leverage,
         )
 
         close_side = self._close_order_side(position.side)
