@@ -380,4 +380,102 @@ class Settings(BaseSettings):
 
     # ── Telegram Stars (XTR) ─────────────────────────────────────────────────
     # Цена каждого тарифа в звёздах Telegram (целое число XTR).
-    # За
+    # Задать реальные значения в env; 0 = тариф недоступен для Stars-оплаты.
+    VIP_STARS_PRICE_30: int = 0
+    VIP_STARS_PRICE_90: int = 0
+    # Сколько часов живёт одноразовая invite-ссылка в приватный VIP-канал.
+    VIP_INVITE_EXPIRE_HOURS: int = 24
+
+    def stars_price_for_plan(self, plan_code: str) -> int:
+        return {
+            "vip_30": self.VIP_STARS_PRICE_30,
+            "vip_90": self.VIP_STARS_PRICE_90,
+        }.get(plan_code, 0)
+
+    # =========================
+    # MARKET CONNECTIVITY
+    # =========================
+    MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 5000
+    MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
+    EXCHANGE_RECONCILIATION_ENABLED: bool = False
+
+
+    @property
+    def execution_market_type(self) -> str:
+        """Рынок исполнения. ENABLE_FUTURES_EXECUTION → swap (шорты), иначе MARKET_TYPE."""
+        return "swap" if self.ENABLE_FUTURES_EXECUTION else self.MARKET_TYPE
+
+    @property
+    def execution_leverage(self) -> int:
+        """Плечо исполнения. Сейчас всегда 1 — smart leverage не подключён к сайзингу
+        (Фаза 4 активация). Догма: плечо только на доказанном edge."""
+        if self.ENABLE_FUTURES_EXECUTION:
+            return max(int(self.FUTURES_LEVERAGE), 1)
+        return 1
+
+    def production_blockers(self) -> list[str]:
+        blockers: list[str] = []
+
+        if self.APP_ENV == "production":
+            if self.DB_AUTO_CREATE_SCHEMA:
+                blockers.append("DB_AUTO_CREATE_SCHEMA must be disabled in production; run Alembic migrations")
+            if self.JWT_SECRET == "dev-jwt-secret-change-me":
+                blockers.append("JWT_SECRET uses development default")
+            if self.OWNER_PASSWORD == "owner-password-change-me":
+                blockers.append("OWNER_PASSWORD uses development default")
+            if not self.OWNER_API_TOKEN:
+                blockers.append("OWNER_API_TOKEN is not configured")
+            if not self.TELEGRAM_BOT_TOKEN:
+                blockers.append("TELEGRAM_BOT_TOKEN is not configured")
+            if not self.HTX_API_KEY or not self.HTX_API_SECRET:
+                blockers.append("HTX API credentials are not configured")
+
+        if self.ENABLE_LIVE_ORDERS and self.TRADING_MODE not in ["live", "live_limited"]:
+            blockers.append("ENABLE_LIVE_ORDERS requires TRADING_MODE=live or live_limited")
+        if self.ENABLE_LIVE_ORDERS and self.ROBOT_MODE == "paper":
+            blockers.append("ENABLE_LIVE_ORDERS cannot run with ROBOT_MODE=paper")
+        if self.ENABLE_LIVE_ORDERS and not self.TELEGRAM_BOT_TOKEN:
+            blockers.append("live orders require Telegram owner alerts")
+        if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
+            blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
+
+        return blockers
+
+    @property
+    def is_live_enabled(self) -> bool:
+        return bool(self.ENABLE_LIVE_ORDERS or self.TRADING_MODE in ["live", "live_limited"])
+
+    @property
+    def should_auto_create_schema(self) -> bool:
+        return bool(self.DB_AUTO_CREATE_SCHEMA and self.APP_ENV != "production")
+
+    @property
+    def database_url(self) -> str:
+        if self.DATABASE_URL:
+            url = self.DATABASE_URL
+            # Render/Heroku-style URLs use the legacy "postgres://" scheme,
+            # which SQLAlchemy no longer recognizes — normalize it.
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://"):]
+            return url
+        return (
+            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+
+    @property
+    def cors_origins(self) -> List[str]:
+        defaults = ["http://localhost:3000", "http://127.0.0.1:3000"]
+        extra = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        # dedupe, сохраняя порядок
+        return list(dict.fromkeys(defaults + extra))
+
+    @property
+    def symbols(self) -> List[str]:
+        return [s.strip() for s in self.HTX_SYMBOLS.split(",") if s.strip()]
+
+    @property
+    def funding_arb_symbols(self) -> List[str]:
+        return [s.strip() for s in self.FUNDING_ARB_SYMBOLS.split(",") if s.strip()]
+
+settings = Settings()

@@ -839,4 +839,32 @@ class RobotLoop:
         minutes = getattr(settings, "SHORT_ALERT_THROTTLE_MINUTES", 60)
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
-   
+        recent = (
+            db.query(IntelligenceEvent)
+            .filter(
+                IntelligenceEvent.symbol == symbol,
+                IntelligenceEvent.status == "blocked",
+                IntelligenceEvent.decision == "robot_short_candidate_alert_sent",
+                IntelligenceEvent.created_at >= since,
+            )
+            .first()
+        )
+
+        return recent is None
+
+    def _should_send_plan_reject_alert(self, db: Session, symbol: str, reject_reason: str) -> bool:
+        minutes = int(getattr(settings, "PLAN_REJECT_ALERT_THROTTLE_MINUTES", 30))
+        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+        recent = (
+            db.query(IntelligenceEvent)
+            .filter(
+                IntelligenceEvent.symbol == symbol,
+                IntelligenceEvent.status == "rejected",
+                IntelligenceEvent.decision == reject_reason,
+                IntelligenceEvent.created_at >= since,
+            )
+            .first()
+        )
+
+        return recent is None
