@@ -46,6 +46,7 @@ const IMPORTANT_DECISIONS = [
 
   // depth + anti-drain (новые коды бэкенда)
   "blocked_depth_gate",
+  "blocked_post_loss_cooldown",
   "blocked_active_signal_per_symbol",
   "blocked_bad_trade_economics",
   "blocked_position_margin_limit",

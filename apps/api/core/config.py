@@ -199,6 +199,13 @@ class Settings(BaseSettings):
     SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
     SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.5  # выходим, отдав эту долю пика MFE
 
+    # --- Post-loss cooldown (только range-скальп) ---
+    # После убыточного закрытия по паре символ+сторона не лезем повторно N минут
+    # — режет churn (DOT шортился 6× в аптренд, пока guard не заблокировал).
+    # CRT/тренд НЕ трогаем (у них своя селективность).
+    POST_LOSS_COOLDOWN_ENABLED: bool = True
+    POST_LOSS_COOLDOWN_MIN: float = 25.0
+
     # --- Split cadence: медленный SCAN (поиск входов) + быстрый MANAGE (выходы) ---
     # Сканирование сетапов на 4h-биасе не нужно чаще раза в минуту, а ведение
     # открытых позиций (скальп-замок, трейлы) должно реагировать быстро. HTX REST

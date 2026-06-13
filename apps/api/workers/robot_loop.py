@@ -231,6 +231,56 @@ class RobotLoop:
                 )
                 continue
 
+            # ── Post-loss cooldown (только range-скальп) ────────────────────
+            # После убыточного закрытия по символу+стороне не лезем повторно
+            # N минут — режет churn. CRT/тренд не трогаем.
+            if (
+                str(getattr(result, "regime", "")) == "range"
+                and bool(getattr(settings, "POST_LOSS_COOLDOWN_ENABLED", True))
+            ):
+                cd_min = float(getattr(settings, "POST_LOSS_COOLDOWN_MIN", 25.0))
+                last_loss = (
+                    db.query(Signal)
+                    .filter(
+                        Signal.symbol == symbol,
+                        Signal.side == result.action,
+                        Signal.status == "closed",
+                        Signal.closed_net_pnl < 0,
+                    )
+                    .order_by(Signal.closed_at.desc())
+                    .first()
+                )
+                if last_loss is not None and last_loss.closed_at is not None:
+                    closed_at = last_loss.closed_at
+                    if closed_at.tzinfo is None:
+                        closed_at = closed_at.replace(tzinfo=timezone.utc)
+                    age_min = (datetime.now(timezone.utc) - closed_at).total_seconds() / 60.0
+                    if age_min < cd_min:
+                        db.add(
+                            IntelligenceEvent(
+                                symbol=symbol,
+                                status="blocked",
+                                decision="blocked_post_loss_cooldown",
+                                action=result.action,
+                                regime=result.regime,
+                                radar_state=result.radar_state,
+                                confidence_hint=result.confidence_hint,
+                                setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                                payload_json={
+                                    "symbol": symbol,
+                                    "status": "blocked",
+                                    "decision": "blocked_post_loss_cooldown",
+                                    "side": result.action,
+                                    "cooldown_min": cd_min,
+                                    "since_loss_min": round(age_min, 1),
+                                    "last_loss_signal_id": last_loss.id,
+                                    "last_loss_reason": last_loss.closed_reason,
+                                },
+                            )
+                        )
+                        db.flush()
+                        continue
+
             # ── Depth-гейт (стакан): спред + OBI/стенки подтверждают вход ──────
             # Нет свежих WS-данных → pass-through (не блокируем торговлю).
             if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)) and bool(getattr(settings, "OB_GATE_ENTRIES", True)):
