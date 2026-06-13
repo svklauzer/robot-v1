@@ -31,6 +31,25 @@ const IMPORTANT_DECISIONS = [
 
   "short_candidate_but_shorts_disabled",
   "skip_no_trade_conditions",
+
+  // lifecycle: открытия и выходы
+  "position_opened",
+  "scalp_flow_exit",
+  "scalp_breakeven_lock",
+  "failed_setup_exit",
+  "protective_trailing_stop",
+  "protective_breakeven_profit_guard",
+  "adaptive_mfe_capture",
+  "trend_ride_trailing_stop",
+  "stop_loss",
+  "tp2_reached",
+
+  // depth + anti-drain (новые коды бэкенда)
+  "blocked_depth_gate",
+  "blocked_active_signal_per_symbol",
+  "blocked_bad_trade_economics",
+  "blocked_position_margin_limit",
+  "blocked_total_margin_limit",
 ];
 
 export default function IntelligencePage() {
@@ -126,7 +145,10 @@ export default function IntelligencePage() {
       (e: any) =>
         e.decision === "active_signal_already_exists" ||
         e.decision === "required_margin_exceeds_free_margin" ||
-        e.decision === "max_active_signals_reached"
+        e.decision === "max_active_signals_reached" ||
+        e.decision === "blocked_active_signal_per_symbol" ||
+        e.decision === "blocked_total_margin_limit" ||
+        e.decision === "blocked_position_margin_limit"
     ).length;
 
     return {
@@ -204,6 +226,8 @@ export default function IntelligencePage() {
               >
                 <option value="actionable">actionable first</option>
                 <option value="all">all statuses</option>
+                <option value="published">published</option>
+                <option value="opened">opened</option>
                 <option value="candidate">candidate</option>
                 <option value="wait">wait</option>
                 <option value="watch">watch</option>

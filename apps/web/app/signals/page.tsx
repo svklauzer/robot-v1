@@ -15,6 +15,7 @@ export default function SignalsPage() {
   const [sideFilter, setSideFilter] = useState("all");
   const [gradeFilter, setGradeFilter] = useState("all");
   const [publicFilter, setPublicFilter] = useState("all");
+  const [modeFilter, setModeFilter] = useState("all");
 
   async function loadSignals() {
     setLoading(true);
@@ -70,10 +71,11 @@ export default function SignalsPage() {
 
       if (publicFilter === "public" && !s.is_public) return false;
       if (publicFilter === "private" && s.is_public) return false;
+      if (modeFilter !== "all" && String(s.plan?.trade_mode || "") !== modeFilter) return false;
 
       return true;
     });
-  }, [signals, statusFilter, sideFilter, gradeFilter, publicFilter]);
+  }, [signals, statusFilter, sideFilter, gradeFilter, publicFilter, modeFilter]);
 
   const stats = useMemo(() => {
     const closed = signals.filter((s) => s.status === "closed");
@@ -164,6 +166,13 @@ export default function SignalsPage() {
               value={publicFilter}
               onChange={setPublicFilter}
               options={["all", "public", "private"]}
+            />
+
+            <FilterSelect
+              label="Mode"
+              value={modeFilter}
+              onChange={setModeFilter}
+              options={["all", "scalp", "trend"]}
             />
           </div>
         </section>

@@ -14,6 +14,7 @@ const items = [
   { href: "/reports", label: "Reports" },
   { href: "/health", label: "Health" },
   { href: "/intelligence", label: "Intelligence" },
+  { href: "/orderbook", label: "Order Book" },
 ];
 
 export default function Nav() {

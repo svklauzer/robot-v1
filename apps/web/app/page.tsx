@@ -11,6 +11,8 @@ export default function DashboardPage() {
   const [analytics, setAnalytics] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
   const [dailyQuality, setDailyQuality] = useState<any>(null);
+  const [orderbook, setOrderbook] = useState<any>(null);
+  const [mlStats, setMlStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
@@ -26,6 +28,9 @@ export default function DashboardPage() {
       setAnalytics(summary);
       setReadiness(readinessData);
       setDailyQuality(dailyData);
+      // depth + ML: не валим дашборд, если движок off / эндпоинт недоступен
+      apiGet("/orderbook/state").then(setOrderbook).catch(() => setOrderbook(null));
+      apiGet("/ml/outcomes/stats").then(setMlStats).catch(() => setMlStats(null));
     } finally {
       setLoading(false);
     }
@@ -88,11 +93,13 @@ export default function DashboardPage() {
         <StatCard title="Payments" value={readiness?.payments?.cash_collected ?? 0} subtitle={`paid ${readiness?.payments?.paid ?? 0}, pending ${readiness?.payments?.pending ?? 0}`} icon={<CreditCard size={18} />} good />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <MiniCard title="Signals" value={analytics?.total_signals ?? 0} link="/signals" />
         <MiniCard title="Winrate" value={`${analytics?.winrate ?? 0}%`} link="/analytics" />
         <MiniCard title="Active" value={analytics?.active_signals ?? 0} link="/positions" />
         <MiniCard title="Telegram SLA" value={`${readiness?.telegram_delivery?.sla_pct ?? 100}%`} link="/health" />
+        <MiniCard title="Depth feed" value={orderbook?.enabled ? (orderbook?.stats?.freshest_age_sec != null ? `LIVE ${Number(orderbook.stats.freshest_age_sec).toFixed(1)}s` : "—") : "OFF"} link="/orderbook" />
+        <MiniCard title="ML data" value={`${mlStats?.count ?? 0}/${mlStats?.target_for_training ?? 200}`} link="/orderbook" />
       </section>
 
       {blockers.length > 0 && (
