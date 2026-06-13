@@ -259,14 +259,6 @@ class MarketIntelligenceEngine:
         else:
             last_volume = float(volume.iloc[-1])
             volume_ma20 = volume.rolling(20).mean().iloc[-1]
-        # Дыра в данных: одиночная закрытая свеча с нулевым объёмом (бывает у
-        # менее ликвидных пар на HTX, напр. XRP) обнуляет volume_ratio и глушит
-        # сигнал. Fallback — короткое среднее ненулевых закрытых свечей (Volume SMA-3).
-        if last_volume <= 0 and len(volume) >= 4:
-            recent = volume.iloc[-4:-1]
-            recent = recent[recent > 0]
-            if len(recent):
-                last_volume = float(recent.mean())
         volume_ratio = last_volume / volume_ma20 if volume_ma20 and volume_ma20 > 0 else 0.0
 
         support = low.tail(50).min()
