@@ -2313,7 +2313,7 @@ def intelligence_scan_readonly():
                 item["grade"] = grade
 
                 # RANGE-кандидат обходит трендовый quality-гейт (как в robot_loop).
-                is_range = str(getattr(result, "regime", "")) == "range"
+                is_range = str(getattr(result, "regime", "")) in ("range", "crt")
                 if not is_range and not quality.should_publish_to_clients(
                     grade,
                     setup_score=setup_score,

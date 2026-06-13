@@ -6,6 +6,23 @@ import pandas as pd
 from core.config import settings
 from services.market_data import MarketDataService
 from services.range_strategy import RangeStrategyService
+from services.crt_strategy import CRTStrategyService
+
+
+def _df_to_crt_candles(df, n: int = 20):
+    """DataFrame OHLCV → список ЗАКРЫТЫХ свечей (последняя строка = формирующаяся,
+    отбрасываем, чтобы исключить lookahead/repaint). Старые→новые."""
+    try:
+        if df is None or len(df) < 2:
+            return []
+        closed = df.iloc[:-1].tail(int(n))
+        return [
+            {"open": float(r["open"]), "high": float(r["high"]),
+             "low": float(r["low"]), "close": float(r["close"])}
+            for _, r in closed.iterrows()
+        ]
+    except Exception:
+        return []
 
 
 
@@ -138,6 +155,45 @@ class MarketIntelligenceEngine:
             scores=scores,
             regime=regime,
         )
+
+        # ── CRT (Candle Range Theory) — приоритетнее грубого range ──────────
+        # Трендовый путь не дал approve → пробуем 3-свечной CRT (свип + close-back
+        # на 4h, вход на LTF по MSS/FVG). Несёт regime="crt" → trade_mode="trend".
+        if bool(getattr(settings, "ENABLE_CRT_STRATEGY", False)) and (
+            candidate.action == "hold" or candidate.setup_decision != "approve"
+        ):
+            try:
+                htf_tf = str(getattr(settings, "CRT_HTF_TF", "4h"))
+                ltf_tf = str(getattr(settings, "CRT_LTF_TF", "15m"))
+                htf_c = _df_to_crt_candles(tf_data.get(htf_tf), 6)
+                ltf_c = _df_to_crt_candles(tf_data.get(ltf_tf), 24)
+                cur_px = (
+                    float(tf_data[ltf_tf].iloc[-1]["close"])
+                    if ltf_tf in tf_data and len(tf_data[ltf_tf])
+                    else (ltf_c[-1]["close"] if ltf_c else 0.0)
+                )
+                crt_sig = CRTStrategyService().evaluate(htf_c, ltf_c, symbol=symbol, current_price=cur_px)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[CRT STRATEGY ERROR] {symbol}: {exc}")
+                crt_sig = None
+
+            if crt_sig is not None and crt_sig.setup_decision == "approve":
+                candidate = MarketIntelligenceResult(
+                    symbol=symbol,
+                    source=source,
+                    action=crt_sig.action,
+                    regime=crt_sig.regime,
+                    entry_zone=crt_sig.entry_zone,
+                    stop_price=crt_sig.stop_price,
+                    tp=crt_sig.tp,
+                    confidence_hint=crt_sig.confidence_hint,
+                    reason=crt_sig.reason,
+                    scores=scores,
+                    timeframes=candidate.timeframes,
+                    setup_quality=crt_sig.setup_quality,
+                    setup_decision=crt_sig.setup_decision,
+                    radar_state="crt",
+                )
 
         # ── RANGE-стратегия (скальп в боковике) ──────────────────────────────
         # Если трендовый путь не дал торгуемого кандидата (hold или не approve),

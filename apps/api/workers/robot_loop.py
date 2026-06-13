@@ -117,7 +117,10 @@ class RobotLoop:
             # RANGE-скальп идёт по своему скорингу. Он обходит трендовые гейты
             # (grade-публикация, production_gate, symbol-policy), но проходит
             # генерик-защиту: plan/RR, symbol-performance, exposure, anti-drain.
-            is_range = str(getattr(result, "regime", "")) == "range"
+            # range и crt идут одним «альт-стратегия» путём: байпас quality/production
+            # гейтов + scalp-сайзинг (чтобы проходили anti-drain). Режим выхода
+            # разводится отдельно через trade_mode (range→scalp, crt→trend-ride).
+            is_range = str(getattr(result, "regime", "")) in ("range", "crt")
 
             # Range-шорт включается своим флагом RANGE_ALLOW_SHORT и не зависит
             # от трендового ALLOW_SHORTS — поэтому range его не блокирует.

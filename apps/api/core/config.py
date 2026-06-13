@@ -161,6 +161,23 @@ class Settings(BaseSettings):
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = False
 
+    # --- CRT (Candle Range Theory) — 3-свечной вход A→M→D ---
+    # C1(4h)=диапазон CRH/CRL, C2=свип+закрытие обратно внутрь, C3=вход на LTF
+    # по MSS/FVG в premium/discount. SL за хвост C2, TP1=противоположная
+    # ликвидность, TP2=R:R. Приоритетнее грубого range. Под флагом, OFF.
+    ENABLE_CRT_STRATEGY: bool = False
+    CRT_HTF_TF: str = "4h"                 # старший ТФ для C1/C2
+    CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
+    CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
+    CRT_LTF_CONFIRM: str = "either"        # "either" | "both" | "off" (MSS/FVG)
+    CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
+    CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
+    CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
+    CRT_MIN_TP1_NET_PCT: float = 0.5       # мин. чистый ход до TP1 после комиссий
+    CRT_ALLOW_LONG: bool = True
+    CRT_ALLOW_SHORT: bool = True
+    CRT_MIN_SETUP_SCORE: float = 55.0
+
     # --- Scalp risk profile (trade_mode="scalp" / regime="range") ---
     # Скальп — маленькая позиция, мелкое движение, мелкие абсолютные суммы.
     # Глобальные пороги риска заточены под крупные трендовые сделки и душат
