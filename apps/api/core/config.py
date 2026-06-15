@@ -140,7 +140,7 @@ class Settings(BaseSettings):
     ML_OUTCOMES_STALE_HOURS: int = 72
 
     # Paper/live-shadow validation gates before limited live scaling.
-    VALIDATION_MIN_CLOSED_SIGNALS: int = 200
+    VALIDATION_MIN_CLOSED_SIGNALS: int = 50
     VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
     VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
 
@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     RANGE_STOP_ATR_MULT: float = 0.5        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
-    RANGE_ALLOW_SHORT: bool = False
+    RANGE_ALLOW_SHORT: bool = True
 
     # --- CRT (Candle Range Theory) — 3-свечной вход A→M→D ---
     # C1(4h)=диапазон CRH/CRL, C2=свип+закрытие обратно внутрь, C3=вход на LTF
@@ -167,7 +167,7 @@ class Settings(BaseSettings):
     # ликвидность, TP2=R:R. Приоритетнее грубого range. Под флагом, OFF.
     ENABLE_CRT_STRATEGY: bool = False
     CRT_HTF_TF: str = "4h"                 # старший ТФ для C1/C2
-    CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
+    CRT_LTF_TF: str = "5m"                 # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
     CRT_LTF_CONFIRM: str = "either"        # "either" | "both" | "off" (MSS/FVG)
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
@@ -197,7 +197,7 @@ class Settings(BaseSettings):
     # Замок трейлит от пика и фиксирует остаток в плюсе.
     SCALP_BREAKEVEN_ENABLED: bool = True
     SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
-    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.5  # выходим, отдав эту долю пика MFE
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.6  # выходим, отдав эту долю пика MFE
     # Скальп тайм-стоп (профиль ведения SCALP): сделка должна разрешиться быстро.
     # Если за N минут скальп не вооружился (mfe < arm) — закрываем по текущей цене,
     # чтобы «мёртвая» сделка не дрейфовала в свинг-убыток и освободила слот.
@@ -237,8 +237,8 @@ class Settings(BaseSettings):
     OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
-    OB_CVD_EXIT_RATIO: float = 0.6        # поток против позиции на эту долю → ускоряем выход
-    OB_CVD_MIN_TRADES: int = 15           # меньше сделок в окне → CVD это шум, не сигнал
+    OB_CVD_EXIT_RATIO: float = 0.8        # поток против позиции на эту долю → ускоряем выход
+    OB_CVD_MIN_TRADES: int = 25           # меньше сделок в окне → CVD это шум, не сигнал
     OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
     OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
 
@@ -262,14 +262,14 @@ class Settings(BaseSettings):
     # =========================
     # SYMBOL PERFORMANCE GUARD
     # =========================
-    SYMBOL_PERF_LOOKBACK: int = 12
+    SYMBOL_PERF_LOOKBACK: int = 10
     SYMBOL_PERF_MIN_HISTORY: int = 3
     SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
-    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 42.0
-    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 50.0
-    SYMBOL_PERF_COOLDOWN_STREAK: int = 4
+    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 48.0
+    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 55.0
+    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 3
+    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 2
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
@@ -292,14 +292,14 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # spot 0.2% paper
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
-    ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 30.0
+    ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 50.0
     # POSITION (trend) профиль anti-drain: согласован с trade_plan
     # (MAX_POSITION_MARGIN_PCT=0.35) — иначе plan строит 35%, а anti-drain режет 12%.
     # weak_structure/overheated/economics-по-TP1 для тренда отключаются в robot_loop
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
     ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 35.0
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
-    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 2.0
     ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 10.0
@@ -314,7 +314,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_SETUP: float = 76.0
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 68.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95     # live
-    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.60   # spot 0.2% paper
+    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.80   # spot 0.2% paper
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45     # live
     PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.15   # spot 0.2% paper
 
@@ -322,7 +322,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_SETUP: float = 65.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 62.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90          # live
-    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.55    # spot 0.2% paper
+    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.75    # spot 0.2% paper
     PROD_GATE_A_MIN_RR_TP2: float = 1.35          # live
     PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.05    # spot 0.2% paper
 
@@ -474,7 +474,7 @@ class Settings(BaseSettings):
     # =========================
     # MARKET CONNECTIVITY
     # =========================
-    MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 5000
+    MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 15000
     MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
     EXCHANGE_RECONCILIATION_ENABLED: bool = False
 
