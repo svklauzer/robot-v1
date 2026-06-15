@@ -37,6 +37,8 @@ def test_symbol_performance_summary_blocks_negative_expectancy(monkeypatch):
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MIN_HISTORY", 5)
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MAX_WINRATE", 40.0)
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 99)
+    # Probe OFF → жёсткий блок (старое поведение).
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_PROBE_MULTIPLIER", 0.0)
 
     try:
         for idx in range(5):
@@ -53,6 +55,30 @@ def test_symbol_performance_summary_blocks_negative_expectancy(monkeypatch):
         assert summary["items"][0]["policy_profile"]["publish_allowed"] is False
         assert summary["items"][0]["policy_profile"]["side_restriction"] == "no_new_client_signals"
         assert "Исключить символ" in summary["items"][0]["action"]
+    finally:
+        db.close()
+
+
+def test_symbol_performance_summary_negative_expectancy_enters_probe_by_default(monkeypatch):
+    db = _db_session()
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MIN_HISTORY", 5)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MAX_WINRATE", 40.0)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 99)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_PROBE_MULTIPLIER", 0.15)
+
+    try:
+        for idx in range(5):
+            db.add(_signal("ADA/USDT", -1.0, "failed_setup_exit", idx))
+        db.commit()
+
+        item = SymbolPerformanceSummaryService().summarize(db, symbols=["ADA/USDT"], lookback=12)["items"][0]
+
+        assert item["classification"] == "probe"
+        assert item["reason"] == "symbol_negative_expectancy_probe"
+        assert item["policy_profile"]["profile"] == "probe_recovery"
+        assert item["policy_profile"]["publish_allowed"] is True
+        assert item["policy_profile"]["risk_multiplier"] == 0.15
+        assert "Probe" in item["action"]
     finally:
         db.close()
 
@@ -91,8 +117,8 @@ def test_symbol_performance_summary_marks_giveback_symbols_as_watch_only(monkeyp
         assert item["reason"] == "symbol_gives_back_profit_reduce_risk"
         assert item["policy_profile"]["profile"] == "watch_only"
         assert item["policy_profile"]["publish_allowed"] is True
-        assert item["policy_profile"]["min_confidence_delta"] == 10
-        assert item["policy_profile"]["min_rr_delta"] == 0.25
+        assert item["policy_profile"]["min_confidence_delta"] == 5
+        assert item["policy_profile"]["min_rr_delta"] == 0.10
         assert item["policy_profile"]["exit_bias"] == "earlier_mfe_capture"
     finally:
         db.close()

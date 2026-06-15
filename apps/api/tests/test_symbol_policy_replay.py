@@ -20,6 +20,8 @@ def test_symbol_policy_replay_uses_prior_history_to_skip_blocked_symbol(monkeypa
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MIN_HISTORY", 5)
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_BLOCK_MAX_WINRATE", 40.0)
     monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 99)
+    # Probe OFF → guard жёстко скипает убыточный символ (семантика этого теста).
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_PROBE_MULTIPLIER", 0.0)
     rows = [_closed(idx, -1.0) for idx in range(1, 7)]
 
     report = SymbolPolicyReplayService().replay_rows(rows, lookback=12, sample_limit=10)

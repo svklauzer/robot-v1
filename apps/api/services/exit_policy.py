@@ -199,6 +199,26 @@ class ExitPolicyService:
                         f"dd={drawdown_from_mfe:.4f} arm={scalp_arm} give={scalp_give} flow_against={flow_against}"
                     ),
                 )
+            # ── Скальп тайм-стоп (профиль SCALP: быстро или никак) ───────────
+            # Скальп — много мелких быстрых сделок. Если за N минут он так и не
+            # вооружился (mfe < arm), это «зависшая» сделка: закрываем по текущей
+            # цене, чтобы не дала ей переродиться в свинг-убыток и освободила слот.
+            if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)):
+                ts_sec = float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0)) * 60.0
+                if (
+                    signal_age_sec is not None
+                    and float(signal_age_sec) >= ts_sec
+                    and mfe < scalp_arm
+                ):
+                    return ExitDecision(
+                        exit=True,
+                        reason="scalp_time_stop",
+                        exit_price=current_price,
+                        note=(
+                            f"scalp_time_stop age={float(signal_age_sec):.0f}s>={ts_sec:.0f}s "
+                            f"mfe={mfe:.4f}<arm={scalp_arm} cur={current_pct:.4f}"
+                        ),
+                    )
 
         if mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
             if mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:

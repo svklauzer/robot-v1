@@ -33,11 +33,8 @@ def _row(pnl: float, reason: str):
     return SimpleNamespace(closed_net_pnl=pnl, closed_reason=reason, plan_json={"lifecycle": {}})
 
 
-def test_cooldown_on_failed_setup_streak(monkeypatch):
-    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_STREAK", 3)
-    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 4)
-
-    rows = [
+def _failed_setup_rows():
+    return [
         _row(-1.0, "failed_setup_exit"),
         _row(-1.2, "failed_setup_exit"),
         _row(-0.8, "failed_setup_exit"),
@@ -45,10 +42,38 @@ def test_cooldown_on_failed_setup_streak(monkeypatch):
         _row(0.3, "protective_breakeven_profit_guard"),
     ]
 
-    decision = SymbolPerformanceGuard().analyze(_FakeDB(rows), bot_id=1, symbol="TON/USDT", lookback=12)
+
+def test_failed_setup_streak_enters_probe_recovery(monkeypatch):
+    # Probe ON (default): вместо мёртвого блока — микро-размер, чтобы символ
+    # доказал себя на текущей реальности. Дедлока нет.
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_STREAK", 3)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 4)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_PROBE_MULTIPLIER", 0.15)
+
+    guard = SymbolPerformanceGuard()
+    decision = guard.analyze(_FakeDB(_failed_setup_rows()), bot_id=1, symbol="TON/USDT", lookback=12)
+
+    assert decision.allowed is True
+    assert decision.reason == "symbol_cooldown_failed_setup_streak_probe"
+    assert decision.failed_setup_count == 4
+    assert decision.risk_multiplier == 0.15
+    assert guard.classification(decision) == "probe"
+    profile = guard.policy_profile(decision)
+    assert profile["profile"] == "probe_recovery"
+    assert profile["publish_allowed"] is True
+
+
+def test_failed_setup_streak_hard_blocks_when_probe_disabled(monkeypatch):
+    # Probe OFF (multiplier<=0): старое поведение — жёсткий блок. Окно по
+    # времени всё равно освободит символ, когда плохие сделки устареют.
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_STREAK", 3)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_COOLDOWN_FAILED_SETUPS", 4)
+    monkeypatch.setattr("services.symbol_performance_guard.settings.SYMBOL_PERF_PROBE_MULTIPLIER", 0.0)
+
+    decision = SymbolPerformanceGuard().analyze(_FakeDB(_failed_setup_rows()), bot_id=1, symbol="TON/USDT", lookback=12)
 
     assert decision.allowed is False
-    assert decision.reason == "symbol_cooldown_failed_setup_streak"
+    assert decision.reason == "symbol_cooldown_failed_setup_streak_blocked"
     assert decision.failed_setup_count == 4
 
 
@@ -105,8 +130,8 @@ def test_symbol_performance_guard_exposes_watch_only_policy_profile():
     assert profile["profile"] == "watch_only"
     assert profile["publish_allowed"] is True
     assert profile["risk_multiplier"] == 0.6
-    assert profile["min_confidence_delta"] == 10
-    assert profile["min_rr_delta"] == 0.25
+    assert profile["min_confidence_delta"] == 5
+    assert profile["min_rr_delta"] == 0.10
     assert profile["exit_bias"] == "earlier_mfe_capture"
 
 

@@ -60,13 +60,23 @@ class SymbolPerformanceGuard:
         bot_id: int,
         symbol: str,
         lookback: int = 12,
+        window_hours: float | None = None,
     ) -> SymbolPerformanceDecision:
+        # «Смотрим на ситуацию сейчас, не живём прошлым»: окно по ВРЕМЕНИ.
+        # Исходы старше window_hours не учитываются — символ судится по свежей
+        # реальности, а грехи устаревшей логики сами выпадают из окна. Это
+        # рабочий, а не разовый механизм: каждый цикл окно сдвигается.
+        if window_hours is None:
+            window_hours = float(getattr(settings, "SYMBOL_PERF_WINDOW_HOURS", 24.0))
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
         closed_signals = (
             db.query(Signal)
             .filter(
                 Signal.bot_id == bot_id,
                 Signal.symbol == symbol,
                 Signal.status == "closed",
+                Signal.closed_at.isnot(None),
+                Signal.closed_at >= cutoff,
             )
             .order_by(Signal.id.desc())
             .limit(lookback)
@@ -146,156 +156,57 @@ class SymbolPerformanceGuard:
         giveback_multiplier = float(getattr(settings, "SYMBOL_PERF_GIVEBACK_MULTIPLIER", 0.60))
         giveback_trigger = int(getattr(settings, "SYMBOL_PERF_GIVEBACK_TRIGGER", 3))
 
+        probe_mult = float(getattr(settings, "SYMBOL_PERF_PROBE_MULTIPLIER", 0.15))
+        probe_on = probe_mult > 0
+
+        def _mk(allowed: bool, reason: str, rm: float) -> SymbolPerformanceDecision:
+            return SymbolPerformanceDecision(
+                allowed=allowed, reason=reason, risk_multiplier=rm, symbol=symbol,
+                closed_count=closed_count, wins=wins, losses=losses, winrate=winrate,
+                total_net_pnl=total_net_pnl, stop_loss_count=stop_loss_count,
+                failed_setup_count=failed_setup_count,
+                positive_then_negative_count=positive_then_negative_count,
+                last_closed_reason=last_closed_reason, losing_streak=losing_streak,
+            )
+
+        def _restrict(base_reason: str) -> SymbolPerformanceDecision:
+            # Вместо «мёртвого» risk=0 — probe-режим: символ торгует МИКРО-размером
+            # и может заработать себе разблокировку на ТЕКУЩЕЙ реальности. Нет
+            # дедлока: заблокированный символ больше не лишён возможности
+            # доказать, что прошлое (старая логика) к нему уже не относится.
+            # Если probe выключен (multiplier<=0) — жёсткий блок (старое
+            # поведение), но окно по времени всё равно освободит символ.
+            if probe_on:
+                return _mk(True, base_reason + "_probe", probe_mult)
+            return _mk(False, base_reason + "_blocked", 0.0)
+
         # Мало истории — не блокируем, но можем слегка уменьшить риск после стопа.
         if closed_count < min_history:
             if last_closed_reason == "stop_loss":
-                return SymbolPerformanceDecision(
-                    allowed=True,
-                    reason="small_history_last_stop_reduce_risk",
-                    risk_multiplier=small_history_stop_multiplier,
-                    symbol=symbol,
-                    closed_count=closed_count,
-                    wins=wins,
-                    losses=losses,
-                    winrate=winrate,
-                    total_net_pnl=total_net_pnl,
-                    stop_loss_count=stop_loss_count,
-                    failed_setup_count=failed_setup_count,
-                    positive_then_negative_count=positive_then_negative_count,
-                    last_closed_reason=last_closed_reason,
-                    losing_streak=losing_streak,
-                )
+                return _mk(True, "small_history_last_stop_reduce_risk", small_history_stop_multiplier)
+            return _mk(True, "small_history_ok", 1.0)
 
-            return SymbolPerformanceDecision(
-                allowed=True,
-                reason="small_history_ok",
-                risk_multiplier=1.0,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
-
-        # Жёсткий cooldown: серия стопов.
+        # Серия стопов → probe-режим (не мёртвый ноль).
         if losing_streak >= cooldown_streak and stop_loss_count >= cooldown_stops:
-            return SymbolPerformanceDecision(
-                allowed=False,
-                reason="symbol_cooldown_losing_streak",
-                risk_multiplier=0.0,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
+            return _restrict("symbol_cooldown_losing_streak")
 
-
-        # Отдельный cooldown, если символ часто закрывается как failed_setup_exit.
-        # Это типичный ранний индикатор, что входы/таймфрейм/структура для монеты сейчас плохие.
+        # Серия failed_setup_exit → probe-режим.
         if losing_streak >= cooldown_streak and failed_setup_count >= cooldown_failed_setups:
-            return SymbolPerformanceDecision(
-                allowed=False,
-                reason="symbol_cooldown_failed_setup_streak",
-                risk_multiplier=0.0,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
+            return _restrict("symbol_cooldown_failed_setup_streak")
 
-        # Символ статистически убыточный.
+        # Статистически убыточный В ОКНЕ → probe-режим.
         if closed_count >= block_min_history and total_net_pnl < 0 and winrate < block_max_winrate:
-            return SymbolPerformanceDecision(
-                allowed=False,
-                reason="symbol_negative_expectancy_blocked",
-                risk_multiplier=0.0,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
+            return _restrict("symbol_negative_expectancy")
 
-        # Символ слабый, но не катастрофа — разрешаем с пониженным риском.
+        # Слабый, но не катастрофа — пониженный риск.
         if total_net_pnl < 0 or winrate < reduce_max_winrate:
-            return SymbolPerformanceDecision(
-                allowed=True,
-                reason="symbol_weak_reduce_risk",
-                risk_multiplier=weak_multiplier,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
+            return _mk(True, "symbol_weak_reduce_risk", weak_multiplier)
 
-        # Много positive_then_negative — значит надо защищать прибыль раньше.
+        # Много positive_then_negative — защищаем прибыль раньше.
         if positive_then_negative_count >= giveback_trigger:
-            return SymbolPerformanceDecision(
-                allowed=True,
-                reason="symbol_gives_back_profit_reduce_risk",
-                risk_multiplier=giveback_multiplier,
-                symbol=symbol,
-                closed_count=closed_count,
-                wins=wins,
-                losses=losses,
-                winrate=winrate,
-                total_net_pnl=total_net_pnl,
-                stop_loss_count=stop_loss_count,
-                failed_setup_count=failed_setup_count,
-                positive_then_negative_count=positive_then_negative_count,
-                last_closed_reason=last_closed_reason,
-                losing_streak=losing_streak,
-            )
+            return _mk(True, "symbol_gives_back_profit_reduce_risk", giveback_multiplier)
 
-        return SymbolPerformanceDecision(
-            allowed=True,
-            reason="symbol_performance_ok",
-            risk_multiplier=1.0,
-            symbol=symbol,
-            closed_count=closed_count,
-            wins=wins,
-            losses=losses,
-            winrate=winrate,
-            total_net_pnl=total_net_pnl,
-            stop_loss_count=stop_loss_count,
-            failed_setup_count=failed_setup_count,
-            positive_then_negative_count=positive_then_negative_count,
-            last_closed_reason=last_closed_reason,
-            losing_streak=losing_streak,
-        )
+        return _mk(True, "symbol_performance_ok", 1.0)
 
     def to_dict(self, decision: SymbolPerformanceDecision) -> dict:
         return {
@@ -315,10 +226,19 @@ class SymbolPerformanceGuard:
             "losing_streak": decision.losing_streak,
         }
 
+    _PROBE_REASONS = (
+        "symbol_cooldown_losing_streak_probe",
+        "symbol_cooldown_failed_setup_streak_probe",
+        "symbol_negative_expectancy_probe",
+    )
+
     def classification(self, decision_or_payload) -> str:
         payload = self._payload_for_policy(decision_or_payload)
+        reason = str(payload.get("reason") or "")
         if not payload.get("allowed"):
             return "blocked"
+        if reason in self._PROBE_REASONS:
+            return "probe"
         if float(payload.get("risk_multiplier") or 0) < 1.0:
             return "reduced"
         return "ok"
@@ -340,14 +260,27 @@ class SymbolPerformanceGuard:
                 "exit_bias": "manual_review_required",
             }
 
+        if classification == "probe":
+            # Восстановительный probe: публикуем микро-размером, чуть строже по
+            # качеству, прибыль фиксируем раньше. Символ доказывает себя «сейчас».
+            return {
+                "profile": "probe_recovery",
+                "publish_allowed": True,
+                "risk_multiplier": risk_multiplier,
+                "min_confidence_delta": 5,
+                "min_rr_delta": 0.10,
+                "side_restriction": "both_sides_reduced_risk",
+                "exit_bias": "earlier_mfe_capture",
+            }
+
         if classification == "reduced":
             exit_bias = "earlier_mfe_capture" if reason == "symbol_gives_back_profit_reduce_risk" else "standard"
             return {
                 "profile": "watch_only",
                 "publish_allowed": True,
                 "risk_multiplier": risk_multiplier,
-                "min_confidence_delta": 10,
-                "min_rr_delta": 0.25,
+                "min_confidence_delta": 5,
+                "min_rr_delta": 0.10,
                 "side_restriction": "both_sides_reduced_risk",
                 "exit_bias": exit_bias,
             }

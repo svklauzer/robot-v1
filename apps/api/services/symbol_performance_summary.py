@@ -90,6 +90,8 @@ class SymbolPerformanceSummaryService:
 
     def _action(self, payload: dict[str, Any]) -> str:
         reason = str(payload.get("reason") or "")
+        if reason.endswith("_probe"):
+            return "Probe-восстановление: торгуем микро-размером на свежей реальности; вернёт полный риск, как только net PnL/winrate в окне станут положительными."
         if not payload.get("allowed"):
             if reason == "symbol_negative_expectancy_blocked":
                 return "Исключить символ из publish universe до восстановления net PnL/winrate."

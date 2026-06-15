@@ -198,6 +198,11 @@ class Settings(BaseSettings):
     SCALP_BREAKEVEN_ENABLED: bool = True
     SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
     SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.5  # выходим, отдав эту долю пика MFE
+    # Скальп тайм-стоп (профиль ведения SCALP): сделка должна разрешиться быстро.
+    # Если за N минут скальп не вооружился (mfe < arm) — закрываем по текущей цене,
+    # чтобы «мёртвая» сделка не дрейфовала в свинг-убыток и освободила слот.
+    SCALP_TIME_STOP_ENABLED: bool = True
+    SCALP_TIME_STOP_MIN: float = 45.0            # минут до тайм-стопа невооружённого скальпа
 
     # --- Post-loss cooldown (только range-скальп) ---
     # После убыточного закрытия по паре символ+сторона не лезем повторно N минут
@@ -266,6 +271,12 @@ class Settings(BaseSettings):
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
+    # «Смотрим на сейчас, не живём прошлым»: окно guard по ВРЕМЕНИ (часы).
+    # Исходы старше выпадают из оценки сами → блок снимается без ручного сброса.
+    SYMBOL_PERF_WINDOW_HOURS: float = 24.0
+    # Probe-восстановление: заблокированный символ торгует МИКРО-размером
+    # (доля риска), чтобы доказать себя на текущей реальности. 0 = жёсткий блок.
+    SYMBOL_PERF_PROBE_MULTIPLIER: float = 0.15
 
     # =========================
     # ANTI-DRAIN ENTRY GUARD
