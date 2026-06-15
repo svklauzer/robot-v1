@@ -108,6 +108,13 @@ class TrendEngine:
     ride_enabled: bool
     ride_min_mfe_pct: float
     ride_trail_drawdown: float
+    # геометрия уровней (POSITION): крупные цели, чтобы тренд ехал и проходил net RR
+    stop_atr_mult: float
+    min_stop_pct: float
+    tp1_r_mult: float
+    tp2_r_mult: float
+    tp1_floor_pct: float
+    tp2_floor_pct: float
 
     @classmethod
     def load(cls) -> "TrendEngine":
@@ -115,6 +122,12 @@ class TrendEngine:
             ride_enabled=_b("TREND_RIDE_ENABLED", True),
             ride_min_mfe_pct=_f("TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 1.2),
             ride_trail_drawdown=_f("TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50),
+            stop_atr_mult=_f("LEVELS_STOP_ATR_MULT", 1.8),
+            min_stop_pct=_f("LEVELS_MIN_STOP_PCT", 0.35),
+            tp1_r_mult=_f("TREND_TP1_R_MULT", 1.5),
+            tp2_r_mult=_f("TREND_TP2_R_MULT", 3.0),
+            tp1_floor_pct=_f("TREND_TP1_FLOOR_PCT", 1.0),
+            tp2_floor_pct=_f("TREND_TP2_FLOOR_PCT", 2.0),
         )
 
 

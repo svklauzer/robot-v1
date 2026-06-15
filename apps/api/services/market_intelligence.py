@@ -7,6 +7,7 @@ from core.config import settings
 from services.market_data import MarketDataService
 from services.range_strategy import RangeStrategyService
 from services.crt_strategy import CRTStrategyService
+from core.strategy_profiles import get_profiles
 
 
 def _df_to_crt_candles(df, n: int = 20):
@@ -518,24 +519,23 @@ class MarketIntelligenceEngine:
         entry_from = round(last * 0.997, 4)
         entry_to = round(last * 1.003, 4)
 
-        stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
-        min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
+        tcfg = get_profiles().trend  # Фаза 3: крупные трендовые цели из профиля
+        stop_atr_mult = tcfg.stop_atr_mult
+        min_stop_pct = tcfg.min_stop_pct / 100.0
 
-        # FIX: стоп ТОЛЬКО по ATR, не min(support, atr, pct).
-        # support = low.tail(50) на 1h = 2-дневный минимум (-4-6%).
-        # Использовать его как стоп означает ждать -4-6% убытка.
+        # Стоп ТОЛЬКО по ATR (структурный support как стоп не используем).
         atr_stop = last - atr * stop_atr_mult
         pct_stop = last * (1 - min_stop_pct)
-        stop_price = round(min(atr_stop, pct_stop), 4)  # support убран намеренно
+        stop_price = round(min(atr_stop, pct_stop), 4)
 
         risk = max(last - stop_price, atr)
 
-        tp1 = round(last + risk * 1.4, 4)
-        tp2 = round(last + risk * 2.2, 4)
+        tp1 = round(last + risk * tcfg.tp1_r_mult, 4)
+        tp2 = round(last + risk * tcfg.tp2_r_mult, 4)
 
-        # Не даём TP быть ниже или слишком близко.
-        tp1 = max(tp1, round(last * 1.006, 4))
-        tp2 = max(tp2, round(last * 1.012, 4))
+        # Полы целей — крупнее (тренд реально едет и проходит net RR после костов).
+        tp1 = max(tp1, round(last * (1 + tcfg.tp1_floor_pct / 100.0), 4))
+        tp2 = max(tp2, round(last * (1 + tcfg.tp2_floor_pct / 100.0), 4))
 
         # FIX: убрана привязка tp1/tp2 к resistance.tail(50) на 1h.
         # resistance за 50 часов = 2-дневный максимум (+7-15% от цены).
@@ -592,26 +592,23 @@ class MarketIntelligenceEngine:
         entry_from = round(last * 0.997, 4)
         entry_to = round(last * 1.003, 4)
 
-        stop_atr_mult = float(getattr(settings, "LEVELS_STOP_ATR_MULT", 1.8))
-        min_stop_pct = float(getattr(settings, "LEVELS_MIN_STOP_PCT", 0.35)) / 100.0
+        tcfg = get_profiles().trend  # Фаза 3: крупные трендовые цели из профиля
+        stop_atr_mult = tcfg.stop_atr_mult
+        min_stop_pct = tcfg.min_stop_pct / 100.0
 
-        # FIX: стоп ТОЛЬКО по ATR, не max(resistance, atr, pct).
-        # resistance = high.tail(50) на 1h = 2-дневный максимум (+4-6%).
-        # Это не стоп — это структурный уровень. Использовать его как стоп
-        # означает ждать -4-6% убытка прежде чем сработает защита.
-        # Стоп должен ограничивать риск на ATR-расстоянии от входа.
+        # Стоп ТОЛЬКО по ATR (структурный resistance как стоп не используем).
         atr_stop = last + atr * stop_atr_mult
         pct_stop = last * (1 + min_stop_pct)
-        stop_price = round(max(atr_stop, pct_stop), 4)  # resistance убран намеренно
+        stop_price = round(max(atr_stop, pct_stop), 4)
 
         risk = max(stop_price - last, atr)
 
-        tp1 = round(last - risk * 1.4, 4)
-        tp2 = round(last - risk * 2.2, 4)
+        tp1 = round(last - risk * tcfg.tp1_r_mult, 4)
+        tp2 = round(last - risk * tcfg.tp2_r_mult, 4)
 
-        # Не даём TP быть выше или слишком близко.
-        tp1 = min(tp1, round(last * 0.994, 4))
-        tp2 = min(tp2, round(last * 0.988, 4))
+        # Полы целей — крупнее (симметрично лонгу).
+        tp1 = min(tp1, round(last * (1 - tcfg.tp1_floor_pct / 100.0), 4))
+        tp2 = min(tp2, round(last * (1 - tcfg.tp2_floor_pct / 100.0), 4))
 
         # FIX: убрана привязка tp1/tp2 к support.tail(50) на 1h.
         # support за 50 часов = 2-дневный минимум (-7-15% от цены).
