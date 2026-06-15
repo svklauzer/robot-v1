@@ -84,6 +84,7 @@ class CrtEngine:
     allow_long: bool
     allow_short: bool
     min_setup_score: float
+    require_trend_align: bool
 
     @classmethod
     def load(cls) -> "CrtEngine":
@@ -100,6 +101,7 @@ class CrtEngine:
             allow_long=_b("CRT_ALLOW_LONG", True),
             allow_short=_b("CRT_ALLOW_SHORT", True),
             min_setup_score=_f("CRT_MIN_SETUP_SCORE", 55.0),
+            require_trend_align=_b("CRT_REQUIRE_TREND_ALIGN", True),
         )
 
 

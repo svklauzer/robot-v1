@@ -176,7 +176,15 @@ class MarketIntelligenceEngine:
                     if ltf_tf in tf_data and len(tf_data[ltf_tf])
                     else (ltf_c[-1]["close"] if ltf_c else 0.0)
                 )
-                crt_sig = CRTStrategyService().evaluate(htf_c, ltf_c, symbol=symbol, current_price=cur_px)
+                def _tf_trend(tf):
+                    c = contexts.get(tf) if isinstance(contexts, dict) else None
+                    if c is None:
+                        return ""
+                    return str(c.get("trend", "") if isinstance(c, dict) else getattr(c, "trend", ""))
+                crt_sig = CRTStrategyService().evaluate(
+                    htf_c, ltf_c, symbol=symbol, current_price=cur_px,
+                    htf_trend=_tf_trend("4h"), mtf_trend=_tf_trend("1h"),
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[CRT STRATEGY ERROR] {symbol}: {exc}")
                 crt_sig = None

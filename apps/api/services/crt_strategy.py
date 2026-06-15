@@ -17,6 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.config import settings
+from core.strategy_profiles import get_profiles
+
+_TRENDING = ("trend_up", "trend_down")
 
 
 @dataclass
@@ -67,7 +70,8 @@ def detect_mss(candles, direction: str, swing: int = 3, lookback: int = 12) -> b
 
 class CRTStrategyService:
     def evaluate(self, htf_candles, ltf_candles, *, symbol: str | None = None,
-                 current_price: float | None = None) -> CRTSignal | None:
+                 current_price: float | None = None,
+                 htf_trend: str | None = None, mtf_trend: str | None = None) -> CRTSignal | None:
         if not bool(getattr(settings, "ENABLE_CRT_STRATEGY", False)):
             return None
         if not htf_candles or len(htf_candles) < 2 or not ltf_candles or len(ltf_candles) < 5:
@@ -99,6 +103,18 @@ class CRTStrategyService:
             direction = "long"
         if direction is None:
             return None
+
+        # ── Trend-alignment (не дерёмся с шерстью) ───────────────────────────
+        # ICT-корректный CRT свипует ликвидность В СТОРОНУ HTF-биаса: лонг-свип
+        # (CRL) в аптренде, шорт-свип (CRH) в даунтренде. Контртрендовый вход
+        # (CRT short в аптренде / CRT long в даунтренде) фейдит силу и ловит стоп.
+        if get_profiles().crt.require_trend_align:
+            htf = str(htf_trend or "")
+            mtf = str(mtf_trend or "")
+            if direction == "short" and ("trend_up" in (htf, mtf)):
+                return None
+            if direction == "long" and ("trend_down" in (htf, mtf)):
+                return None
 
         pos = (price - crl) / rng   # 0 = CRL, 1 = CRH
         if bool(getattr(settings, "CRT_REQUIRE_PREMIUM_DISCOUNT", True)):
