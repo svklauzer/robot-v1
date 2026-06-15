@@ -131,6 +131,41 @@ class TrendEngine:
         )
 
 
+@dataclass(frozen=True)
+class ScalpEngine:
+    """Настоящий micro-flow скальпер: 5m микроструктура + стакан (OBI/CVD).
+    НЕ читает 1h/4h. Много сделок, мелкая прибыль, тугой выход."""
+    enabled: bool
+    edge_zone: float          # вход в пределах этой доли от микро-края
+    min_micro_width_pct: float
+    target_pct: float         # TP1 (net target, %)
+    tp2_mult: float           # TP2 = target * tp2_mult
+    stop_buffer_atr: float    # стоп за микро-экстремумом
+    min_obi: float            # подтверждение потоком
+    min_tp1_net_pct: float
+    allow_short: bool
+    min_setup_score: float
+    max_spread_pct: float
+    require_depth: bool        # скальп без живого стакана не торгует
+
+    @classmethod
+    def load(cls) -> "ScalpEngine":
+        return cls(
+            enabled=_b("ENABLE_SCALP_STRATEGY", False),
+            edge_zone=_f("SCALP_EDGE_ZONE", 0.25),
+            min_micro_width_pct=_f("SCALP_MIN_MICRO_WIDTH_PCT", 1.2),
+            target_pct=_f("SCALP_TARGET_PCT", 0.8),
+            tp2_mult=_f("SCALP_TP2_MULT", 1.6),
+            stop_buffer_atr=_f("SCALP_STOP_BUFFER_ATR", 0.5),
+            min_obi=_f("SCALP_MIN_OBI", 0.15),
+            min_tp1_net_pct=_f("SCALP_ENG_MIN_TP1_NET_PCT", 0.3),
+            allow_short=_b("SCALP_ENG_ALLOW_SHORT", True),
+            min_setup_score=_f("SCALP_MIN_SETUP_SCORE", 50.0),
+            max_spread_pct=_f("SCALP_MAX_SPREAD_PCT", 0.06),
+            require_depth=_b("SCALP_REQUIRE_DEPTH", True),
+        )
+
+
 # ── ПРОФИЛИ ВЕДЕНИЯ ──────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class ScalpMgmt:
@@ -258,6 +293,7 @@ class Profiles:
     range: RangeEngine
     crt: CrtEngine
     trend: TrendEngine
+    scalp_engine: ScalpEngine
     scalp_mgmt: ScalpMgmt
     position_mgmt: PositionMgmt
     depth: DepthConfig
@@ -269,6 +305,7 @@ class Profiles:
             range=RangeEngine.load(),
             crt=CrtEngine.load(),
             trend=TrendEngine.load(),
+            scalp_engine=ScalpEngine.load(),
             scalp_mgmt=ScalpMgmt.load(),
             position_mgmt=PositionMgmt.load(),
             depth=DepthConfig.load(),
