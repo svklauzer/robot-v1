@@ -1,34 +1,34 @@
-"""Range / mean-reversion strategy (scalp) для бокового рынка.
+"""Range / mean-reversion (свинг в боковике на 1h-коридоре).
 
-Когда старший таймфрейм (4h) НЕ в тренде, трендовое продолжение простаивает —
-а боковик может идти неделями. Этот модуль ловит отскоки внутри коридора.
+ВАЖНО (редизайн): это НЕ скальпер — это свинг-фейд на 1h. Поэтому он обязан
+работать ТОЛЬКО в подтверждённом боковике и не фейдить тренд:
+  - 4h И 1h не в выраженном тренде;
+  - не лонгуем падающий нож (15m trend_down у поддержки);
+  - не шортим импульс вверх (15m trend_up у сопротивления) — это главный фикс
+    «не отдавать деньги рынку», шорты по пробою прекращаются.
 
-На споте исполняется только ЛОНГ от нижней границы (шорт от сопротивления
-требует futures — Phase 4). Логика — чистые функции над уже посчитанными
-TimeframeContext (support/resistance/atr/rsi/volume_state), поэтому модуль
-тестируется без ccxt/pandas.
-
-Сделки помечаются режимом "range" → robot_loop ставит trade_mode="scalp",
-и exit-политика ведёт их быстрым тейком (без trend-ride).
+Конфиг — из get_profiles().range (Фаза 1). Сделки несут regime="range".
+Чистые функции над TimeframeContext, тестируется без ccxt/pandas.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from core.config import settings
+from core.strategy_profiles import get_profiles
 
 
 @dataclass
 class RangeSignal:
-    action: str                 # всегда "long" на споте
-    regime: str                 # "range"
+    action: str
+    regime: str
     entry_zone: list[float]
     stop_price: float
-    tp: dict                    # {"tp1": ..., "tp2": ...}
+    tp: dict
     confidence_hint: float
     reason: str
     setup_quality: dict
-    setup_decision: str         # "approve" / "wait" / "hold"
+    setup_decision: str
 
 
 def _ctx(contexts, tf):
@@ -45,22 +45,27 @@ def _v(ctx, key, default=0.0):
     return getattr(ctx, key, default)
 
 
+_TRENDING = ("trend_up", "trend_down")
+
+
 class RangeStrategyService:
     """Оценивает символ на range-вход. Возвращает RangeSignal или None."""
 
     def evaluate(self, contexts, symbol: str | None = None) -> RangeSignal | None:
-        if not bool(getattr(settings, "ENABLE_RANGE_STRATEGY", False)):
+        rp = get_profiles().range
+        if not rp.enabled:
             return None
 
-        work = _ctx(contexts, "1h")   # коридор берём с 1h (≈ 2 дня tail-50)
+        work = _ctx(contexts, "1h")   # коридор берём с 1h
         h4 = _ctx(contexts, "4h")
         m15 = _ctx(contexts, "15m")
-        m5 = _ctx(contexts, "5m")
         if work is None or m15 is None:
             return None
 
-        # 1) Режим RANGE: 4h НЕ в выраженном тренде.
-        if str(_v(h4, "trend", "mixed")) in ("trend_up", "trend_down"):
+        # 1) Подтверждённый боковик: 4h И 1h НЕ в тренде.
+        if str(_v(h4, "trend", "mixed")) in _TRENDING:
+            return None
+        if rp.confirmed_range_only and str(_v(work, "trend", "mixed")) in _TRENDING:
             return None
 
         low = float(_v(work, "support", 0.0))
@@ -70,29 +75,32 @@ class RangeStrategyService:
         if low <= 0 or high <= low or price <= 0:
             return None
 
-        # 2) Ширина коридора достаточна, чтобы заработать после комиссий.
         width_pct = (high - low) / low * 100.0
-        min_width = float(getattr(settings, "RANGE_MIN_WIDTH_PCT", 2.5))
+        min_width = rp.min_width_pct
         if width_pct < min_width:
             return None
 
         pos = (price - low) / (high - low)   # 0 = поддержка, 1 = сопротивление
-        support_zone = float(getattr(settings, "RANGE_SUPPORT_ZONE", 0.30))
+        support_zone = rp.support_zone
         rsi15 = float(_v(m15, "rsi14", 50.0))
-        rsi_min = float(getattr(settings, "RANGE_ENTRY_RSI_MIN", 25.0))
-        rsi_max = float(getattr(settings, "RANGE_ENTRY_RSI_MAX", 52.0))
-        atr_mult = float(getattr(settings, "RANGE_STOP_ATR_MULT", 0.5))
+        rsi_min = rp.rsi_min
+        rsi_max = rp.rsi_max
+        atr_mult = rp.stop_atr_mult
         mid = (low + high) / 2.0
-        tp2_buf = (high - low) * float(getattr(settings, "RANGE_TP2_RESISTANCE_BUFFER", 0.10))
+        tp2_buf = (high - low) * rp.tp2_resistance_buffer
         fee_round_pct = float(settings.SPOT_TAKER_FEE) * 2 * 100.0
-        min_tp1_net = float(getattr(settings, "RANGE_MIN_TP1_NET_PCT", 0.8))
+        min_tp1_net = rp.min_tp1_net_pct
         vol_state = str(_v(m15, "volume_state", "weak"))
         vol_score = {"strong": 10.0, "normal": 6.0}.get(vol_state, 2.0)
         width_score = min(width_pct / min_width, 2.0) * 15.0
-        min_score = float(getattr(settings, "RANGE_MIN_SETUP_SCORE", 60.0))
+        min_score = rp.min_setup_score
+        m15_trend = str(_v(m15, "trend", "mixed"))
 
         # 4) ЛОНГ от нижней границы (спот).
         if pos <= support_zone:
+            # не ловим падающий нож: у поддержки 15m не должен валиться вниз
+            if rp.confirmed_range_only and m15_trend == "trend_down":
+                return None
             reversal_ok = rsi_min <= rsi15 <= rsi_max
             buffer = max(atr * atr_mult, low * 0.002)
             stop = low - buffer
@@ -107,9 +115,12 @@ class RangeStrategyService:
                 comment="range_long_at_support", reason="range_long_support_bounce",
             )
 
-        # 5) ШОРТ от верхней границы — только на futures (RANGE_ALLOW_SHORT).
-        if bool(getattr(settings, "RANGE_ALLOW_SHORT", False)) and pos >= (1.0 - support_zone):
-            # У сопротивления хотим «перекуплено→нейтрально».
+        # 5) ШОРТ от верхней границы (futures).
+        if rp.allow_short and pos >= (1.0 - support_zone):
+            # ГЛАВНЫЙ ФИКС: не шортим импульс вверх — у сопротивления 15m не должен
+            # трендовать вверх (иначе фейдим пробой и кормим рынок).
+            if rp.confirmed_range_only and m15_trend == "trend_up":
+                return None
             reversal_ok = (100.0 - rsi_max) <= rsi15 <= (100.0 - rsi_min)
             buffer = max(atr * atr_mult, high * 0.002)
             stop = high + buffer

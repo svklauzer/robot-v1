@@ -51,6 +51,7 @@ class RangeEngine:
     stop_atr_mult: float
     min_setup_score: float
     allow_short: bool
+    confirmed_range_only: bool
 
     @classmethod
     def load(cls) -> "RangeEngine":
@@ -65,6 +66,7 @@ class RangeEngine:
             stop_atr_mult=_f("RANGE_STOP_ATR_MULT", 0.5),
             min_setup_score=_f("RANGE_MIN_SETUP_SCORE", 60.0),
             allow_short=_b("RANGE_ALLOW_SHORT", False),
+            confirmed_range_only=_b("RANGE_CONFIRMED_ONLY", True),
         )
 
 
