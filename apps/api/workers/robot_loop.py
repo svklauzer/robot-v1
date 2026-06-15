@@ -120,7 +120,7 @@ class RobotLoop:
             # range и crt идут одним «альт-стратегия» путём: байпас quality/production
             # гейтов + scalp-сайзинг (чтобы проходили anti-drain). Режим выхода
             # разводится отдельно через trade_mode (range→scalp, crt→trend-ride).
-            is_range = str(getattr(result, "regime", "")) in ("range", "crt")
+            is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
 
             # Range-шорт включается своим флагом RANGE_ALLOW_SHORT и не зависит
             # от трендового ALLOW_SHORTS — поэтому range его не блокирует.
@@ -668,7 +668,7 @@ class RobotLoop:
                     "performance_guard": performance_adjustment,
                     # Режим сделки для exit-политики: trend → ride (едем движение),
                     # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
-                    "trade_mode": "scalp" if "range" in str(result.regime or "") else "trend",
+                    "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
                     # Контекст для ML-датасета (фичи на момент входа).
                     "regime": str(result.regime or ""),
                     "radar_state": str(getattr(result, "radar_state", "") or ""),

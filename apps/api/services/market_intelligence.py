@@ -8,6 +8,9 @@ from services.market_data import MarketDataService
 from services.range_strategy import RangeStrategyService
 from services.crt_strategy import CRTStrategyService
 from core.strategy_profiles import get_profiles
+from services.micro_scalp import MicroScalpService
+from services.orderbook_feed import ORDERBOOK_STORE
+from services.orderbook_analyzer import OrderBookAnalyzer
 
 
 def _df_to_crt_candles(df, n: int = 20):
@@ -225,6 +228,39 @@ class MarketIntelligenceEngine:
                     setup_quality=range_sig.setup_quality,
                     setup_decision=range_sig.setup_decision,
                     radar_state="range",
+                )
+
+        # ── SCALP (micro-flow) — последний в каскаде: 5m микроструктура + стакан ──
+        # Запускается, если старшие движки не дали approve. Читает поток ордеров.
+        if bool(getattr(settings, "ENABLE_SCALP_STRATEGY", False)) and (
+            candidate.action == "hold" or candidate.setup_decision != "approve"
+        ):
+            try:
+                ob_snap = ORDERBOOK_STORE.snapshot(symbol)
+                if ob_snap and ob_snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
+                    ob_snap = None
+                depth_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+                scalp_sig = MicroScalpService().evaluate(contexts, depth_sig.as_dict(), symbol)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SCALP STRATEGY ERROR] {symbol}: {exc}")
+                scalp_sig = None
+
+            if scalp_sig is not None and scalp_sig.setup_decision == "approve":
+                candidate = MarketIntelligenceResult(
+                    symbol=symbol,
+                    source=source,
+                    action=scalp_sig.action,
+                    regime=scalp_sig.regime,
+                    entry_zone=scalp_sig.entry_zone,
+                    stop_price=scalp_sig.stop_price,
+                    tp=scalp_sig.tp,
+                    confidence_hint=scalp_sig.confidence_hint,
+                    reason=scalp_sig.reason,
+                    scores=scores,
+                    timeframes=candidate.timeframes,
+                    setup_quality=scalp_sig.setup_quality,
+                    setup_decision=scalp_sig.setup_decision,
+                    radar_state="scalp",
                 )
 
         return candidate
