@@ -229,7 +229,10 @@ class Settings(BaseSettings):
     ENABLE_ORDERBOOK_ENGINE: bool = False
     OB_WS_URL: str = "wss://api-aws.huobi.pro/ws"
     OB_DEPTH_LEVELS: int = 10
-    OB_MAX_SPREAD_PCT: float = 0.08       # шире — скип (слиппедж съест скальп)
+    OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)
+    # POSITION (trend/crt) едет 1.5–3%: спред 0.1–0.2% — шум, не повод блокировать
+    # grade-A вход. Депт для позиции — гейт КАЧЕСТВА (OBI), а не тугой спред-фильтр.
+    OB_POSITION_MAX_SPREAD_PCT: float = 0.20
     OB_OBI_CONFIRM: float = 0.15          # нужный перекос стакана в сторону входа
     OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим

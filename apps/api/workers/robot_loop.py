@@ -288,9 +288,17 @@ class RobotLoop:
                 if ob_snap and ob_snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
                     ob_snap = None
                 ob_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+                # Профиль-зависимый спред-кап: scalp/range — туго (фил критичен),
+                # trend/crt (POSITION) — шире (едем 1.5–3%, спред 0.1–0.2% = шум).
+                _is_position = str(result.regime or "").lower() not in ("range", "scalp")
+                _max_spread = float(getattr(
+                    settings,
+                    "OB_POSITION_MAX_SPREAD_PCT" if _is_position else "OB_MAX_SPREAD_PCT",
+                    0.20 if _is_position else 0.08,
+                ))
                 ob_ok, ob_reason = OrderBookAnalyzer.entry_gate(
                     result.action, ob_sig,
-                    max_spread_pct=float(getattr(settings, "OB_MAX_SPREAD_PCT", 0.08)),
+                    max_spread_pct=_max_spread,
                     obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
                     wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
                 )
