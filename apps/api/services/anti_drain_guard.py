@@ -24,6 +24,9 @@ class AntiDrainConfig:
     block_weak_structure: bool = True
     block_long_overheated: bool = True
     block_short_oversold: bool = True
+    # POSITION: награда на TP2 (TP1 частичный, RR_tp1<1 by design). Проверяем
+    # экономику по TP2, иначе трендовая сделка никогда не пройдёт "TP1≥стоп".
+    economics_use_tp2: bool = False
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -50,6 +53,7 @@ def should_open_signal(signal: Any, account_state: Any, cfg: AntiDrainConfig) ->
     net_rr_tp1 = float(_get(signal, "net_rr_tp1", 0) or 0)
     net_rr_tp2 = float(_get(signal, "net_rr_tp2", 0) or 0)
     net_pnl_tp1 = float(_get(signal, "net_pnl_tp1", 0) or 0)
+    net_pnl_tp2 = float(_get(signal, "net_pnl_tp2", 0) or 0)
     net_pnl_stop = float(_get(signal, "net_pnl_stop", 0) or 0)
 
     if equity <= 0:
@@ -82,6 +86,7 @@ def should_open_signal(signal: Any, account_state: Any, cfg: AntiDrainConfig) ->
         return False, "blocked_low_net_rr_tp1"
     if net_rr_tp2 < cfg.min_net_rr_tp2:
         return False, "blocked_low_net_rr_tp2"
-    if net_pnl_tp1 < abs(net_pnl_stop) + cfg.min_expected_edge_after_costs_usdt:
+    econ_ref = net_pnl_tp2 if cfg.economics_use_tp2 else net_pnl_tp1
+    if econ_ref < abs(net_pnl_stop) + cfg.min_expected_edge_after_costs_usdt:
         return False, "blocked_bad_trade_economics"
     return True, "allowed_anti_drain_ok"

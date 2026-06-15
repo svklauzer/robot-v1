@@ -542,12 +542,18 @@ class RobotLoop:
                     min_net_rr_tp1=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP1", 0.40) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 0.40)),
                     min_net_rr_tp2=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP2", 0.85) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 0.85)),
                     min_expected_edge_after_costs_usdt=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.0) if is_range else getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.80)),
-                    max_position_margin_pct=float(getattr(settings, "SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 20.0) if is_range else getattr(settings, "ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 12.0)),
-                    max_used_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_USED_MARGIN_PCT", 30.0)),
+                    max_position_margin_pct=float(getattr(settings, "SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 20.0) if is_range else getattr(settings, "ANTI_DRAIN_POSITION_MAX_MARGIN_PCT", 35.0)),
+                    max_used_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_USED_MARGIN_PCT", 30.0) if is_range else getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0)),
                     max_open_positions=int(getattr(settings, "ANTI_DRAIN_MAX_OPEN_POSITIONS", 2)),
                     max_active_signals_per_symbol=int(getattr(settings, "ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL", 1)),
                     max_daily_loss_pct=float(getattr(settings, "ANTI_DRAIN_MAX_DAILY_LOSS_PCT", 3.0)),
                     max_drawdown_pct=float(getattr(settings, "ANTI_DRAIN_MAX_DRAWDOWN_PCT", 12.0)),
+                    # POSITION (trend): тренд растянут и перегрет by design, награда
+                    # на TP2 → снимаем scalp-эровские блоки. Для range/scalp/crt — как было.
+                    block_weak_structure=bool(is_range),
+                    block_long_overheated=bool(is_range),
+                    block_short_oversold=bool(is_range),
+                    economics_use_tp2=bool(not is_range),
                 )
                 anti_allowed, anti_reason = should_open_signal(
                     {
@@ -560,6 +566,7 @@ class RobotLoop:
                         "net_rr_tp1": plan.net_rr_tp1,
                         "net_rr_tp2": plan.net_rr_tp2,
                         "net_pnl_tp1": plan.net_pnl_tp1,
+                        "net_pnl_tp2": plan.net_pnl_tp2,
                         "net_pnl_stop": plan.net_pnl_stop,
                     },
                     {

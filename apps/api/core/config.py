@@ -293,6 +293,12 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
     ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 30.0
+    # POSITION (trend) профиль anti-drain: согласован с trade_plan
+    # (MAX_POSITION_MARGIN_PCT=0.35) — иначе plan строит 35%, а anti-drain режет 12%.
+    # weak_structure/overheated/economics-по-TP1 для тренда отключаются в robot_loop
+    # (тренд растянут и перегрет by design; награда позиции — на TP2).
+    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 35.0
+    ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 2.0
