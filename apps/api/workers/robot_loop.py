@@ -551,8 +551,11 @@ class RobotLoop:
                     # POSITION (trend): тренд растянут и перегрет by design, награда
                     # на TP2 → снимаем scalp-эровские блоки. Для range/scalp/crt — как было.
                     block_weak_structure=bool(is_range),
-                    block_long_overheated=bool(is_range),
-                    block_short_oversold=bool(is_range),
+                    # НЕ покупаем перегретую вершину / не шортим перепроданное дно
+                    # ни в одном профиле — рынок доказал (6 трендовых лонгов на
+                    # RSI 77–88 → −17.5 при развороте). Тренд берём на откатах.
+                    block_long_overheated=True,
+                    block_short_oversold=True,
                     economics_use_tp2=bool(not is_range),
                 )
                 anti_allowed, anti_reason = should_open_signal(
