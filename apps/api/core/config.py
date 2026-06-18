@@ -392,6 +392,16 @@ class Settings(BaseSettings):
     LEVELS_CONTEXT_TF: str = "1h"
     LEVELS_STOP_ATR_MULT: float = 2.8
     LEVELS_MIN_STOP_PCT: float = 0.30
+    # (#8 smart-stop) «Думающий» стоп: ставим за ближайшим swing-уровнем
+    # (сопротивление для шорта / поддержка для лонга), а не на голый k*ATR,
+    # который садится ВНУТРЬ шума (AVAX #77: стоп 1.21% при вике 1.22% → выбило,
+    # затем тот же сетап #79 с более широким стопом поехал в +). Размер при этом
+    # ужимается автоматически (qty = risk_usdt / дистанция_стопа), риск в $ — тот же.
+    LEVELS_STRUCT_STOP_ENABLED: bool = True
+    # Буфер ЗА swing-уровнем (%), чтобы вик ровно по уровню не выбивал.
+    LEVELS_STRUCT_STOP_BUFFER_PCT: float = 0.15
+    # Потолок дистанции стопа (%): не даём стопу разрастись и сильно ужать размер/RR.
+    LEVELS_MAX_STOP_PCT: float = 3.0
 
     # =========================
     # SETUP QUALITY — LEARNING MODE

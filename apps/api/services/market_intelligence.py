@@ -567,10 +567,28 @@ class MarketIntelligenceEngine:
         stop_atr_mult = tcfg.stop_atr_mult
         min_stop_pct = tcfg.min_stop_pct / 100.0
 
-        # Стоп ТОЛЬКО по ATR (структурный support как стоп не используем).
+        # (#8) «Думающий» стоп: за ближайшей поддержкой НИЖЕ входа + буфер, а не
+        # голый k*ATR (который садится внутрь шума и выбивает на вике). Размер
+        # ужимается сам (qty = risk_usdt / дистанция), риск в $ — тот же.
         atr_stop = last - atr * stop_atr_mult
-        pct_stop = last * (1 - min_stop_pct)
-        stop_price = round(min(atr_stop, pct_stop), 4)
+        min_floor = last * (1 - min_stop_pct)  # не ближе минимума
+        max_floor = last * (1 - float(getattr(settings, "LEVELS_MAX_STOP_PCT", 3.0)) / 100.0)
+        cand = atr_stop
+        if bool(getattr(settings, "LEVELS_STRUCT_STOP_ENABLED", True)):
+            sbuf = float(getattr(settings, "LEVELS_STRUCT_STOP_BUFFER_PCT", 0.15)) / 100.0
+            sup_lvls = [
+                float(s) for s in (
+                    self._ctx_value(m5, "support", None),
+                    self._ctx_value(m15, "support", None),
+                )
+                if s and float(s) < entry_from
+            ]
+            if sup_lvls:
+                struct_stop = max(sup_lvls) * (1 - sbuf)  # ближайшая поддержка снизу
+                cand = min(cand, struct_stop)             # дальше = ниже
+        cand = max(cand, max_floor)                       # не дальше потолка
+        cand = min(cand, min_floor)                       # не ближе минимума
+        stop_price = round(cand, 4)
 
         risk = max(last - stop_price, atr)
 
@@ -640,10 +658,28 @@ class MarketIntelligenceEngine:
         stop_atr_mult = tcfg.stop_atr_mult
         min_stop_pct = tcfg.min_stop_pct / 100.0
 
-        # Стоп ТОЛЬКО по ATR (структурный resistance как стоп не используем).
+        # (#8) «Думающий» стоп: за ближайшим сопротивлением ВЫШЕ входа + буфер, а
+        # не голый k*ATR (который садится внутрь шума и выбивает на вике). Размер
+        # ужимается сам (qty = risk_usdt / дистанция), риск в $ — тот же.
         atr_stop = last + atr * stop_atr_mult
-        pct_stop = last * (1 + min_stop_pct)
-        stop_price = round(max(atr_stop, pct_stop), 4)
+        min_floor = last * (1 + min_stop_pct)  # не ближе минимума
+        max_floor = last * (1 + float(getattr(settings, "LEVELS_MAX_STOP_PCT", 3.0)) / 100.0)
+        cand = atr_stop
+        if bool(getattr(settings, "LEVELS_STRUCT_STOP_ENABLED", True)):
+            sbuf = float(getattr(settings, "LEVELS_STRUCT_STOP_BUFFER_PCT", 0.15)) / 100.0
+            res_lvls = [
+                float(r) for r in (
+                    self._ctx_value(m5, "resistance", None),
+                    self._ctx_value(m15, "resistance", None),
+                )
+                if r and float(r) > entry_to
+            ]
+            if res_lvls:
+                struct_stop = min(res_lvls) * (1 + sbuf)  # ближайшее сопротивление сверху
+                cand = max(cand, struct_stop)             # дальше = выше
+        cand = min(cand, max_floor)                       # не дальше потолка
+        cand = max(cand, min_floor)                       # не ближе минимума
+        stop_price = round(cand, 4)
 
         risk = max(stop_price - last, atr)
 
