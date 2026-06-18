@@ -158,6 +158,10 @@ class SymbolPerformanceGuard:
 
         probe_mult = float(getattr(settings, "SYMBOL_PERF_PROBE_MULTIPLIER", 0.15))
         probe_on = probe_mult > 0
+        # Толеранс PnL у безубытка (#3): символ, болтающийся около нуля, не
+        # должен получать карательный weak-множитель. Раньше DOT при -0.27 USDT
+        # шёл в 0.45x — победители урезаны, лоссы в полный размер → слив.
+        weak_pnl_tol = abs(float(getattr(settings, "SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT", 2.0)))
 
         def _mk(allowed: bool, reason: str, rm: float) -> SymbolPerformanceDecision:
             return SymbolPerformanceDecision(
@@ -195,12 +199,20 @@ class SymbolPerformanceGuard:
             return _restrict("symbol_cooldown_failed_setup_streak")
 
         # Статистически убыточный В ОКНЕ → probe-режим.
-        if closed_count >= block_min_history and total_net_pnl < 0 and winrate < block_max_winrate:
+        # Только при ВНЯТНОМ минусе (за толерансом), не у безубытка.
+        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol and winrate < block_max_winrate:
             return _restrict("symbol_negative_expectancy")
 
         # Слабый, но не катастрофа — пониженный риск.
-        if total_net_pnl < 0 or winrate < reduce_max_winrate:
+        # Реальный минус (за толерансом) ИЛИ низкий винрейт.
+        if total_net_pnl < -weak_pnl_tol or winrate < reduce_max_winrate:
             return _mk(True, "symbol_weak_reduce_risk", weak_multiplier)
+
+        # У безубытка (в пределах толеранса) с приемлемым винрейтом — лёгкая
+        # страховка вместо карательного weak-множителя. Это убирает главную
+        # инверсию риска: символ около нуля больше не давит победителей.
+        if total_net_pnl < 0:
+            return _mk(True, "symbol_near_breakeven_mild_reduce", giveback_multiplier)
 
         # Много positive_then_negative — защищаем прибыль раньше.
         if positive_then_negative_count >= giveback_trigger:

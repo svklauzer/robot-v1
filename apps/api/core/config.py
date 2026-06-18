@@ -118,6 +118,21 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
     FAILED_SETUP_MIN_AGE_SEC: int = 600
 
+    # =========================
+    # БЕЗУБЫТОК-ЗАМОК (#1/#2)
+    # Корневая проблема телеметрии: positive_then_negative 50-64%. Сделки
+    # доходили до +1% MFE и закрывались в минус через failed_setup_exit.
+    # Как только сделка показала значимый MFE (ARM), запрещаем закрываться
+    # глубоко в минус: фиксируем у безубытка (+комиссии), не отдаём ход.
+    # =========================
+    BREAKEVEN_LOCK_ENABLED: bool = True
+    # MFE (%), после которого вооружается безубыток-замок.
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.80
+    # Уровень результата (%), на котором фиксируемся после вооружения:
+    # как только текущий профит откатил к этому полу — выходим тут, а не
+    # ждём failed_setup_exit на -0.6/-0.9%.
+    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.10
+
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
@@ -266,20 +281,29 @@ class Settings(BaseSettings):
     SYMBOL_PERF_MIN_HISTORY: int = 3
     SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
     SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 48.0
-    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 55.0
+    # Снижено 55→48 (#3): при RR>1.5 символ с винрейтом 48-55% прибылен,
+    # карать его уменьшением размера незачем — это резало победителей.
+    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 48.0
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
     SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 2
     SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
-    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.45
+    # Повышено 0.45→0.70 (#3): перевёрнутый риск (лоссы в полный размер,
+    # профиты в 0.45x) математически гарантировал слив. Множитель мягче.
+    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.70
     SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
+    # Толеранс PnL у безубытка (#3): символ с net PnL в пределах ±этого
+    # значения НЕ считается слабым (DOT при -0.27 USDT получал 0.45x зря).
+    SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT: float = 2.0
     SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
     # «Смотрим на сейчас, не живём прошлым»: окно guard по ВРЕМЕНИ (часы).
     # Исходы старше выпадают из оценки сами → блок снимается без ручного сброса.
     SYMBOL_PERF_WINDOW_HOURS: float = 24.0
     # Probe-восстановление: заблокированный символ торгует МИКРО-размером
     # (доля риска), чтобы доказать себя на текущей реальности. 0 = жёсткий блок.
-    SYMBOL_PERF_PROBE_MULTIPLIER: float = 0.15
+    # Повышено 0.15→0.40 (#3): при 0.15x комиссии съедали весь профит
+    # probe-сделки (gross +0.39, costs 0.097 = 25%), восстановиться невозможно.
+    SYMBOL_PERF_PROBE_MULTIPLIER: float = 0.40
 
     # =========================
     # ANTI-DRAIN ENTRY GUARD

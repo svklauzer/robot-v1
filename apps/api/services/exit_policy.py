@@ -220,6 +220,28 @@ class ExitPolicyService:
                         ),
                     )
 
+        # ── Безубыток-замок (#1/#2) ──────────────────────────────────────────
+        # Как только сделка показала значимый MFE, она НЕ имеет права закрыться
+        # глубоко в минус через failed_setup_exit ниже. Если профит откатил к
+        # полу (floor) — фиксируем здесь, у безубытка, сохраняя комиссии.
+        # Это напрямую лечит positive_then_negative (был 50-64%).
+        be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
+        be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.80))
+        be_floor = float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10))
+        breakeven_armed = be_enabled and mfe >= be_arm
+        if breakeven_armed and current_pct <= be_floor:
+            # Фиксируем по текущей цене (реальный филл). После хорошего MFE это
+            # около безубытка, а не -0.6/-0.9%, куда дотягивал failed_setup_exit.
+            return ExitDecision(
+                exit=True,
+                reason="breakeven_lock",
+                exit_price=current_price,
+                note=(
+                    f"breakeven_lock mfe={mfe:.4f}>=arm={be_arm} "
+                    f"cur={current_pct:.4f}<=floor={be_floor}"
+                ),
+            )
+
         if mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
             if mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:
                 return ExitDecision(

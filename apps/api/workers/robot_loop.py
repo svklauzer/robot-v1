@@ -172,7 +172,18 @@ class RobotLoop:
 
             entry_from = float(result.entry_zone[0])
             entry_to = float(result.entry_zone[1])
-            entry_price = round((entry_from + entry_to) / 2, 2)
+            # ФИКС (#4): round(...,2) ломал суб-долларовые символы. Для ADA
+            # (~0.166) середина зоны 0.1662 округлялась до 0.17 — это ВЫШЕ стопа
+            # шорта (0.1686), поэтому проверка tp2<tp1<entry<stop падала и КАЖДЫЙ
+            # цикл выдавал invalid_short_directional_levels, отсекая лучшие сетапы.
+            # Используем точность цены биржи вместо жёсткого round(.,2).
+            entry_mid = (entry_from + entry_to) / 2.0
+            try:
+                entry_price = float(
+                    self.trade_plan_builder.htx.price_to_precision(symbol, entry_mid)
+                )
+            except Exception:
+                entry_price = entry_mid
 
             stop = float(result.stop_price)
             tp1 = float(result.tp["tp1"])
