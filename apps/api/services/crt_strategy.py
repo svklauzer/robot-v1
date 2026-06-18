@@ -135,6 +135,10 @@ class CRTStrategyService:
         min_tp1 = float(getattr(settings, "CRT_MIN_TP1_NET_PCT", 0.5))
         buf = rng * float(getattr(settings, "CRT_STOP_BUFFER_PCT", 0.05))
         rr = float(getattr(settings, "CRT_TP2_RR", 2.0))
+        # (#5) Пол RR для TP1: ликвидность (CRL/CRH) часто ближе 1R, из-за чего
+        # после комиссий net_rr_tp1 проседает <0.40 и CRT блокируется каждый
+        # цикл. Тянем TP1 минимум на min_rr1 * risk от входа.
+        min_rr1 = float(getattr(settings, "CRT_MIN_RR_TP1", 1.0))
 
         if direction == "short":
             entry = price
@@ -142,8 +146,9 @@ class CRTStrategyService:
             risk = stop - entry
             if risk <= 0:
                 return None
-            tp1 = crl
-            tp2 = min(crl - rng * 0.1, entry - risk * rr)   # дальше CRL
+            # для шорта дальше = ниже: берём более дальний из (CRL, 1R)
+            tp1 = min(crl, entry - risk * min_rr1)
+            tp2 = min(tp1 - rng * 0.1, entry - risk * rr)   # дальше TP1
             net_tp1 = (entry - tp1) / entry * 100.0 - fee_round_pct
         else:
             entry = price
@@ -151,8 +156,9 @@ class CRTStrategyService:
             risk = entry - stop
             if risk <= 0:
                 return None
-            tp1 = crh
-            tp2 = max(crh + rng * 0.1, entry + risk * rr)   # дальше CRH
+            # для лонга дальше = выше: берём более дальний из (CRH, 1R)
+            tp1 = max(crh, entry + risk * min_rr1)
+            tp2 = max(tp1 + rng * 0.1, entry + risk * rr)   # дальше TP1
             net_tp1 = (tp1 - entry) / entry * 100.0 - fee_round_pct
 
         if net_tp1 < min_tp1:

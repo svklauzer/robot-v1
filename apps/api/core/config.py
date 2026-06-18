@@ -189,6 +189,10 @@ class Settings(BaseSettings):
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
     CRT_MIN_TP1_NET_PCT: float = 0.5       # мин. чистый ход до TP1 после комиссий
+    # (#5) Минимальный RR для TP1: если ликвидность (CRL/CRH) ближе 1R, TP1
+    # тянется к 1R. Иначе gross RR_tp1 ~1.06 после комиссий проседает до ~0.43
+    # и downstream блокирует CRT каждый цикл (blocked_low_net_rr_tp1).
+    CRT_MIN_RR_TP1: float = 1.0
     CRT_ALLOW_LONG: bool = True
     CRT_ALLOW_SHORT: bool = True
     CRT_MIN_SETUP_SCORE: float = 55.0
@@ -366,9 +370,22 @@ class Settings(BaseSettings):
     MAX_DRAWDOWN_PCT: float = 15
     MAX_OPEN_POSITIONS: int = 3
     RISK_PER_TRADE_PCT: float = 0.5
-    MAX_POSITION_MARGIN_PCT: float = 0.35
+    # (#6) Снижено 0.35→0.30: trade_plan строил позицию ровно на границе
+    # anti-drain (35% маржи), а сайзинг считается от balance, тогда как блок
+    # сверяется с equity (RISK_EQUITY_USDT). На границе позицию резало целиком
+    # (blocked_position_margin_limit) вместо нормального открытия. 0.30 даёт
+    # буфер: план всегда помещается под 35%-порог.
+    MAX_POSITION_MARGIN_PCT: float = 0.30
     MIN_NET_PNL_TP1_USDT: float = 1.5
     MIN_NET_PNL_TP2_USDT: float = 3.5
+
+    # (#7) Штраф за вход против краткосрочного перегрева: не покупаем вершину
+    # (long при 1m/5m overheated) и не шортим дно (short при 1m/5m oversold).
+    # Телеметрия: входы стабильно на 1m RSI 80-85 → MAE сразу после входа.
+    # Тренд берём на откатах, когда 1m остыл. Штраф снижает score таких входов
+    # ниже порога публикации.
+    OVERHEAT_ENTRY_PENALTY_M1: float = 8.0
+    OVERHEAT_ENTRY_PENALTY_M5: float = 5.0
 
     LEVELS_ENTRY_TF: str = "5m"
     LEVELS_SIGNAL_TF: str = "15m"

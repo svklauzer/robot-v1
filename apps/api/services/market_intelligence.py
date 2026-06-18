@@ -1136,6 +1136,12 @@ class MarketIntelligenceEngine:
             if self._ctx_value(m15, "momentum") == "overheated":
                 penalty += 6 if learning_mode else 10
 
+            # (#7) Не покупаем краткосрочную вершину: штраф за перегрев 1m/5m.
+            if self._ctx_value(m1, "momentum") == "overheated":
+                penalty += float(getattr(settings, "OVERHEAT_ENTRY_PENALTY_M1", 8.0))
+            if self._ctx_value(m5, "momentum") == "overheated":
+                penalty += float(getattr(settings, "OVERHEAT_ENTRY_PENALTY_M5", 5.0))
+
         elif action == "short":
             if self._ctx_value(h4, "trend") == "trend_down":
                 trend_alignment += 20
@@ -1165,6 +1171,12 @@ class MarketIntelligenceEngine:
                 penalty += 8 if learning_mode else 12
             if self._ctx_value(m15, "momentum") == "oversold":
                 penalty += 6 if learning_mode else 10
+
+            # (#7) Не шортим краткосрочное дно: штраф за перепроданность 1m/5m.
+            if self._ctx_value(m1, "momentum") == "oversold":
+                penalty += float(getattr(settings, "OVERHEAT_ENTRY_PENALTY_M1", 8.0))
+            if self._ctx_value(m5, "momentum") == "oversold":
+                penalty += float(getattr(settings, "OVERHEAT_ENTRY_PENALTY_M5", 5.0))
 
         volume_contexts = [ctx for ctx in [m1, m5, m15, h1, h4] if ctx]
 
