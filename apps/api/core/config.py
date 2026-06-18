@@ -316,8 +316,12 @@ class Settings(BaseSettings):
     # =========================
     ANTI_DRAIN_ENABLED: bool = True
     ANTI_DRAIN_MIN_CONFIDENCE: float = 60.0
-    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.55       # spot 0.2% paper
-    ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # spot 0.2% paper
+    # (#9) Снижено 0.55→0.20: TP1 теперь стоит на ДОСТИЖИМОЙ встречной структуре
+    # (точка частичной фиксации + перевод в безубыток), а НЕ основная награда —
+    # награда контролируется по TP2 (economics_use_tp2=True, min_net_rr_tp2).
+    # При прежних 0.55 близкий TP1 резался бы blocked_low_net_rr_tp1.
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.20
+    ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # реальный гейт награды — на TP2
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
     ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 50.0
@@ -376,7 +380,9 @@ class Settings(BaseSettings):
     # (blocked_position_margin_limit) вместо нормального открытия. 0.30 даёт
     # буфер: план всегда помещается под 35%-порог.
     MAX_POSITION_MARGIN_PCT: float = 0.30
-    MIN_NET_PNL_TP1_USDT: float = 1.5
+    # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
+    # его $-награда мала by design. Реальная награда и её гейт — на TP2.
+    MIN_NET_PNL_TP1_USDT: float = 0.5
     MIN_NET_PNL_TP2_USDT: float = 3.5
 
     # (#7) Штраф за вход против краткосрочного перегрева: не покупаем вершину
@@ -402,6 +408,12 @@ class Settings(BaseSettings):
     LEVELS_STRUCT_STOP_BUFFER_PCT: float = 0.15
     # Потолок дистанции стопа (%): не даём стопу разрастись и сильно ужать размер/RR.
     LEVELS_MAX_STOP_PCT: float = 3.0
+    # (#9) TP1 = достижимая встречная структура. Коридор поиска уровня и дефолт,
+    # если структуры в коридоре нет. TP1 — точка частичной фиксации + перевод в
+    # безубыток, НЕ основная награда (награда на TP2). Должен реально достигаться.
+    TP1_MIN_PCT: float = 0.6
+    TP1_MAX_PCT: float = 1.8   # < TREND_TP2_FLOOR_PCT(2.4), чтобы TP1<TP2
+    TP1_DEFAULT_PCT: float = 1.2
 
     # =========================
     # SETUP QUALITY — LEARNING MODE

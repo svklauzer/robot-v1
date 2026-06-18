@@ -521,6 +521,44 @@ class MarketIntelligenceEngine:
             radar_state="none",
         )
 
+    def _reachable_tp1(self, side: str, last: float, m5, m15) -> float:
+        """(#9) TP1 = ближайшая ВСТРЕЧНАЯ структура в достижимом коридоре,
+        РАСЦЕПЛЕНО от ширины стопа. Раньше TP1 = risk*1.7 уезжал на 2.3-5% и не
+        достигался → машина TP1→breakeven→TP2 не включалась, победителями рулил
+        трейлинг «отдай половину пика» → микро-плюсы. Теперь TP1 стоит там, где
+        реальная ликвидность (сопротивление для лонга / поддержка для шорта),
+        в коридоре [TP1_MIN_PCT, TP1_MAX_PCT]; если уровня нет — TP1_DEFAULT_PCT.
+        TP1 — точка частичной фиксации/перевода в безубыток, НЕ основная награда
+        (награда на TP2)."""
+        min_pct = float(getattr(settings, "TP1_MIN_PCT", 0.6)) / 100.0
+        max_pct = float(getattr(settings, "TP1_MAX_PCT", 1.8)) / 100.0
+        default_pct = float(getattr(settings, "TP1_DEFAULT_PCT", 1.2)) / 100.0
+        buf = 0.0005  # не доходя тик до уровня — чтобы цель исполнялась
+        if side == "long":
+            lo, hi = last * (1 + min_pct), last * (1 + max_pct)
+            cands = [
+                float(x) for x in (
+                    self._ctx_value(m5, "resistance", None),
+                    self._ctx_value(m15, "resistance", None),
+                )
+                if x and lo <= float(x) <= hi
+            ]
+            if cands:
+                return round(min(cands) * (1 - buf), 8)  # ближайшее сопротивление
+            return round(last * (1 + default_pct), 8)
+        else:
+            lo, hi = last * (1 - max_pct), last * (1 - min_pct)
+            cands = [
+                float(x) for x in (
+                    self._ctx_value(m5, "support", None),
+                    self._ctx_value(m15, "support", None),
+                )
+                if x and lo <= float(x) <= hi
+            ]
+            if cands:
+                return round(max(cands) * (1 + buf), 8)  # ближайшая поддержка
+            return round(last * (1 - default_pct), 8)
+
     def _build_long_levels(self, contexts):
         entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
         signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
@@ -592,12 +630,13 @@ class MarketIntelligenceEngine:
 
         risk = max(last - stop_price, atr)
 
-        tp1 = round(last + risk * tcfg.tp1_r_mult, 4)
+        # (#9) TP1 — достижимая встречная структура (расцеплено от стопа), чтобы
+        # включалась машина TP1→breakeven→runner до TP2. TP2 — R-цель для runner'а.
+        tp1 = round(self._reachable_tp1("long", last, m5, m15), 4)
         tp2 = round(last + risk * tcfg.tp2_r_mult, 4)
-
-        # Полы целей — крупнее (тренд реально едет и проходит net RR после костов).
-        tp1 = max(tp1, round(last * (1 + tcfg.tp1_floor_pct / 100.0), 4))
         tp2 = max(tp2, round(last * (1 + tcfg.tp2_floor_pct / 100.0), 4))
+        # TP2 всегда дальше TP1 (страховка от инверсии при узком risk).
+        tp2 = max(tp2, round(tp1 * (1 + 0.004), 4))
 
         # FIX: убрана привязка tp1/tp2 к resistance.tail(50) на 1h.
         # resistance за 50 часов = 2-дневный максимум (+7-15% от цены).
@@ -683,12 +722,13 @@ class MarketIntelligenceEngine:
 
         risk = max(stop_price - last, atr)
 
-        tp1 = round(last - risk * tcfg.tp1_r_mult, 4)
+        # (#9) TP1 — достижимая встречная структура (поддержка), расцеплено от
+        # стопа, чтобы включалась машина TP1→breakeven→runner до TP2.
+        tp1 = round(self._reachable_tp1("short", last, m5, m15), 4)
         tp2 = round(last - risk * tcfg.tp2_r_mult, 4)
-
-        # Полы целей — крупнее (симметрично лонгу).
-        tp1 = min(tp1, round(last * (1 - tcfg.tp1_floor_pct / 100.0), 4))
         tp2 = min(tp2, round(last * (1 - tcfg.tp2_floor_pct / 100.0), 4))
+        # TP2 всегда дальше TP1 вниз (страховка от инверсии при узком risk).
+        tp2 = min(tp2, round(tp1 * (1 - 0.004), 4))
 
         # FIX: убрана привязка tp1/tp2 к support.tail(50) на 1h.
         # support за 50 часов = 2-дневный минимум (-7-15% от цены).
