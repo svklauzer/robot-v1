@@ -137,6 +137,19 @@ class Settings(BaseSettings):
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
     BREAKEVEN_LOCK_FLOOR_PCT: float = 0.10
+    # (#wick) Вик-фильтр для мягких выходов. В тренде откат вверх — обычно тонкий
+    # вик-пулбэк, а не разворот: выходить по нему = выбиться перед продолжением.
+    # Мягкие выходы (breakeven_lock, failed_setup soft/mid) срабатывают ТОЛЬКО
+    # если поток подтвердил разворот (flow_against по CVD) ИЛИ цена ушла за
+    # hard_floor. Иначе держим — бэкстопом остаётся smart-stop и deep-порог.
+    EXIT_REQUIRE_FLOW_CONFIRM: bool = True
+    # Глубина минуса, при которой breakeven_lock выходит БЕЗ подтверждения потоком
+    # (реальный неблагоприятный ход, а не вик).
+    BREAKEVEN_LOCK_HARD_FLOOR_PCT: float = -0.35
+    # (#churn) Re-entry cooldown в авто-цикле: не открывать ту же сторону символа
+    # сразу после закрытия (особенно стопа). Машинка ReEntryCooldownGuard уже
+    # есть, флаг включает её проверку в robot_loop.
+    REENTRY_COOLDOWN_ENABLED: bool = True
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80

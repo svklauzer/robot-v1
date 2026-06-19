@@ -20,6 +20,7 @@ from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.production_entry_gate import ProductionEntryGate
+from services.reentry_cooldown import ReEntryCooldownGuard
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
 from services.orderbook_analyzer import OrderBookAnalyzer
 from services.orderbook_feed import ORDERBOOK_STORE
@@ -665,6 +666,38 @@ class RobotLoop:
                 db.add(event)
                 db.flush()
                 continue
+
+            # ── Re-entry cooldown (#churn) ────────────────────────────────────
+            # Не открываем ту же сторону того же символа сразу после закрытия
+            # (особенно после стопа): закрылись в минус → тут же снова → churn,
+            # двойные комиссии, возврат к началу. Машинка ReEntryCooldownGuard
+            # уже была, но висела только на /priority — подключаем в авто-цикл.
+            if bool(getattr(settings, "REENTRY_COOLDOWN_ENABLED", True)):
+                cooldown = ReEntryCooldownGuard().check(
+                    db=db,
+                    bot_id=bot.id,
+                    symbol=symbol,
+                    side=result.action,
+                    current_priority_score=float(production_decision.payload.get("priority_score", 0) or 0),
+                    current_setup_score=float(result.setup_quality.get("final_score", 0) if result.setup_quality else 0),
+                    current_rr_tp2=float(plan.net_rr_tp2 or 0),
+                )
+                if not cooldown.allowed:
+                    db.add(
+                        IntelligenceEvent(
+                            symbol=symbol,
+                            status="blocked",
+                            decision="reentry_cooldown_active",
+                            action=result.action,
+                            regime=result.regime,
+                            radar_state=result.radar_state,
+                            confidence_hint=result.confidence_hint,
+                            setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                            payload_json={"symbol": symbol, "status": "blocked", "decision": "reentry_cooldown_active", "reentry_cooldown": cooldown.payload},
+                        )
+                    )
+                    db.flush()
+                    continue
 
             sig = Signal(
                 bot_id=bot.id,

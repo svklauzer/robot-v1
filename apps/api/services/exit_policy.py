@@ -228,8 +228,13 @@ class ExitPolicyService:
         be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
         be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.80))
         be_floor = float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10))
+        # (#wick) Вик-фильтр: мягкие выходы только при подтверждённом развороте
+        # (flow_against) ИЛИ реальном уходе в минус. Иначе тонкий откат = вик, держим.
+        require_flow = bool(getattr(settings, "EXIT_REQUIRE_FLOW_CONFIRM", True))
+        be_hard_floor = float(getattr(settings, "BREAKEVEN_LOCK_HARD_FLOOR_PCT", -0.35))
+        soft_exit_confirmed = (not require_flow) or bool(flow_against)
         breakeven_armed = be_enabled and mfe >= be_arm
-        if breakeven_armed and current_pct <= be_floor:
+        if breakeven_armed and current_pct <= be_floor and (soft_exit_confirmed or current_pct <= be_hard_floor):
             # Фиксируем по текущей цене (реальный филл). После хорошего MFE это
             # около безубытка, а не -0.6/-0.9%, куда дотягивал failed_setup_exit.
             return ExitDecision(
@@ -238,24 +243,27 @@ class ExitPolicyService:
                 exit_price=current_price,
                 note=(
                     f"breakeven_lock mfe={mfe:.4f}>=arm={be_arm} "
-                    f"cur={current_pct:.4f}<=floor={be_floor}"
+                    f"cur={current_pct:.4f}<=floor={be_floor} flow_against={flow_against}"
                 ),
             )
 
         if mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
-            if mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:
+            # soft/mid failed_setup — тоже под вик-фильтром (мелкий минус без
+            # подтверждения потоком = вик, не провал сетапа). deep ниже срабатывает
+            # всегда (глубокий неблагоприятный ход = реальный провал).
+            if soft_exit_confirmed and mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:
                 return ExitDecision(
                     exit=True,
                     reason="failed_setup_exit",
                     exit_price=current_price,
-                    note=f"soft: mfe={mfe:.4f}<{thr['failed_mfe_soft']:.4f} loss={current_pct:.4f}<={thr['failed_loss_soft']:.4f} src={threshold_source}",
+                    note=f"soft: mfe={mfe:.4f}<{thr['failed_mfe_soft']:.4f} loss={current_pct:.4f}<={thr['failed_loss_soft']:.4f} flow={flow_against} src={threshold_source}",
                 )
-            if mfe < thr["failed_mfe_mid"] and current_pct <= thr["failed_loss_mid"]:
+            if soft_exit_confirmed and mfe < thr["failed_mfe_mid"] and current_pct <= thr["failed_loss_mid"]:
                 return ExitDecision(
                     exit=True,
                     reason="failed_setup_exit",
                     exit_price=current_price,
-                    note=f"mid: mfe={mfe:.4f}<{thr['failed_mfe_mid']:.4f} loss={current_pct:.4f}<={thr['failed_loss_mid']:.4f} src={threshold_source}",
+                    note=f"mid: mfe={mfe:.4f}<{thr['failed_mfe_mid']:.4f} loss={current_pct:.4f}<={thr['failed_loss_mid']:.4f} flow={flow_against} src={threshold_source}",
                 )
             if mfe < thr["failed_mfe_deep"] and current_pct <= thr["failed_loss_deep"]:
                 return ExitDecision(
