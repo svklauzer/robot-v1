@@ -46,7 +46,12 @@ class Settings(BaseSettings):
     # api-aws.huobi.pro (ниже задержка, сервера HTX в AWS Tokyo). Пусто = дефолт ccxt.
     HTX_API_HOSTNAME: str = ""
     HTX_MARKET_TYPE: str = "spot"
-    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT"
+    # Универсум подобран по РЕАЛЬНОЙ ликвидности HTX spot (top-of-book спред):
+    # BTC ~0.00002%, ETH ~0.0006%, AVAX ~0.008%, ADA/XRP ~0.017%, SOL ~0.036%,
+    # TRX ~0.089% (HTX-native, глубокий). DOT убран — спред 0.2–1%+ (хронический
+    # неликвид, источник spread-bleed). LINK/LTC/DOGE/BNB НЕ добавлены — их spot
+    # спред (0.12–1%) хуже DOT, торговать ими = тот же слив на спреде.
+    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,ADA/USDT,AVAX/USDT,TRX/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -475,7 +480,13 @@ class Settings(BaseSettings):
     # HTX FUNDING RATE ARBITRAGE
     # =========================
     ENABLE_FUNDING_ARB: bool = False
-    FUNDING_ARB_SYMBOLS: str = "BTC/USDT,ETH/USDT"
+    # ВАЖНО: критерий тут НЕ тот же, что у HTX_SYMBOLS. Фандинг-арб платит спред
+    # ОДИН раз на входе и амортизирует его на десятки 8ч-периодов сбора фандинга,
+    # поэтому широкий спред терпим, а ВЫСОКИЙ фандинг важнее — он живёт на
+    # волатильных альтах (DOGE/SUI — перегретые лонги). Поэтому здесь альты
+    # уместны (в отличие от трендового универсума). Фильтры min_rate/basis/
+    # net_yield отсекут невыгодные окна. BTC/ETH фандинг обычно мизерный.
+    FUNDING_ARB_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,SUI/USDT"
 
     # Entry thresholds
     FUNDING_ARB_MIN_RATE_PCT: float = 0.015     # min funding rate per period (8h) to consider

@@ -437,6 +437,17 @@ class FundingArbEngine:
                 seen.add(c.symbol)
                 unique_candidates.append(c)
 
+        # Распределяем капитал в ПЕРВУЮ очередь в самые доходные возможности:
+        # ранжируем по чистому выходу за период (после амортизации комиссий),
+        # а не по «самый свежий». При лимите max_hedges это прямо повышает доход.
+        def _net_yield(c) -> float:
+            try:
+                return float((c.raw_json or {}).get("net_yield_per_period_pct",
+                                                     c.estimated_edge_pct or 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+        unique_candidates.sort(key=_net_yield, reverse=True)
+
         opened = []
         errors = []
         for opp in unique_candidates:
