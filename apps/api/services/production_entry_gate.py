@@ -146,7 +146,13 @@ class ProductionEntryGate:
         if grade_value == "B":
             min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 58.0))
             min_confidence = float(getattr(settings, "PROD_GATE_B_MIN_CONFIDENCE", 60.0))
-            min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.85))
+            # (#9-fix) grade B раньше ИГНОРИРОВАЛ paper-режим и всегда брал live
+            # порог 0.85 — в отличие от A/A+. Теперь честно учитывает paper.
+            trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
+            if trading_mode in ["paper_signal", "paper_trade"]:
+                min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1_PAPER", 0.20))
+            else:
+                min_rr1 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP1", 0.85))
             min_rr2 = float(getattr(settings, "PROD_GATE_B_MIN_RR_TP2", 1.30))
             min_priority = float(getattr(settings, "PROD_GATE_B_MIN_PRIORITY", 85.0))
             attach_thresholds()

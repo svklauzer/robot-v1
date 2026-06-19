@@ -358,7 +358,10 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_SETUP: float = 76.0
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 68.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95     # live
-    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.80   # spot 0.2% paper
+    # (#9-fix) Понижено 0.80→0.25: после #9 TP1 = ближняя структура (де-риск +
+    # перевод в безубыток), net_rr_tp1 мал BY DESIGN. Награда судится по TP2
+    # (MIN_RR_TP2). Прежние 0.80 рубили ВСЁ как rr_tp1_too_low — 0 сделок за 5ч.
+    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.25   # spot 0.2% paper
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45     # live
     PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.15   # spot 0.2% paper
 
@@ -366,7 +369,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_SETUP: float = 65.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 62.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90          # live
-    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.75    # spot 0.2% paper
+    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.22    # (#9-fix) 0.75→0.22, см. выше
     PROD_GATE_A_MIN_RR_TP2: float = 1.35          # live
     PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.05    # spot 0.2% paper
 
@@ -374,7 +377,7 @@ class Settings(BaseSettings):
     PROD_GATE_B_MIN_SETUP: float = 58.0
     PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
     PROD_GATE_B_MIN_RR_TP1: float = 0.85          # live
-    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.40    # spot 0.2% paper
+    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.20    # (#9-fix) 0.40→0.20, см. выше
     PROD_GATE_B_MIN_RR_TP2: float = 1.30          # live
     PROD_GATE_B_MIN_RR_TP2_PAPER: float = 0.85    # spot 0.2% paper
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
@@ -394,7 +397,7 @@ class Settings(BaseSettings):
     MAX_POSITION_MARGIN_PCT: float = 0.30
     # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
     # его $-награда мала by design. Реальная награда и её гейт — на TP2.
-    MIN_NET_PNL_TP1_USDT: float = 0.5
+    MIN_NET_PNL_TP1_USDT: float = 0.20
     MIN_NET_PNL_TP2_USDT: float = 3.5
 
     # (#7) Штраф за вход против краткосрочного перегрева: не покупаем вершину
