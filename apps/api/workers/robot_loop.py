@@ -312,6 +312,9 @@ class RobotLoop:
                     max_spread_pct=_max_spread,
                     obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
                     wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
+                    # CVD на входе: не входим против агрессивного исполненного потока.
+                    cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
+                    cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
                 )
                 if not ob_ok:
                     db.add(

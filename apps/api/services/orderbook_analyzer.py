@@ -102,15 +102,31 @@ class OrderBookAnalyzer:
     @classmethod
     def entry_gate(cls, side: str, sig: DepthSignal, *,
                    max_spread_pct: float, obi_confirm: float,
-                   wall_confirm: float) -> tuple[bool, str]:
+                   wall_confirm: float,
+                   cvd_block_ratio: float = 0.0,
+                   cvd_min_trades: int = 0) -> tuple[bool, str]:
         """Возвращает (allowed, reason). Если данных нет (not fresh) — пропускаем
         (allowed=True, reason="no_depth_data"): движок не должен блокировать
-        торговлю при отсутствии WS-потока."""
+        торговлю при отсутствии WS-потока.
+
+        CVD-фильтр: при cvd_block_ratio>0 и достаточной выборке (cvd_trades >=
+        cvd_min_trades) НЕ входим против агрессивного исполненного потока —
+        не шортим в доминирующие покупки, не лонгуем в доминирующие продажи.
+        cvd_block_ratio=0 (дефолт) → CVD на входе выключен (обратная совместимость)."""
         if not sig.fresh:
             return True, "no_depth_data"
         if sig.spread_pct is not None and sig.spread_pct > max_spread_pct:
             return False, f"depth_spread_too_wide:{sig.spread_pct:.3f}>{max_spread_pct}"
         s = str(side).lower()
+
+        # CVD-подтверждение входа: поток уже исполненных сделок не должен идти
+        # против входа (только при надёжной выборке — иначе CVD это шум).
+        if cvd_block_ratio and cvd_block_ratio > 0 and sig.cvd_trades >= int(cvd_min_trades):
+            if s in ("long", "buy") and sig.cvd_ratio <= -abs(cvd_block_ratio):
+                return False, f"depth_cvd_against_long:cvd_ratio={sig.cvd_ratio:.3f}<=-{abs(cvd_block_ratio)}"
+            if s in ("short", "sell") and sig.cvd_ratio >= abs(cvd_block_ratio):
+                return False, f"depth_cvd_against_short:cvd_ratio={sig.cvd_ratio:.3f}>={abs(cvd_block_ratio)}"
+
         if s in ("long", "buy"):
             if sig.obi < obi_confirm and sig.bid_wall_share < wall_confirm:
                 return False, f"depth_no_bid_support:obi={sig.obi:.3f}"

@@ -249,15 +249,22 @@ class Settings(BaseSettings):
     OB_WS_URL: str = "wss://api-aws.huobi.pro/ws"
     OB_DEPTH_LEVELS: int = 10
     OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)
-    # POSITION (trend/crt) едет 1.5–3%: спред 0.1–0.2% — шум, не повод блокировать
-    # grade-A вход. Депт для позиции — гейт КАЧЕСТВА (OBI), а не тугой спред-фильтр.
-    OB_POSITION_MAX_SPREAD_PCT: float = 0.20
+    # POSITION (trend/crt) едет 1.5–3%: спред — не главный фильтр, но 0.20 был
+    # слишком вольно — DOT #80 при спреде 0.197% (неликвид) прошёл впритык и сразу
+    # в стоп. Затянуто 0.20→0.12: широкий спред = тонкий стакан/слиппедж.
+    OB_POSITION_MAX_SPREAD_PCT: float = 0.12
     OB_OBI_CONFIRM: float = 0.15          # нужный перекос стакана в сторону входа
     OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
     OB_CVD_EXIT_RATIO: float = 0.8        # поток против позиции на эту долю → ускоряем выход
     OB_CVD_MIN_TRADES: int = 25           # меньше сделок в окне → CVD это шум, не сигнал
+    # CVD НА ВХОДЕ: не входим против агрессивного исполненного потока. Раньше CVD
+    # работал только на выходе — четвёртый (сильнейший) сигнал стакана на входе
+    # простаивал. Блокируем шорт при cvd_ratio ≥ +ratio (доминируют покупки),
+    # лонг при cvd_ratio ≤ −ratio (доминируют продажи), но только при достаточной
+    # выборке (≥ OB_CVD_MIN_TRADES) — иначе CVD это шум.
+    OB_CVD_ENTRY_BLOCK_RATIO: float = 0.6
     OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
     OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
 
