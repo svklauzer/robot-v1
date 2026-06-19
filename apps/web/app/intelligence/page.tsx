@@ -51,6 +51,19 @@ const IMPORTANT_DECISIONS = [
   "blocked_bad_trade_economics",
   "blocked_position_margin_limit",
   "blocked_total_margin_limit",
+
+  // production gate (RR/качество) — синхронизация с правками бэка
+  "b_rr_tp1_too_low",
+  "a_rr_tp1_too_low",
+  "a_plus_rr_tp1_too_low",
+  "b_rr_tp2_too_low",
+  "a_rr_tp2_too_low",
+  "a_plus_rr_tp2_too_low",
+  "tp1_net_pnl_below_min_usdt",
+
+  // lifecycle: новые выходы
+  "breakeven_lock",
+  "adaptive_post_tp1_stop",
 ];
 
 export default function IntelligencePage() {
@@ -765,6 +778,48 @@ function decisionLabel(code: string | null | undefined) {
     short_candidate_but_shorts_disabled: "Short отключён",
     learning_setup_too_low: "Сетап ниже порога обучения",
     learning_wait_more_confirmation: "Ждём подтверждение сетапа",
+
+    // === Новые коды (синхронизация с правками бэка) ===
+    // lifecycle / выходы
+    breakeven_lock: "Безубыток-замок",
+    scalp_breakeven_lock: "Скальп: безубыток-замок",
+    adaptive_post_tp1_stop: "Трейл после TP1",
+    trend_trailing_stop: "Трейл по тренду",
+    adaptive_trailing_stop: "Адаптивный трейл",
+    wide_stop_tp2_guard: "Защита TP2 (широкий стоп)",
+    tp1_reached: "TP1 достигнут",
+
+    // performance guard
+    symbol_near_breakeven_mild_reduce: "У безубытка: лёгкое снижение риска",
+    symbol_gives_back_profit_reduce_risk: "Отдаёт прибыль: риск снижен",
+
+    // trade plan / экономика
+    tp1_net_pnl_below_min_usdt: "Net TP1 ниже минимума",
+
+    // production gate (RR / качество)
+    b_rr_tp1_too_low: "RR TP1 ниже порога",
+    a_rr_tp1_too_low: "RR TP1 ниже порога",
+    a_plus_rr_tp1_too_low: "RR TP1 ниже порога",
+    b_rr_tp2_too_low: "RR TP2 ниже порога",
+    a_rr_tp2_too_low: "RR TP2 ниже порога",
+    a_plus_rr_tp2_too_low: "RR TP2 ниже порога",
+    b_setup_too_weak: "Сетап слабый",
+    a_setup_too_weak: "Сетап слабый",
+    a_plus_setup_too_weak: "Сетап слабый",
+    b_confidence_too_low: "Confidence ниже порога",
+    a_confidence_too_low: "Confidence ниже порога",
+    a_plus_confidence_too_low: "Confidence ниже порога",
+    b_priority_too_low: "Priority ниже порога",
+    b_passed: "Прошёл gate (B)",
+    a_passed: "Прошёл gate (A)",
+    a_plus_passed: "Прошёл gate (A+)",
+
+    // depth gate (под-причины из payload.reason; могут иметь :значение)
+    depth_cvd_against_short: "Поток против шорта (CVD)",
+    depth_cvd_against_long: "Поток против лонга (CVD)",
+    depth_spread_too_wide: "Спред слишком широкий",
+    depth_no_ask_pressure: "Нет давления ask",
+    depth_no_bid_support: "Нет поддержки bid",
   };
 
   if (!code) return "-";
@@ -773,9 +828,23 @@ function decisionLabel(code: string | null | undefined) {
 
 function DecisionBadge({ decision }: { decision: string }) {
   const cls =
-    decision === "ready_to_publish" || decision === "published_signal_created"
+    decision === "ready_to_publish" ||
+    decision === "published_signal_created" ||
+    decision === "breakeven_lock" ||
+    decision === "tp1_reached" ||
+    decision === "b_passed" ||
+    decision === "a_passed" ||
+    decision === "a_plus_passed"
       ? "bg-emerald-500 text-black"
-      : decision === "wait_better_entry_rr" || decision === "net_rr_too_low"
+      : decision === "wait_better_entry_rr" ||
+          decision === "net_rr_too_low" ||
+          decision === "b_rr_tp1_too_low" ||
+          decision === "a_rr_tp1_too_low" ||
+          decision === "a_plus_rr_tp1_too_low" ||
+          decision === "b_rr_tp2_too_low" ||
+          decision === "a_rr_tp2_too_low" ||
+          decision === "a_plus_rr_tp2_too_low" ||
+          decision === "tp1_net_pnl_below_min_usdt"
         ? "bg-orange-600 text-white"
         : decision === "active_signal_already_exists"
           ? "bg-blue-700 text-white"

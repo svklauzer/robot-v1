@@ -7,6 +7,30 @@ import { apiGet, apiPost } from "../../lib/api";
 
 type SignalItem = any;
 
+// Человекочитаемые ярлыки причин закрытия (синхронизация с правками бэка).
+const CLOSE_REASON_LABELS: Record<string, string> = {
+  tp2_reached: "TP2 достигнут",
+  tp1_reached: "TP1 достигнут",
+  stop_loss: "Стоп",
+  failed_setup_exit: "Сетап не подтвердился",
+  breakeven_lock: "Безубыток-замок",
+  scalp_breakeven_lock: "Скальп: безубыток-замок",
+  scalp_flow_exit: "Скальп: выход по потоку",
+  trend_ride_trailing_stop: "Трейл по тренду",
+  adaptive_post_tp1_stop: "Трейл после TP1",
+  trend_trailing_stop: "Трейл по тренду",
+  adaptive_trailing_stop: "Адаптивный трейл",
+  protective_trailing_stop: "Защитный трейл",
+  protective_breakeven_profit_guard: "Защита безубытка",
+  adaptive_mfe_capture: "Фиксация MFE",
+  wide_stop_tp2_guard: "Защита TP2 (широкий стоп)",
+};
+
+function closeReasonLabel(code: string | null | undefined): string {
+  if (!code) return "-";
+  return CLOSE_REASON_LABELS[code] || code;
+}
+
 export default function SignalsPage() {
   const [signals, setSignals] = useState<SignalItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -313,7 +337,7 @@ function SignalCard({
           </div>
 
           <div className="mt-2 text-xs text-emerald-100/60">
-            Reason: <span className="text-emerald-200">{s.closed_reason || "-"}</span>
+            Reason: <span className="text-emerald-200">{closeReasonLabel(s.closed_reason)}</span>
           </div>
         </div>
       )}
