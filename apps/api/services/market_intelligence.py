@@ -1358,6 +1358,24 @@ class MarketIntelligenceEngine:
                 decision = "wait"
                 comment = "weak_volume_block_applied"
 
+        # (#exhaustion) Не шортим истощённый даунтренд у поддержки и не лонгуем
+        # перегретый аптренд у сопротивления — там отскок, а не продолжение.
+        # Это снимает шорты-в-дно (#81/82/85/87), главный источник убытка по аудиту.
+        if bool(getattr(settings, "TREND_EXHAUSTION_GUARD", True)) and decision == "approve":
+            _px = float(self._ctx_value(m5, "last_close", 0) or self._ctx_value(m1, "last_close", 0) or 0)
+            _h4_rsi = float(self._ctx_value(h4, "rsi14", 50) or 50)
+            _near = float(getattr(settings, "EXHAUSTION_LEVEL_DIST_PCT", 2.5)) / 100.0
+            if _px > 0 and action == "short":
+                _sup = float(self._ctx_value(h4, "support", 0) or self._ctx_value(h1, "support", 0) or 0)
+                if _h4_rsi <= float(getattr(settings, "EXHAUSTION_RSI_OVERSOLD", 30.0)) and _sup > 0 and (_px - _sup) / _px <= _near:
+                    decision = "wait"
+                    comment = "trend_exhaustion_short_into_support"
+            elif _px > 0 and action == "long":
+                _res = float(self._ctx_value(h4, "resistance", 0) or self._ctx_value(h1, "resistance", 0) or 0)
+                if _h4_rsi >= float(getattr(settings, "EXHAUSTION_RSI_OVERBOUGHT", 70.0)) and _res > 0 and (_res - _px) / _px <= _near:
+                    decision = "wait"
+                    comment = "trend_exhaustion_long_into_resistance"
+
         return {
             "trend_alignment": round(trend_alignment, 2),
             "entry_timing": round(entry_timing, 2),

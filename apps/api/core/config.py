@@ -421,6 +421,15 @@ class Settings(BaseSettings):
     OVERHEAT_ENTRY_PENALTY_M1: float = 8.0
     OVERHEAT_ENTRY_PENALTY_M5: float = 5.0
 
+    # (#exhaustion) ГЛАВНЫЙ фикс по структурному аудиту. Система — тренд-фолловер,
+    # которая отшортила даунтренд донизу и продолжала шортить ДНО (#81/82/85/87 —
+    # шорты в перепроданность у поддержки → отскок → большая часть убытка). Не
+    # шортим истощённый тренд у поддержки и не лонгуем перегрев у сопротивления.
+    TREND_EXHAUSTION_GUARD: bool = True
+    EXHAUSTION_RSI_OVERSOLD: float = 30.0     # 4h RSI ниже → даунтренд истощён
+    EXHAUSTION_RSI_OVERBOUGHT: float = 70.0   # 4h RSI выше → аптренд перегрет
+    EXHAUSTION_LEVEL_DIST_PCT: float = 2.5    # «у поддержки/сопротивления» — в этом % от уровня
+
     LEVELS_ENTRY_TF: str = "5m"
     LEVELS_SIGNAL_TF: str = "15m"
     LEVELS_CONTEXT_TF: str = "1h"
