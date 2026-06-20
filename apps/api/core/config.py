@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     FAILED_SETUP_LOSS_MID_PCT: float = -0.65
     FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
     FAILED_SETUP_MIN_AGE_SEC: int = 600
+    # (#2 консолидация) failed_setup_exit в ТРЕНДЕ выключен — он рубил в шумовой
+    # полосе до структурного smart-стопа, часто на вике. В тренде бэкстоп =
+    # smart-stop + breakeven_lock + ride-трейл. True вернёт прежнее поведение.
+    FAILED_SETUP_EXIT_TREND_ENABLED: bool = False
 
     # =========================
     # БЕЗУБЫТОК-ЗАМОК (#1/#2)

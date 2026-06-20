@@ -233,6 +233,15 @@ class ExitPolicyService:
         require_flow = bool(getattr(settings, "EXIT_REQUIRE_FLOW_CONFIRM", True))
         be_hard_floor = float(getattr(settings, "BREAKEVEN_LOCK_HARD_FLOOR_PCT", -0.35))
         soft_exit_confirmed = (not require_flow) or bool(flow_against)
+        # (#2 консолидация экзита) В ТРЕНДЕ failed_setup_exit отключён: он рубил в
+        # шумовой полосе РАНЬШЕ структурного smart-стопа, часто на вике, после
+        # которого цена шла дальше. Бэкстоп тренда = smart-stop (за уровнем) +
+        # breakeven_lock (после хорошего MFE) + ride-трейл. failed_setup остаётся
+        # только для non-trend режимов (default), где нет ride/structure-стопа.
+        is_trend_mode = str(trade_mode or "default").lower() in ("trend", "trend_up", "trend_down", "ride")
+        failed_setup_enabled = (not is_trend_mode) or bool(
+            getattr(settings, "FAILED_SETUP_EXIT_TREND_ENABLED", False)
+        )
         breakeven_armed = be_enabled and mfe >= be_arm
         if breakeven_armed and current_pct <= be_floor and (soft_exit_confirmed or current_pct <= be_hard_floor):
             # Фиксируем по текущей цене (реальный филл). После хорошего MFE это
@@ -247,10 +256,10 @@ class ExitPolicyService:
                 ),
             )
 
-        if mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
-            # soft/mid failed_setup — тоже под вик-фильтром (мелкий минус без
-            # подтверждения потоком = вик, не провал сетапа). deep ниже срабатывает
-            # всегда (глубокий неблагоприятный ход = реальный провал).
+        if failed_setup_enabled and mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
+            # soft/mid failed_setup — под вик-фильтром (мелкий минус без подтверждения
+            # потоком = вик). deep — глубокий неблагоприятный ход. Весь блок отключён
+            # в тренде (см. failed_setup_enabled выше): там бэкстоп = smart-stop.
             if soft_exit_confirmed and mfe < thr["failed_mfe_soft"] and current_pct <= thr["failed_loss_soft"]:
                 return ExitDecision(
                     exit=True,
