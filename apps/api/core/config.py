@@ -176,6 +176,19 @@ class Settings(BaseSettings):
     # should show that the learning memory is stale.
     ML_OUTCOMES_STALE_HOURS: int = 72
 
+    # =========================
+    # ML-СЛОЙ (мета-лейблер + control plane)
+    # ML_MODE — единственный тумблер. Дефолт "off" → поведение системы как сейчас,
+    # запуск в live НЕ затрагивается (ML ортогонален ENABLE_LIVE_ORDERS, fail-open).
+    #   off | shadow | advisory | full_auto
+    # =========================
+    ML_MODE: str = "off"
+    ML_LABEL_KIND: str = "is_win"          # is_win | hit_tp2
+    ML_MIN_TRAIN_SAMPLES: int = 150        # меньше — модель не обучается (честно)
+    ML_MIN_SCORE_TO_TRADE: float = 0.45    # full_auto/advisory: ниже — skip/block
+    ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
+    ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
+
     # Paper/live-shadow validation gates before limited live scaling.
     VALIDATION_MIN_CLOSED_SIGNALS: int = 50
     VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0

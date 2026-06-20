@@ -25,6 +25,7 @@ from services.anti_drain_guard import AntiDrainConfig, should_open_signal
 from services.orderbook_analyzer import OrderBookAnalyzer
 from services.orderbook_feed import ORDERBOOK_STORE
 from services.ml_trade_logger import MLTradeLogger
+from services.ml_controller import MLController
 
 from models.signal import Signal
 from models.position import Position
@@ -51,6 +52,7 @@ class RobotLoop:
         self.quality = SignalQualityService()
         self.telegram_router = TelegramRouter()
         self.ml_trade_logger = MLTradeLogger()
+        self.ml_controller = MLController()
         self.ml_outcome_stats = MLOutcomeStatsService()
 
         # Grade stats cache: refreshed every 20 loop iterations (~20 min)
@@ -699,6 +701,49 @@ class RobotLoop:
                     db.flush()
                     continue
 
+            # ── ML-слой (control plane, fail-open, default ML_MODE=off) ───────
+            # off → passthrough (ничего). shadow/advisory → только лог ml_score.
+            # full_auto → block/масштаб размера в guardrails. Любой сбой → как
+            # rule-based (ML не на крит-пути, не мешает live).
+            ml_eval = {"mode": "off", "ml_score": None, "action": "passthrough",
+                       "allow": True, "size_multiplier": 1.0}
+            try:
+                _ml_depth = {}
+                try:
+                    _ml_depth = OrderBookAnalyzer.analyze(
+                        ORDERBOOK_STORE.snapshot(symbol),
+                        levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                    ).as_dict()
+                except Exception:
+                    _ml_depth = {}
+                ml_eval = self.ml_controller.evaluate_candidate({
+                    "confidence": effective_confidence,
+                    "grade": grade,
+                    "side": result.action,
+                    "regime": result.regime,
+                    "net_rr_tp1": plan.net_rr_tp1,
+                    "net_rr_tp2": plan.net_rr_tp2,
+                    "entry_depth": _ml_depth,
+                })
+            except Exception:
+                pass
+
+            if ml_eval.get("action") == "block" and not ml_eval.get("allow", True):
+                db.add(IntelligenceEvent(
+                    symbol=symbol, status="blocked", decision="blocked_by_ml",
+                    action=result.action, regime=result.regime, radar_state=result.radar_state,
+                    confidence_hint=result.confidence_hint,
+                    setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                    payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_by_ml", "ml": ml_eval},
+                ))
+                db.flush()
+                continue
+            if ml_eval.get("action") == "size":
+                _m = float(ml_eval.get("size_multiplier", 1.0) or 1.0)
+                if _m > 0 and abs(_m - 1.0) > 1e-9:
+                    plan.qty = round(float(plan.qty) * _m, 6)
+                    plan.required_margin = round(float(plan.required_margin) * _m, 6)
+
             sig = Signal(
                 bot_id=bot.id,
                 symbol=symbol,
@@ -731,6 +776,8 @@ class RobotLoop:
                     "is_valid": plan.is_valid,
                     "reject_reason": plan.reject_reason,
                     "performance_guard": performance_adjustment,
+                    # ML-слой: ml_score и решение контроллера (shadow/advisory/full_auto).
+                    "ml": ml_eval,
                     # Режим сделки для exit-политики: trend → ride (едем движение),
                     # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
                     "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",

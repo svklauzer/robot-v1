@@ -797,6 +797,37 @@ def ml_outcomes_stats():
     }
 
 
+@app.get("/ml/status", dependencies=[Depends(require_owner_action)])
+def ml_status():
+    """Статус ML-слоя: режим (off/shadow/advisory/full_auto), готовность модели,
+    метрики валидации. Для фронта-пульта и контроля."""
+    from services.ml_meta_labeler import MetaLabeler
+    status = MetaLabeler().status()
+    return {
+        "ml_mode": str(getattr(settings, "ML_MODE", "off")).lower(),
+        "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45)),
+        "size_mult_range": [float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7)),
+                            float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))],
+        "model": status,
+    }
+
+
+@app.post("/ml/train", dependencies=[Depends(require_owner_action)])
+def ml_train():
+    """Переобучить мета-лейблер на trade_outcomes.jsonl (time-aware валидация).
+    Безопасно: не трогает торговлю; при нехватке данных вернёт honest-статус."""
+    from services.ml_meta_labeler import MetaLabeler
+    return MetaLabeler().train()
+
+
+@app.post("/ml/predict", dependencies=[Depends(require_owner_action)])
+def ml_predict(candidate: dict):
+    """Отладочный predict: P(win) для переданного кандидата (confidence/grade/
+    side/regime/net_rr_tp1/net_rr_tp2/entry_depth)."""
+    from services.ml_controller import MLController
+    return MLController().evaluate_candidate(candidate or {})
+
+
 @app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()
