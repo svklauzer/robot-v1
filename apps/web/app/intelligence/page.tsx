@@ -827,7 +827,6 @@ function decisionLabel(code: string | null | undefined) {
     reversal_long_from_support: "Лонг на развороте от поддержки",
     watch_long_escalated_to_candidate: "Watch LONG → кандидат",
     watch_short_escalated_to_candidate: "Watch SHORT → кандидат",
-    reentry_cooldown_active: "Cooldown повторного входа",
   };
 
   if (!code) return "-";
