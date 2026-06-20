@@ -71,4 +71,20 @@ def build_digest_text(db, window_hours: int = 2) -> str:
         lines.append(f"  - {s.symbol} {s.closed_reason or '-'} {float(s.closed_net_pnl or 0):+.3f}")
     lines.append(f"Depth feed: {depth}")
     lines.append(f"Blocks ({window_hours}h): {block_str}")
+
+    # ML-слой: компактная строка в существующий дайджест (без нового потока).
+    try:
+        from core.config import settings as _s
+        from services.ml_meta_labeler import MetaLabeler
+        _mode = str(getattr(_s, "ML_MODE", "off")).lower()
+        _st = MetaLabeler().status()
+        if _st.get("model_exists"):
+            _auc = (_st.get("metrics") or {}).get("val_auc")
+            lines.append(f"ML: mode={_mode} · модель готова (n={_st.get('samples')}, AUC={_auc})")
+        else:
+            _need = _st.get("min_train_samples")
+            lines.append(f"ML: mode={_mode} · модель не обучена (нужно ≥{_need} сделок)")
+    except Exception:
+        pass
+
     return "\n".join(lines)

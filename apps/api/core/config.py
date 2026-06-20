@@ -188,6 +188,12 @@ class Settings(BaseSettings):
     ML_MIN_SCORE_TO_TRADE: float = 0.45    # full_auto/advisory: ниже — skip/block
     ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
     ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
+    # Ежесуточный авто-retrain (держит модель свежей; при данных < min — honest skip).
+    ML_AUTO_RETRAIN: bool = True
+    ML_RETRAIN_INTERVAL_SEC: int = 86400   # раз в сутки
+    # ML-алерт в Telegram опционален — off, чтобы НЕ дублировать существующий
+    # 2ч-дайджест. Включишь — придёт короткий итог retrain в owner-канал.
+    ML_TELEGRAM_ALERTS: bool = False
 
     # Paper/live-shadow validation gates before limited live scaling.
     VALIDATION_MIN_CLOSED_SIGNALS: int = 50

@@ -258,6 +258,7 @@ function SignalCard({
             </span>
             <StatusBadge status={s.status} />
             <GradeBadge grade={s.grade} />
+            <MlBadge ml={plan.ml} />
           </div>
 
           <div className="mt-2 max-w-full truncate text-xs text-emerald-100/50">
@@ -479,6 +480,22 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${statusClass(status)}`}>
       {status || "-"}
+    </span>
+  );
+}
+
+function MlBadge({ ml }: { ml?: any }) {
+  // ml = { mode, ml_score, action }. Показываем только когда ML что-то посчитал.
+  if (!ml || ml.ml_score == null) return null;
+  const score = Number(ml.ml_score);
+  const cls =
+    score >= 0.6 ? "bg-emerald-600 text-white" : score >= 0.45 ? "bg-yellow-600 text-black" : "bg-red-700 text-white";
+  return (
+    <span
+      className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}
+      title={`ML ${ml.mode}: P(win)=${score.toFixed(3)}${ml.action ? " · " + ml.action : ""}`}
+    >
+      ML {score.toFixed(2)}
     </span>
   );
 }

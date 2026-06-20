@@ -118,6 +118,8 @@ orderbook_feed_enabled = True
 
 digest_task = None
 digest_loop_enabled = True
+ml_retrain_task = None
+ml_retrain_loop_enabled = True
 # Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
 # чтобы одну позицию не обрабатывали два цикла одновременно.
 position_manage_lock = asyncio.Lock()
@@ -240,6 +242,46 @@ async def background_digest_loop():
             db.close()
 
         await asyncio.sleep(int(getattr(settings, "DIGEST_INTERVAL_SEC", 7200)))
+
+
+async def background_ml_retrain_loop():
+    """Ежесуточный авто-retrain мета-лейблера. Безопасно: ТОЛЬКО обучение на
+    накопленных закрытых сделках, торговлю не трогает; при данных < min —
+    honest skip. Держит модель свежей, чтобы при флипе ML_MODE она была готова.
+    Telegram-алерт опционален (ML_TELEGRAM_ALERTS), чтобы не дублировать дайджест."""
+    global ml_retrain_loop_enabled
+
+    await asyncio.sleep(45)
+
+    from services.ml_meta_labeler import MetaLabeler
+    from services.telegram_router import TelegramRouter
+    tg = TelegramRouter()
+
+    while ml_retrain_loop_enabled:
+        try:
+            if bool(getattr(settings, "ML_AUTO_RETRAIN", True)):
+                res = MetaLabeler().train()
+                log_event(logger, logging.INFO, "ml_retrain",
+                          status=res.get("status"), samples=res.get("samples"),
+                          needed=res.get("needed"))
+                if bool(getattr(settings, "ML_TELEGRAM_ALERTS", False)):
+                    if res.get("status") == "trained":
+                        m = res.get("metrics", {}) or {}
+                        await tg.owner_alert(
+                            "ML RETRAIN",
+                            f"Обучено на {res.get('samples')} сделках · "
+                            f"winrate {res.get('win_rate')}% · val_AUC {m.get('val_auc')}",
+                        )
+                    elif res.get("status") == "insufficient_data":
+                        await tg.owner_alert(
+                            "ML RETRAIN",
+                            f"Пропуск: данных {res.get('samples')}/{res.get('needed')}",
+                        )
+        except Exception as e:
+            log_event(logger, logging.ERROR, "ml_retrain_error",
+                      error_type=type(e).__name__, error=str(e))
+
+        await asyncio.sleep(int(getattr(settings, "ML_RETRAIN_INTERVAL_SEC", 86400)))
 
 
 async def background_subscription_loop():
@@ -399,7 +441,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -413,6 +455,9 @@ async def lifespan(app: FastAPI):
 
     digest_loop_enabled = True
     digest_task = asyncio.create_task(background_digest_loop())
+
+    ml_retrain_loop_enabled = True
+    ml_retrain_task = asyncio.create_task(background_ml_retrain_loop())
 
     orderbook_feed_enabled = True
     if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)):
