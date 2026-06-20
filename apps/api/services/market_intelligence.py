@@ -1074,7 +1074,12 @@ class MarketIntelligenceEngine:
                 stop_price = escalated["stop_price"]
                 tp = escalated["tp"]
                 reason = escalated["reason"]
-                regime = f"{radar_state}_escalated_candidate"
+                # (#3) Reversal-кандидат получает свой regime, чтобы скоринг не
+                # штрафовал его за контр-4h-тренд (это и есть суть разворота).
+                if "reversal" in str(reason):
+                    regime = "reversal_long_candidate"
+                else:
+                    regime = f"{radar_state}_escalated_candidate"
 
         if action == "hold" and radar_state in ["watch_long", "watch_short"]:
             reason = radar_state
@@ -1182,18 +1187,31 @@ class MarketIntelligenceEngine:
         volume_confirmation = 0.0
         penalty = 0.0
 
-        if action == "long":
-            if self._ctx_value(h4, "trend") == "trend_up":
-                trend_alignment += 20
-            if self._ctx_value(h1, "trend") == "trend_up":
-                trend_alignment += 20
-            if self._ctx_value(m15, "trend") == "trend_up":
-                trend_alignment += 10
+        # (#3) Reversal-кандидат: 4h контр-тренд — это СУТЬ разворота, не штрафуем
+        # за него и даём credit за подтверждённую разворотную структуру младших ТФ
+        # (он уже прошёл тугие гейты _try_reversal_long).
+        is_reversal = "reversal" in str(regime)
 
-            if self._ctx_value(h4, "trend") == "trend_down":
-                penalty += 20
-            if self._ctx_value(h1, "trend") == "trend_down":
-                penalty += 12 if learning_mode else 15
+        if action == "long":
+            if is_reversal:
+                trend_alignment += 40
+                if self._ctx_value(m15, "trend") == "trend_up":
+                    trend_alignment += 10
+                if self._ctx_value(h1, "trend") in ["trend_up", "mixed"]:
+                    trend_alignment += 10
+                # counter-4h penalty НЕ применяем — это и есть разворот.
+            else:
+                if self._ctx_value(h4, "trend") == "trend_up":
+                    trend_alignment += 20
+                if self._ctx_value(h1, "trend") == "trend_up":
+                    trend_alignment += 20
+                if self._ctx_value(m15, "trend") == "trend_up":
+                    trend_alignment += 10
+
+                if self._ctx_value(h4, "trend") == "trend_down":
+                    penalty += 20
+                if self._ctx_value(h1, "trend") == "trend_down":
+                    penalty += 12 if learning_mode else 15
 
             if self._ctx_value(m15, "momentum") in ["bullish", "neutral", "oversold"]:
                 entry_timing += 12
@@ -1313,6 +1331,7 @@ class MarketIntelligenceEngine:
         is_trend_candidate = (
             regime in ["trend_up_candidate", "trend_down_candidate"]
             or "escalated_candidate" in str(regime)
+            or "reversal" in str(regime)   # (#3) reversal-лонг идёт по тому же мягкому пути одобрения
         )
 
         if learning_mode:
@@ -1517,6 +1536,60 @@ class MarketIntelligenceEngine:
 
         return "none"
 
+    def _try_reversal_long(self, contexts: dict) -> dict | None:
+        """(#3) Лонг на развороте от дна — зеркало exhaustion-guard. Самый
+        рискованный вход (контр-4h-тренд), поэтому гейты ТУГИЕ и многоусловные:
+        - 4h истощён вниз (RSI <= REVERSAL_LONG_RSI_MAX);
+        - цена у 4h/1h-поддержки (в пределах REVERSAL_LONG_SUPPORT_DIST_PCT);
+        - 15m РАЗВЕРНУЛСЯ вверх (trend_up или momentum bullish);
+        - 5m И 1m не медвежьи (bullish/neutral);
+        - объём подтверждает (normal/strong на 15m/5m/1h).
+        Фейлит — None, и watch остаётся watch."""
+        h4 = self._tf(contexts, "4h")
+        h1 = self._tf(contexts, "1h")
+        m15 = self._tf(contexts, "15m")
+        m5 = self._tf(contexts, "5m")
+        m1 = self._tf(contexts, "1m")
+        if not all([h4, h1, m15, m5, m1]):
+            return None
+
+        px = float(self._ctx_value(m5, "last_close", 0) or self._ctx_value(m1, "last_close", 0) or 0)
+        if px <= 0:
+            return None
+        h4_rsi = float(self._ctx_value(h4, "rsi14", 50) or 50)
+        sup = float(self._ctx_value(h4, "support", 0) or self._ctx_value(h1, "support", 0) or 0)
+        near = float(getattr(settings, "REVERSAL_LONG_SUPPORT_DIST_PCT", 2.5)) / 100.0
+
+        exhausted_at_support = (
+            h4_rsi <= float(getattr(settings, "REVERSAL_LONG_RSI_MAX", 35.0))
+            and sup > 0
+            and (px - sup) / px <= near
+        )
+        m15_turned_up = (
+            self._ctx_value(m15, "trend") == "trend_up"
+            or self._ctx_value(m15, "momentum") == "bullish"
+        )
+        lower_not_bearish = (
+            self._ctx_value(m5, "momentum") in ["bullish", "neutral"]
+            and self._ctx_value(m1, "momentum") in ["bullish", "neutral", "overheated"]
+        )
+        volume_confirms = any(
+            self._ctx_value(c, "volume_state") in ["normal", "strong"]
+            for c in [m15, m5, h1]
+        )
+
+        if exhausted_at_support and m15_turned_up and lower_not_bearish and volume_confirms:
+            levels = self._build_long_levels(contexts)
+            if levels and levels.get("entry_zone") and levels.get("stop_price") and levels.get("tp"):
+                return {
+                    "action": "long",
+                    "entry_zone": levels["entry_zone"],
+                    "stop_price": levels["stop_price"],
+                    "tp": levels["tp"],
+                    "reason": "reversal_long_from_support",
+                }
+        return None
+
     def _try_escalate_watch_to_candidate(
         self,
         symbol: str,
@@ -1638,6 +1711,13 @@ class MarketIntelligenceEngine:
                     "tp": levels["tp"],
                     "reason": "watch_long_escalated_to_candidate",
                 }
+
+            # (#3) Continuation не прошёл (4h ещё вниз) — пробуем REVERSAL long:
+            # дно истощено у поддержки + младшие ТФ развернулись вверх с объёмом.
+            if bool(getattr(settings, "REVERSAL_LONG_ENABLED", True)):
+                rev = self._try_reversal_long(contexts)
+                if rev:
+                    return rev
 
         if radar_state == "watch_short":
             if learning_mode:

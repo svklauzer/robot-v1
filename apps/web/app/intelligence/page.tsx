@@ -820,6 +820,14 @@ function decisionLabel(code: string | null | undefined) {
     depth_spread_too_wide: "Спред слишком широкий",
     depth_no_ask_pressure: "Нет давления ask",
     depth_no_bid_support: "Нет поддержки bid",
+
+    // exhaustion guard / reversal (структурный аудит)
+    trend_exhaustion_short_into_support: "Истощение: не шортим поддержку",
+    trend_exhaustion_long_into_resistance: "Истощение: не лонгуем сопротивление",
+    reversal_long_from_support: "Лонг на развороте от поддержки",
+    watch_long_escalated_to_candidate: "Watch LONG → кандидат",
+    watch_short_escalated_to_candidate: "Watch SHORT → кандидат",
+    reentry_cooldown_active: "Cooldown повторного входа",
   };
 
   if (!code) return "-";

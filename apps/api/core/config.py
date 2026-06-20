@@ -434,6 +434,13 @@ class Settings(BaseSettings):
     EXHAUSTION_RSI_OVERBOUGHT: float = 70.0   # 4h RSI выше → аптренд перегрет
     EXHAUSTION_LEVEL_DIST_PCT: float = 2.5    # «у поддержки/сопротивления» — в этом % от уровня
 
+    # (#3 reversal) Зеркало exhaustion-guard: РАЗРЕШАЕМ лонг на развороте от дна,
+    # когда 4h истощён вниз у поддержки, НО младшие ТФ развернулись вверх с
+    # объёмом. Самый рискованный тип входа (контр-4h) — гейты тугие. False = выкл.
+    REVERSAL_LONG_ENABLED: bool = True
+    REVERSAL_LONG_RSI_MAX: float = 35.0           # 4h RSI ниже → есть истощение для разворота
+    REVERSAL_LONG_SUPPORT_DIST_PCT: float = 2.5   # цена в этом % от 4h/1h-поддержки
+
     LEVELS_ENTRY_TF: str = "5m"
     LEVELS_SIGNAL_TF: str = "15m"
     LEVELS_CONTEXT_TF: str = "1h"
