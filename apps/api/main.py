@@ -873,6 +873,18 @@ def ml_predict(candidate: dict):
     return MLController().evaluate_candidate(candidate or {})
 
 
+@app.get("/ml/research/market", dependencies=[Depends(require_owner_action)])
+def ml_research_market(symbol: str = "BTC/USDT", timeframe: str = "1h",
+                       limit: int = 1500, horizon: int = 24, k_atr: float = 1.5):
+    """ИССЛЕДОВАНИЕ (не торговля): предсказуемы ли движения по OHLC-фичам?
+    Тянет историю, строит фичи + triple-barrier метку, делает walk-forward
+    оценку и честный вердикт (edge_found / weak / no_edge_after_costs).
+    Это ответ ДАННЫМИ на «насколько OHLC реально поможет»."""
+    from services.ml_market_research import evaluate
+    return evaluate(symbol=symbol, timeframe=timeframe, limit=int(limit),
+                    horizon=int(horizon), k_atr=float(k_atr))
+
+
 @app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()
