@@ -792,6 +792,16 @@ def orderbook_state():
     }
 
 
+@app.get("/orderbook/volume-profile", dependencies=[Depends(require_owner_action)])
+def orderbook_volume_profile(symbol: str = "BTC/USDT", timeframe: str = "1h",
+                             limit: int = 1000, bins: int = 50):
+    """Volume Profile из OHLCV: VPOC, value area (VAH/VAL), HVN/LVN-уровни.
+    Для выбора уровней TP/стоп (HVN=реакция, LVN=быстрая зона), не для прогноза."""
+    from services.volume_profile import compute_volume_profile
+    return compute_volume_profile(symbol=symbol, timeframe=timeframe,
+                                  limit=int(limit), bins=int(bins))
+
+
 @app.get("/ml/outcomes/stats", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_stats():
     """Статистика ML-датасета (trade_outcomes.jsonl на персистентном диске):
