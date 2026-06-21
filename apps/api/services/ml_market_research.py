@@ -159,7 +159,10 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
         if name == "logreg":
             return Pipeline([("s", StandardScaler()),
                              ("c", LogisticRegression(max_iter=1000, class_weight="balanced"))])
-        return GradientBoostingClassifier(max_depth=3, n_estimators=120, learning_rate=0.05)
+        # n_estimators 120→60: вдвое меньше CPU при scan, чтобы тяжёлый прогон не
+        # «душил» event loop и не ронял WS-фид (pong-таймаут 1003). logreg —
+        # основной по вердикту, gbm лишь для сравнения, поэтому потеря точности ок.
+        return GradientBoostingClassifier(max_depth=3, n_estimators=60, learning_rate=0.08)
 
     def _walk_forward(name):
         # Purged walk-forward: расширяющееся окно train, последовательные тест-окна,
