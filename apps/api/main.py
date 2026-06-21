@@ -885,6 +885,35 @@ def ml_research_market(symbol: str = "BTC/USDT", timeframe: str = "1h",
                     horizon=int(horizon), k_atr=float(k_atr))
 
 
+@app.get("/ml/research/scan", dependencies=[Depends(require_owner_action)])
+def ml_research_scan(timeframe: str = "1h", limit: int = 1500,
+                     horizon: int = 24, k_atr: float = 1.5):
+    """Прогон research по ВСЕМ символам бота — одна сводка-таблица вместо 7 вызовов.
+    Может занять 10–30с (тянет историю + обучает по 2 модели на символ)."""
+    from services.ml_market_research import evaluate
+    out = []
+    for sym in settings.symbols:
+        try:
+            r = evaluate(symbol=sym, timeframe=timeframe, limit=int(limit),
+                         horizon=int(horizon), k_atr=float(k_atr))
+        except Exception as exc:
+            r = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        models = r.get("models", {}) if isinstance(r, dict) else {}
+        aucs = [m.get("oos_auc") for m in models.values() if isinstance(m, dict) and m.get("oos_auc") is not None]
+        exps = [m.get("expectancy_atr_after_costs") for m in models.values()
+                if isinstance(m, dict) and m.get("expectancy_atr_after_costs") is not None]
+        out.append({
+            "symbol": sym,
+            "status": r.get("status"),
+            "verdict": r.get("verdict"),
+            "best_oos_auc": max(aucs) if aucs else None,
+            "best_expectancy_atr": max(exps) if exps else None,
+            "labeled": r.get("labeled_samples"),
+            "baseline_up_rate": r.get("baseline_up_rate"),
+        })
+    return {"timeframe": timeframe, "horizon": horizon, "k_atr": k_atr, "results": out}
+
+
 @app.get("/signals", dependencies=[Depends(require_owner_action)])
 def list_signals(limit: int = 50, offset: int = 0):
     db = SessionLocal()

@@ -465,3 +465,9 @@ class ExitPolicyService:
                     f"prot={protected_pct:.4f} fee={fee_source}"
                 ),
             )
+
+        # КРИТИЧНО: ни одно пост-TP1 условие не сработало — ДЕРЖИМ (стоп уже в
+        # безубытке после TP1, защищать нечего). Без этого return функция отдавала
+        # None → manage_loop crash 'NoneType.exit'. Баг был латентным: вылез только
+        # после #9, когда сделки реально доходят до TP1 и входят в этот путь.
+        return ExitDecision(exit=False)
