@@ -207,11 +207,21 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
         if r:
             models[nm] = r
 
-    # Вердикт по logreg (устойчив к переобучению) + КОНСИСТЕНТНОСТЬ по фолдам.
+    # Бейзлайн «всегда по большинству» — чтобы ТРЕНД не маскировался под edge.
+    baseline_exp = round((2 * base_rate - 1) * k_atr - cost_atr * 2, 4)
+    regime_biased = base_rate > 0.6 or base_rate < 0.4  # перекошенная (трендовая) выборка
+
+    # Вердикт по logreg + КОНСИСТЕНТНОСТЬ + ПРЕВОСХОДСТВО над тривиальным бейзлайном.
     primary = models.get("logreg") or (next(iter(models.values())) if models else None)
-    if (primary and primary["mean_auc"] >= 0.55 and primary["mean_expectancy_atr"] > 0
-            and primary["folds_positive"] >= max(1, int(primary["folds"] * 0.6))):
+    strong = bool(
+        primary and primary["mean_auc"] >= 0.55 and primary["mean_expectancy_atr"] > 0
+        and primary["mean_expectancy_atr"] > baseline_exp + 0.05   # бьёт «всегда по тренду»
+        and primary["folds_positive"] >= max(1, int(primary["folds"] * 0.6))
+    )
+    if strong and not regime_biased:
         verdict = "edge_found"
+    elif strong and regime_biased:
+        verdict = "weak_trend_biased"   # «edge» вероятно из тренда (baseline перекошен)
     elif primary and primary["mean_auc"] >= 0.53:
         verdict = "weak_signal_marginal"
     else:
@@ -223,9 +233,11 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
         "labeled_samples": int(n),
         "horizon": horizon, "k_atr": k_atr, "wf_folds": folds,
         "baseline_up_rate": round(base_rate, 4),
+        "baseline_expectancy_atr": baseline_exp,
+        "regime_biased": regime_biased,
         "models": models,
         "verdict": verdict,
-        "note": ("Purged walk-forward k-fold. edge_found = средний AUC≥0.55, "
-                 "положительный средний expectancy И ≥60% фолдов в плюс. "
-                 "logreg — основной (устойчив к переобучению). Меньше cherry-pick, чем одиночный сплит."),
+        "note": ("Purged walk-forward k-fold. edge_found = средний AUC≥0.55, expectancy>0, "
+                 "БЬЁТ тривиальный бейзлайн, ≥60% фолдов в плюс И выборка НЕ трендово-перекошена. "
+                 "weak_trend_biased = похоже на edge, но baseline_up_rate перекошен → это тренд, не скилл."),
     }
