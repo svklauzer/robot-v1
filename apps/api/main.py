@@ -260,7 +260,9 @@ async def background_ml_retrain_loop():
     while ml_retrain_loop_enabled:
         try:
             if bool(getattr(settings, "ML_AUTO_RETRAIN", True)):
-                res = MetaLabeler().train()
+                # sklearn-обучение — CPU-bound и СИНХРОННОЕ. В event loop оно бы
+                # блокировало всё (вкл. pong WS-фида → разрыв 1003). Уносим в поток.
+                res = await asyncio.to_thread(lambda: MetaLabeler().train())
                 log_event(logger, logging.INFO, "ml_retrain",
                           status=res.get("status"), samples=res.get("samples"),
                           needed=res.get("needed"))
