@@ -159,6 +159,57 @@ class MetaLabeler:
         except Exception:
             return None
 
+    # ── дескриптивный анализ фич (cheap test, до полного обучения) ─────────────
+    def feature_analysis(self) -> dict:
+        """НЕ обученная модель, а descriptive-анализ: какие фичи разделяют
+        win/loss на накопленных сделках. Сила фичи = single-feature AUC (как ОДНА
+        фича ранжирует win vs loss; 0.5 = не разделяет, >0.6 или <0.4 = несёт
+        сигнал). Работает уже на малой выборке (честно, с оговоркой). Включает
+        стакан (OBI/CVD/спред/стенки), RR, режим — отвечает «несёт ли стакан
+        сигнал для НАШИХ сетапов» там, где он реально есть."""
+        label_kind = str(getattr(settings, "ML_LABEL_KIND", "is_win"))
+        rows = self._load_rows()
+        X, y = self._xy(rows, label_kind)
+        n = len(y)
+        if n < 20 or len(set(y)) < 2:
+            return {"status": "insufficient_data", "samples": n,
+                    "message": "Нужно ≥20 размеченных сделок обоих классов."}
+        try:
+            import numpy as np
+            from sklearn.metrics import roc_auc_score
+        except Exception as exc:
+            return {"status": "sklearn_unavailable", "error": f"{type(exc).__name__}: {exc}"}
+
+        Xa = np.array(X, dtype=float)
+        ya = np.array(y, dtype=int)
+        feats = []
+        for j, name in enumerate(FEATURE_NAMES):
+            col = Xa[:, j]
+            if np.all(col == col[0]):  # константа — не разделяет
+                continue
+            try:
+                auc = float(roc_auc_score(ya, col))
+            except Exception:
+                continue
+            feats.append({
+                "feature": name,
+                "single_auc": round(auc, 3),
+                "separation": round(abs(auc - 0.5), 3),
+                "mean_win": round(float(col[ya == 1].mean()), 4),
+                "mean_loss": round(float(col[ya == 0].mean()), 4),
+            })
+        feats.sort(key=lambda f: f["separation"], reverse=True)
+        return {
+            "status": "ok",
+            "samples": n,
+            "win_rate": round(float(ya.mean()) * 100, 2),
+            "label_kind": label_kind,
+            "note": ("single_auc≈0.5 = фича не разделяет win/loss; >0.6 или <0.4 = "
+                     "несёт сигнал. Выборка мала (≈85) → ДЕСКРИПТИВНО, не доказательство — "
+                     "но показывает, на какие фичи опираться в мета-лейблере."),
+            "features": feats,
+        }
+
     # ── статус ────────────────────────────────────────────────────────────────
     def status(self) -> dict:
         meta = {}

@@ -859,6 +859,14 @@ def ml_status():
     }
 
 
+@app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])
+def ml_feature_analysis():
+    """Дешёвый descriptive-тест: какие фичи (вкл. стакан OBI/CVD) разделяют
+    win/loss на накопленных сделках. Работает до полного обучения мета-лейблера."""
+    from services.ml_meta_labeler import MetaLabeler
+    return MetaLabeler().feature_analysis()
+
+
 @app.post("/ml/train", dependencies=[Depends(require_owner_action)])
 def ml_train():
     """Переобучить мета-лейблер на trade_outcomes.jsonl (time-aware валидация).
