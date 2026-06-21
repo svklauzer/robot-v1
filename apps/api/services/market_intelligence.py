@@ -123,6 +123,8 @@ class MarketIntelligenceEngine:
 
     def __init__(self):
         self.market = MarketDataService()
+        self._cur_symbol = None          # текущий разбираемый символ (для VP-подгонки уровней)
+        self._vp_cache = {}              # {symbol: (ts, volume_profile|None)} — кэш профиля
 
     def analyze_symbol(self, symbol: str) -> MarketIntelligenceResult:
         """
@@ -134,6 +136,7 @@ class MarketIntelligenceEngine:
         4h  — старший контекст
         """
 
+        self._cur_symbol = symbol  # для VP-подгонки уровней (HVN/LVN) ниже по стеку
         snap = self.market.multi_timeframe_snapshot(symbol)
         source = snap.get("source", "unknown")
         tf_data = snap["timeframes"]
@@ -559,6 +562,83 @@ class MarketIntelligenceEngine:
                 return round(max(cands) * (1 + buf), 8)  # ближайшая поддержка
             return round(last * (1 - default_pct), 8)
 
+    # ── Volume Profile → подгонка уровней (исполнение, НЕ прогноз) ─────────────
+    def _volume_nodes(self, symbol):
+        """Кэшированный Volume Profile (HVN/LVN) для подгонки TP/стопа. fail-open:
+        флаг off / нет данных / ошибка → None, и билдеры уровней работают как
+        раньше. Профиль НИКОГДА не на крит-пути и не решает направление сделки."""
+        if not symbol or not bool(getattr(settings, "LEVELS_VP_ENABLED", True)):
+            return None
+        try:
+            import time
+            ttl = float(getattr(settings, "LEVELS_VP_TTL_SEC", 900.0))
+            now = time.time()
+            hit = self._vp_cache.get(symbol)
+            if hit and (now - hit[0]) < ttl:
+                return hit[1]
+            from services.volume_profile import compute_volume_profile
+            tf = str(getattr(settings, "LEVELS_VP_TF", "1h"))
+            bins = int(getattr(settings, "LEVELS_VP_BINS", 50))
+            vp = compute_volume_profile(symbol, timeframe=tf, limit=1000, bins=bins)
+            data = vp if isinstance(vp, dict) and vp.get("status") == "ok" else None
+            self._vp_cache[symbol] = (now, data)
+            return data
+        except Exception:
+            return None
+
+    def _vp_stop_long(self, stop: float, entry: float, max_floor: float, vp: dict) -> float:
+        """LONG: если ниже стопа (в риск-полосе) есть HVN-поддержка — ставим стоп
+        чуть ЗА неё. Только РАСШИРЯЕМ вниз и не больше STOP_MAX_EXTRA — RR не ломаем."""
+        nb = vp.get("nearest_hvn_below")
+        if nb is None or nb >= entry:
+            return stop
+        buf = float(getattr(settings, "LEVELS_VP_STOP_BUFFER_PCT", 0.10)) / 100.0
+        cand = float(nb) * (1 - buf)
+        if cand >= stop or cand < max_floor:          # не тянем вверх / не за потолок риска
+            return stop
+        extra = float(getattr(settings, "LEVELS_VP_STOP_MAX_EXTRA_PCT", 0.40)) / 100.0
+        if entry > 0 and (stop - cand) / entry > extra:  # слишком большое расширение риска
+            return stop
+        return cand
+
+    def _vp_stop_short(self, stop: float, entry: float, max_floor: float, vp: dict) -> float:
+        """SHORT: зеркально — HVN-сопротивление выше стопа, отодвигаем стоп ЗА неё вверх."""
+        na = vp.get("nearest_hvn_above")
+        if na is None or na <= entry:
+            return stop
+        buf = float(getattr(settings, "LEVELS_VP_STOP_BUFFER_PCT", 0.10)) / 100.0
+        cand = float(na) * (1 + buf)
+        if cand <= stop or cand > max_floor:
+            return stop
+        extra = float(getattr(settings, "LEVELS_VP_STOP_MAX_EXTRA_PCT", 0.40)) / 100.0
+        if entry > 0 and (cand - stop) / entry > extra:
+            return stop
+        return cand
+
+    def _vp_cap_tp_long(self, tp: float, entry: float, vp: dict) -> float:
+        """LONG: не целимся СКВОЗЬ HVN. Узел реакции между ценой и TP → тянем TP к
+        ближней стороне узла (там цена реально тормозит). Не ближе TP_MIN_DIST от входа."""
+        blockers = [float(h) for h in (vp.get("hvn") or []) if entry < float(h) < tp]
+        if not blockers:
+            return tp
+        buf = float(getattr(settings, "LEVELS_VP_TP_BUFFER_PCT", 0.10)) / 100.0
+        cand = min(blockers) * (1 - buf)
+        min_dist = float(getattr(settings, "LEVELS_VP_TP_MIN_DIST_PCT", 0.35)) / 100.0
+        if cand <= entry * (1 + min_dist):            # схлопнули бы TP1 — оставляем как есть
+            return tp
+        return cand
+
+    def _vp_cap_tp_short(self, tp: float, entry: float, vp: dict) -> float:
+        blockers = [float(h) for h in (vp.get("hvn") or []) if tp < float(h) < entry]
+        if not blockers:
+            return tp
+        buf = float(getattr(settings, "LEVELS_VP_TP_BUFFER_PCT", 0.10)) / 100.0
+        cand = max(blockers) * (1 + buf)
+        min_dist = float(getattr(settings, "LEVELS_VP_TP_MIN_DIST_PCT", 0.35)) / 100.0
+        if cand >= entry * (1 - min_dist):
+            return tp
+        return cand
+
     def _build_long_levels(self, contexts):
         entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
         signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
@@ -628,6 +708,11 @@ class MarketIntelligenceEngine:
         cand = min(cand, min_floor)                       # не ближе минимума
         stop_price = round(cand, 4)
 
+        # Volume Profile: стоп чуть ЗА HVN-поддержку (узел держит лучше голого ATR).
+        vp = self._volume_nodes(getattr(self, "_cur_symbol", None))
+        if vp:
+            stop_price = round(self._vp_stop_long(stop_price, last, max_floor, vp), 6)
+
         risk = max(last - stop_price, atr)
 
         # (#9) TP1 — достижимая встречная структура (расцеплено от стопа), чтобы
@@ -637,6 +722,12 @@ class MarketIntelligenceEngine:
         tp2 = max(tp2, round(last * (1 + tcfg.tp2_floor_pct / 100.0), 4))
         # TP2 всегда дальше TP1 (страховка от инверсии при узком risk).
         tp2 = max(tp2, round(tp1 * (1 + 0.004), 4))
+
+        # Volume Profile: не целимся сквозь HVN — цели у ближней стороны узлов.
+        if vp:
+            tp1 = round(self._vp_cap_tp_long(tp1, last, vp), 6)
+            tp2 = round(self._vp_cap_tp_long(tp2, last, vp), 6)
+            tp2 = max(tp2, round(tp1 * (1 + 0.004), 6))   # порядок TP2>TP1 сохраняем
 
         # FIX: убрана привязка tp1/tp2 к resistance.tail(50) на 1h.
         # resistance за 50 часов = 2-дневный максимум (+7-15% от цены).
@@ -720,6 +811,11 @@ class MarketIntelligenceEngine:
         cand = max(cand, min_floor)                       # не ближе минимума
         stop_price = round(cand, 4)
 
+        # Volume Profile: стоп чуть ЗА HVN-сопротивление (узел держит лучше голого ATR).
+        vp = self._volume_nodes(getattr(self, "_cur_symbol", None))
+        if vp:
+            stop_price = round(self._vp_stop_short(stop_price, last, max_floor, vp), 6)
+
         risk = max(stop_price - last, atr)
 
         # (#9) TP1 — достижимая встречная структура (поддержка), расцеплено от
@@ -729,6 +825,12 @@ class MarketIntelligenceEngine:
         tp2 = min(tp2, round(last * (1 - tcfg.tp2_floor_pct / 100.0), 4))
         # TP2 всегда дальше TP1 вниз (страховка от инверсии при узком risk).
         tp2 = min(tp2, round(tp1 * (1 - 0.004), 4))
+
+        # Volume Profile: не целимся сквозь HVN — цели у ближней стороны узлов.
+        if vp:
+            tp1 = round(self._vp_cap_tp_short(tp1, last, vp), 6)
+            tp2 = round(self._vp_cap_tp_short(tp2, last, vp), 6)
+            tp2 = min(tp2, round(tp1 * (1 - 0.004), 6))   # порядок TP2<TP1 сохраняем
 
         # FIX: убрана привязка tp1/tp2 к support.tail(50) на 1h.
         # support за 50 часов = 2-дневный минимум (-7-15% от цены).

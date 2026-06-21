@@ -486,6 +486,23 @@ class Settings(BaseSettings):
     TP1_DEFAULT_PCT: float = 1.2
 
     # =========================
+    # VOLUME PROFILE → подгонка УРОВНЕЙ (исполнение, не прогноз)
+    # =========================
+    # Узлы объёма (HVN/LVN) из OHLCV корректируют ТОЛЬКО постановку TP/стопа,
+    # направление сделки они НЕ определяют. fail-open: нет данных/ошибка/флаг off
+    # → билдеры уровней работают ровно как раньше. ML/VP никогда не на крит-пути.
+    LEVELS_VP_ENABLED: bool = True
+    LEVELS_VP_TF: str = "1h"            # таймфрейм профиля (узлы 1h устойчивее шума)
+    LEVELS_VP_BINS: int = 50            # ценовых корзин
+    LEVELS_VP_TTL_SEC: float = 900.0    # кэш профиля на символ (15 мин) — не душим loop
+    # Стоп: ставим чуть ЗА HVN-узел (узел держит; стоп прямо в узле выбьет шумом).
+    LEVELS_VP_STOP_BUFFER_PCT: float = 0.10   # буфер за узлом
+    LEVELS_VP_STOP_MAX_EXTRA_PCT: float = 0.40  # максимум доп. расширения риска (RR-предохранитель)
+    # TP: не целимся СКВОЗЬ HVN — тянем цель к ближней стороне блокирующего узла.
+    LEVELS_VP_TP_BUFFER_PCT: float = 0.10
+    LEVELS_VP_TP_MIN_DIST_PCT: float = 0.35   # не схлопываем TP1 ближе этого от входа
+
+    # =========================
     # SETUP QUALITY — LEARNING MODE
     # =========================
     LEARNING_SETUP_MIN_SCORE: float = 62.0
