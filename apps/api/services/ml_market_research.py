@@ -146,50 +146,70 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
     if len(data) < 200 or data["y"].nunique() < 2:
         return {"status": "not_enough_labeled", "labeled": int(len(data))}
 
-    feat_cols = [c for c in X.columns]
-    Xa = data[feat_cols].values
+    Xa = data[list(X.columns)].values
     ya = data["y"].astype(int).values
+    base_rate = float(ya.mean())
+    n = len(ya)
 
-    # хронологический сплит (walk-forward), БЕЗ перемешивания
-    cut = int(len(ya) * 0.7)
-    Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
-    base_rate = float(ya.mean())  # доля up-барьеров = наивный бейзлайн
+    folds = int(getattr(settings, "RESEARCH_WF_FOLDS", 5))
+    cost_atr = float(getattr(settings, "RESEARCH_COST_ATR", 0.25))
+    thr = 0.55
 
-    results = {}
-    for name, clf in [
-        ("logreg", Pipeline([("s", StandardScaler()),
-                             ("c", LogisticRegression(max_iter=1000, class_weight="balanced"))])),
-        ("gbm", GradientBoostingClassifier(max_depth=3, n_estimators=120, learning_rate=0.05)),
-    ]:
-        try:
-            clf.fit(Xtr, ytr)
-            proba = clf.predict_proba(Xte)[:, 1]
-            auc = float(roc_auc_score(yte, proba))
-            # cost-aware expectancy: «торгуем», когда P>порог; PnL = +k_atr если up,
-            # -k_atr если down, минус round-trip кост (в единицах k_atr-движения).
-            thr = 0.55
-            take = proba >= thr
-            cost_atr = float(getattr(settings, "RESEARCH_COST_ATR", 0.25))  # косты в долях k_atr-хода
-            if take.sum() > 0:
-                wins = yte[take]
-                exp = float(np.mean(np.where(wins == 1, k_atr, -k_atr)) - cost_atr * 2)
-            else:
-                exp = 0.0
-            results[name] = {
-                "oos_auc": round(auc, 4),
-                "trades_taken": int(take.sum()),
-                "expectancy_atr_after_costs": round(exp, 4),
-            }
-        except Exception as exc:
-            results[name] = {"error": f"{type(exc).__name__}: {exc}"}
+    def _make(name):
+        if name == "logreg":
+            return Pipeline([("s", StandardScaler()),
+                             ("c", LogisticRegression(max_iter=1000, class_weight="balanced"))])
+        return GradientBoostingClassifier(max_depth=3, n_estimators=120, learning_rate=0.05)
 
-    # вердикт: есть ли край OOS после костов
-    best_auc = max((r.get("oos_auc", 0) for r in results.values() if "oos_auc" in r), default=0)
-    best_exp = max((r.get("expectancy_atr_after_costs", -9) for r in results.values()
-                    if "expectancy_atr_after_costs" in r), default=-9)
-    if best_auc >= 0.55 and best_exp > 0:
+    def _walk_forward(name):
+        # Purged walk-forward: расширяющееся окно train, последовательные тест-окна,
+        # между train/test выкидываем horizon баров (против утечки triple-barrier).
+        test_size = max(n // (folds + 1), 30)
+        aucs, exps, pos = [], [], 0
+        for i in range(1, folds + 1):
+            te_start = i * test_size
+            te_end = (te_start + test_size) if i < folds else n
+            tr_end = max(0, te_start - horizon)  # purge
+            if tr_end < 80 or (te_end - te_start) < 30:
+                continue
+            Xtr, ytr = Xa[:tr_end], ya[:tr_end]
+            Xte, yte = Xa[te_start:te_end], ya[te_start:te_end]
+            if len(set(ytr.tolist())) < 2 or len(set(yte.tolist())) < 2:
+                continue
+            try:
+                m = _make(name).fit(Xtr, ytr)
+                proba = m.predict_proba(Xte)[:, 1]
+                auc = float(roc_auc_score(yte, proba))
+                take = proba >= thr
+                exp = (float(np.mean(np.where(yte[take] == 1, k_atr, -k_atr)) - cost_atr * 2)
+                       if take.sum() > 0 else 0.0)
+                aucs.append(auc); exps.append(exp)
+                if auc > 0.5 and exp > 0:
+                    pos += 1
+            except Exception:
+                continue
+        if not aucs:
+            return None
+        return {
+            "mean_auc": round(float(np.mean(aucs)), 4),
+            "std_auc": round(float(np.std(aucs)), 4),
+            "mean_expectancy_atr": round(float(np.mean(exps)), 4),
+            "folds_positive": pos,
+            "folds": len(aucs),
+        }
+
+    models = {}
+    for nm in ("logreg", "gbm"):
+        r = _walk_forward(nm)
+        if r:
+            models[nm] = r
+
+    # Вердикт по logreg (устойчив к переобучению) + КОНСИСТЕНТНОСТЬ по фолдам.
+    primary = models.get("logreg") or (next(iter(models.values())) if models else None)
+    if (primary and primary["mean_auc"] >= 0.55 and primary["mean_expectancy_atr"] > 0
+            and primary["folds_positive"] >= max(1, int(primary["folds"] * 0.6))):
         verdict = "edge_found"
-    elif best_auc >= 0.53:
+    elif primary and primary["mean_auc"] >= 0.53:
         verdict = "weak_signal_marginal"
     else:
         verdict = "no_edge_after_costs"
@@ -197,10 +217,12 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
     return {
         "status": "ok",
         "symbol": symbol, "timeframe": timeframe, "bars": int(len(df)),
-        "labeled_samples": int(len(data)),
-        "horizon": horizon, "k_atr": k_atr,
+        "labeled_samples": int(n),
+        "horizon": horizon, "k_atr": k_atr, "wf_folds": folds,
         "baseline_up_rate": round(base_rate, 4),
-        "models": results,
+        "models": models,
         "verdict": verdict,
-        "note": "AUC≈0.5 = шум. edge_found только при OOS AUC≥0.55 И положительном expectancy после костов.",
+        "note": ("Purged walk-forward k-fold. edge_found = средний AUC≥0.55, "
+                 "положительный средний expectancy И ≥60% фолдов в плюс. "
+                 "logreg — основной (устойчив к переобучению). Меньше cherry-pick, чем одиночный сплит."),
     }

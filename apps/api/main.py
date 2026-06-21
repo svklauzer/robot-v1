@@ -901,15 +901,18 @@ def ml_research_scan(timeframe: str = "1h", limit: int = 1500,
         except Exception as exc:
             r = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         models = r.get("models", {}) if isinstance(r, dict) else {}
-        aucs = [m.get("oos_auc") for m in models.values() if isinstance(m, dict) and m.get("oos_auc") is not None]
-        exps = [m.get("expectancy_atr_after_costs") for m in models.values()
-                if isinstance(m, dict) and m.get("expectancy_atr_after_costs") is not None]
+        lg = models.get("logreg") or {}
         out.append({
             "symbol": sym,
             "status": r.get("status"),
             "verdict": r.get("verdict"),
-            "best_oos_auc": max(aucs) if aucs else None,
-            "best_expectancy_atr": max(exps) if exps else None,
+            # logreg — основной (устойчив к переобучению); gbm для сравнения
+            "logreg_mean_auc": lg.get("mean_auc"),
+            "logreg_std_auc": lg.get("std_auc"),
+            "logreg_mean_exp_atr": lg.get("mean_expectancy_atr"),
+            "folds_positive": lg.get("folds_positive"),
+            "folds": lg.get("folds"),
+            "gbm_mean_auc": (models.get("gbm") or {}).get("mean_auc"),
             "labeled": r.get("labeled_samples"),
             "baseline_up_rate": r.get("baseline_up_rate"),
         })

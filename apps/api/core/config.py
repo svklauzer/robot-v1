@@ -194,6 +194,9 @@ class Settings(BaseSettings):
     # ML-алерт в Telegram опционален — off, чтобы НЕ дублировать существующий
     # 2ч-дайджест. Включишь — придёт короткий итог retrain в owner-канал.
     ML_TELEGRAM_ALERTS: bool = False
+    # OHLC-research: число walk-forward фолдов и косты (в долях k_atr-хода).
+    RESEARCH_WF_FOLDS: int = 5
+    RESEARCH_COST_ATR: float = 0.25
 
     # Paper/live-shadow validation gates before limited live scaling.
     VALIDATION_MIN_CLOSED_SIGNALS: int = 50
