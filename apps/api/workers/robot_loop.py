@@ -8,7 +8,6 @@ from services.news_filter import NewsFilter
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
 from services.ml_outcome_stats import MLOutcomeStatsService
-from services.risk_engine import RiskEngine
 from services.portfolio_engine import PortfolioEngine
 from services.execution_engine import ExecutionEngine
 from services.signal_broadcaster import SignalBroadcaster
@@ -37,7 +36,6 @@ class RobotLoop:
         self.news = NewsFilter()
         self.strategy = StrategyEngine()
         self.ml = MLScorer()
-        self.risk = RiskEngine()
         self.portfolio = PortfolioEngine()
 
         self.intelligence = MarketIntelligenceEngine()

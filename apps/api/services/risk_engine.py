@@ -1,14 +1,9 @@
-from core.config import settings
+"""DEPRECATED / удалён из активного пути.
 
-class RiskEngine:
-    def allow(self, signal: dict, open_positions: list, daily_loss_pct: float, drawdown_pct: float) -> tuple[bool, str]:
-        if len(open_positions) >= settings.MAX_OPEN_POSITIONS:
-            return False, "max_open_positions"
+RiskEngine.allow() в боевом цикле никогда не вызывался (robot_loop создавал
+объект, но метод не дёргал), а единственным его потребителем настройки была
+MAX_OPEN_POSITIONS — теперь удалённая. Реальный контроль числа позиций и маржи —
+в anti_drain_guard (ANTI_DRAIN_MAX_OPEN_POSITIONS / *_USED_MARGIN_PCT).
 
-        if daily_loss_pct >= settings.MAX_DAILY_LOSS_PCT:
-            return False, "max_daily_loss"
-
-        if drawdown_pct >= settings.MAX_DRAWDOWN_PCT:
-            return False, "max_drawdown"
-
-        return True, "ok"
+Файл оставлен пустым (физическое удаление недоступно в песочнице). Не импортируйте.
+"""

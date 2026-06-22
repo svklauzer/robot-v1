@@ -405,10 +405,12 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
     ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 50.0
     # POSITION (trend) профиль anti-drain: согласован с trade_plan
-    # (MAX_POSITION_MARGIN_PCT=0.35) — иначе plan строит 35%, а anti-drain режет 12%.
+    # (MAX_POSITION_MARGIN_PCT=0.13). Снижено 35→15 вместе с размером сделки —
+    # держим буфер над планом (план 13% < блок 15%), чтобы пограничную позицию не
+    # резало целиком. 5 позиций × ~13% = 65% < общий потолок 70% → диверсификация.
     # weak_structure/overheated/economics-по-TP1 для тренда отключаются в robot_loop
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
-    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 35.0
+    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 15.0
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
@@ -455,14 +457,18 @@ class Settings(BaseSettings):
     # =========================
     MAX_DAILY_LOSS_PCT: float = 3
     MAX_DRAWDOWN_PCT: float = 15
-    MAX_OPEN_POSITIONS: int = 3
+    # MAX_OPEN_POSITIONS удалён: его читал только RiskEngine.allow(), который в
+    # боевом цикле не вызывался (мёртвый код). Реальный потолок числа позиций —
+    # ANTI_DRAIN_MAX_OPEN_POSITIONS (anti_drain_guard). RiskEngine тоже удалён.
     RISK_PER_TRADE_PCT: float = 0.5
-    # (#6) Снижено 0.35→0.30: trade_plan строил позицию ровно на границе
-    # anti-drain (35% маржи), а сайзинг считается от balance, тогда как блок
-    # сверяется с equity (RISK_EQUITY_USDT). На границе позицию резало целиком
-    # (blocked_position_margin_limit) вместо нормального открытия. 0.30 даёт
-    # буфер: план всегда помещается под 35%-порог.
-    MAX_POSITION_MARGIN_PCT: float = 0.30
+    # (#диверсификация) Снижено 0.30→0.13 ради БОЛЬШЕГО ЧИСЛА параллельных
+    # позиций. Раньше сделка занимала ~30% экв (~285 USDT), и 3 трендовых
+    # раннера уже выбирали 70%-потолок маржи (665) → CRT/A+ душились
+    # blocked_total_margin_limit (см. аудит, течь #5). При 13% сделка ≈123 USDT,
+    # и 5×123=615 < 665 — влезает 5 параллельных (= ANTI_DRAIN_MAX_OPEN_POSITIONS).
+    # Риск $ на сделку падает (меньше qty), что и есть диверсификация. Буфер под
+    # anti-drain-кап (15%) сохранён: план 13% < блок 15%.
+    MAX_POSITION_MARGIN_PCT: float = 0.13
     # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
     # его $-награда мала by design. Реальная награда и её гейт — на TP2.
     MIN_NET_PNL_TP1_USDT: float = 0.20
