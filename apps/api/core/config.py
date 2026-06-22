@@ -243,6 +243,26 @@ class Settings(BaseSettings):
     CRT_ALLOW_SHORT: bool = True
     CRT_MIN_SETUP_SCORE: float = 55.0
 
+    # --- Scalp ENGINE (micro-flow вход: 5m микроструктура + стакан OBI/CVD) ---
+    # ВОССТАНОВЛЕНО: движок (services/micro_scalp.py) и весь downstream (anti-drain/
+    # breakeven/time-stop/trade_plan) были на месте и подключены в каскад
+    # market_intelligence, но поле ENABLE_SCALP_STRATEGY НЕ было объявлено → при
+    # extra="ignore" env молча игнорировался и getattr всегда давал False (движок
+    # тёмный). Параметры движка тоже объявляем — теперь тюнятся из env (дефолты =
+    # прежним getattr-фолбэкам, поведение не меняется). enabled включается из env.
+    ENABLE_SCALP_STRATEGY: bool = False
+    SCALP_EDGE_ZONE: float = 0.25              # вход в пределах этой доли от микро-края
+    SCALP_MIN_MICRO_WIDTH_PCT: float = 1.2     # мин. ширина 5m-диапазона
+    SCALP_TARGET_PCT: float = 0.8              # TP1 (net target, %)
+    SCALP_TP2_MULT: float = 1.6               # TP2 = target * mult
+    SCALP_STOP_BUFFER_ATR: float = 0.5         # стоп за микро-экстремумом (в ATR)
+    SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
+    SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
+    SCALP_ENG_ALLOW_SHORT: bool = True
+    SCALP_MIN_SETUP_SCORE: float = 50.0
+    SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
+    SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
+
     # --- Scalp risk profile (trade_mode="scalp" / regime="range") ---
     # Скальп — маленькая позиция, мелкое движение, мелкие абсолютные суммы.
     # Глобальные пороги риска заточены под крупные трендовые сделки и душат
