@@ -47,11 +47,13 @@ class Settings(BaseSettings):
     HTX_API_HOSTNAME: str = ""
     HTX_MARKET_TYPE: str = "spot"
     # Универсум подобран по РЕАЛЬНОЙ ликвидности HTX spot (top-of-book спред):
-    # BTC ~0.00002%, ETH ~0.0006%, AVAX ~0.008%, ADA/XRP ~0.017%, SOL ~0.036%,
+    # BTC ~0.00002%, ETH ~0.0006%, AVAX ~0.008%, XRP ~0.017%, SOL ~0.036%,
     # TRX ~0.089% (HTX-native, глубокий). DOT убран — спред 0.2–1%+ (хронический
-    # неликвид, источник spread-bleed). LINK/LTC/DOGE/BNB НЕ добавлены — их spot
-    # спред (0.12–1%) хуже DOT, торговать ими = тот же слив на спреде.
-    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,ADA/USDT,AVAX/USDT,TRX/USDT"
+    # неликвид). ADA убран по ЖИВОЙ телеметрии: спред 0.14–0.61% (а не ~0.017%,
+    # как считалось) — постоянно бьёт depth-гейт (0.12%), заваливал ленту blocked,
+    # а когда проскакивал — слив на спреде (#95 -5.05, #85 -3.85). LINK/LTC/DOGE/BNB
+    # НЕ добавлены — их spot спред (0.12–1%) тоже хуже порога.
+    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -299,6 +301,12 @@ class Settings(BaseSettings):
     OB_POSITION_MAX_SPREAD_PCT: float = 0.12
     OB_OBI_CONFIRM: float = 0.15          # нужный перекос стакана в сторону входа
     OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
+    # Жёсткое OBI-вето: при подавляющем перекосе стакана ПРОТИВ входа блокируем
+    # независимо от встречной стенки. Раньше long при OBI -0.97 проходил, т.к.
+    # bid_wall_share бил порог стенки (#94 ETH → -2.95, #89 XRP → -4.67). Порог
+    # высокий (только вопиющие случаи), чтобы не резать пограничные ±0.5 входы.
+    # 0 → выкл.
+    OB_OBI_HARD_VETO: float = 0.75
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
     OB_CVD_EXIT_RATIO: float = 0.8        # поток против позиции на эту долю → ускоряем выход

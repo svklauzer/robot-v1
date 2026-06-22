@@ -104,7 +104,8 @@ class OrderBookAnalyzer:
                    max_spread_pct: float, obi_confirm: float,
                    wall_confirm: float,
                    cvd_block_ratio: float = 0.0,
-                   cvd_min_trades: int = 0) -> tuple[bool, str]:
+                   cvd_min_trades: int = 0,
+                   obi_hard_veto: float = 0.0) -> tuple[bool, str]:
         """Возвращает (allowed, reason). Если данных нет (not fresh) — пропускаем
         (allowed=True, reason="no_depth_data"): движок не должен блокировать
         торговлю при отсутствии WS-потока.
@@ -126,6 +127,17 @@ class OrderBookAnalyzer:
                 return False, f"depth_cvd_against_long:cvd_ratio={sig.cvd_ratio:.3f}<=-{abs(cvd_block_ratio)}"
             if s in ("short", "sell") and sig.cvd_ratio >= abs(cvd_block_ratio):
                 return False, f"depth_cvd_against_short:cvd_ratio={sig.cvd_ratio:.3f}>={abs(cvd_block_ratio)}"
+
+        # Жёсткое OBI-вето: подавляющий перекос стакана ПРОТИВ входа нельзя
+        # «спасать» встречной стенкой. #94 ETH вошёл в long при OBI -0.97
+        # (97% аск-перекос), т.к. bid_wall прошёл порог → -2.95. При сильном
+        # перекосе против — блок независимо от стенки. obi_hard_veto=0 → выкл.
+        hv = abs(float(obi_hard_veto))
+        if hv > 0:
+            if s in ("long", "buy") and sig.obi <= -hv:
+                return False, f"depth_obi_against_long:obi={sig.obi:.3f}<=-{hv}"
+            if s in ("short", "sell") and sig.obi >= hv:
+                return False, f"depth_obi_against_short:obi={sig.obi:.3f}>={hv}"
 
         if s in ("long", "buy"):
             if sig.obi < obi_confirm and sig.bid_wall_share < wall_confirm:

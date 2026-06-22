@@ -318,6 +318,8 @@ class RobotLoop:
                     # CVD на входе: не входим против агрессивного исполненного потока.
                     cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
                     cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
+                    # Жёсткое вето при подавляющем OBI против входа (стенка не спасает).
+                    obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
                 )
                 if not ob_ok:
                     db.add(
