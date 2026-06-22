@@ -106,8 +106,23 @@ class RobotLoop:
             .all()
         )
 
+        # ── Динамический бюджет маржи на сделку (пред-проход) ─────────────────
+        # Считаем готовых кандидатов цикла и делим свободную маржу. analyses_cache
+        # переиспользуем в основном цикле, чтобы analyze_symbol не считался дважды.
+        dyn_alloc = bool(getattr(settings, "ENABLE_DYNAMIC_MARGIN_ALLOC", True))
+        dyn_budget = None
+        analyses_cache: dict = {}
+        if dyn_alloc:
+            try:
+                dyn_budget, analyses_cache, _dyn_ready, _dyn_free = self._compute_dynamic_budget(db, bot, balance_usdt)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[DYNAMIC MARGIN ERROR] {exc}")
+                dyn_budget, analyses_cache = None, {}
+
         for symbol in bot.config_json.get("symbols", []):
-            result = self.intelligence.analyze_symbol(symbol)
+            result = analyses_cache[symbol] if symbol in analyses_cache else self.intelligence.analyze_symbol(symbol)
+            if result is None:
+                continue
 
             if result.action == "hold":
                 continue
@@ -336,6 +351,10 @@ class RobotLoop:
                     db.flush()
                     continue
 
+            # Динамический бюджет применяем к ТРЕНДОВЫМ позициям (не range/scalp/crt —
+            # у них свой малый scalp-сайзинг). Кандидат один → весь free; несколько →
+            # поровну. None → старый %-сайзинг.
+            _pos_margin_cap = dyn_budget if (dyn_alloc and dyn_budget and not is_range) else None
             plan = self.trade_plan_builder.build_plan(
                 symbol=symbol,
                 side=result.action,
@@ -345,6 +364,7 @@ class RobotLoop:
                 tp2=tp2,
                 balance_usdt=balance_usdt,
                 scalp=is_range,
+                position_margin_usdt_cap=_pos_margin_cap,
             )
 
             if not plan.is_valid:
@@ -559,7 +579,16 @@ class RobotLoop:
                     min_net_rr_tp1=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP1", 0.40) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 0.40)),
                     min_net_rr_tp2=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP2", 0.85) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 0.85)),
                     min_expected_edge_after_costs_usdt=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.0) if is_range else getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.80)),
-                    max_position_margin_pct=float(getattr(settings, "SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 20.0) if is_range else getattr(settings, "ANTI_DRAIN_POSITION_MAX_MARGIN_PCT", 35.0)),
+                    # Динамический бюджет ВЛАДЕЕТ пер-позишн размером: одинокий
+                    # кандидат может занять всю free (до 70%), поэтому пер-позишн
+                    # кап поднимаем до общего потолка — иначе anti-drain срежет его
+                    # как blocked_position_margin_limit. Сумму по-прежнему держит
+                    # общий max_used_margin_pct (70%).
+                    max_position_margin_pct=(
+                        float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))
+                        if (dyn_alloc and dyn_budget and not is_range)
+                        else float(getattr(settings, "SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT", 20.0) if is_range else getattr(settings, "ANTI_DRAIN_POSITION_MAX_MARGIN_PCT", 35.0))
+                    ),
                     max_used_margin_pct=float(getattr(settings, "ANTI_DRAIN_MAX_USED_MARGIN_PCT", 30.0) if is_range else getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0)),
                     max_open_positions=int(getattr(settings, "ANTI_DRAIN_MAX_OPEN_POSITIONS", 2)),
                     max_active_signals_per_symbol=int(getattr(settings, "ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL", 1)),
@@ -881,6 +910,97 @@ class RobotLoop:
                 "net_pnl_stop": plan.net_pnl_stop,
             },
         }
+
+    # ── Динамическое распределение маржи по кандидатам цикла ──────────────────
+    def _ready_candidate_check(self, db, bot, symbol, result, balance_usdt) -> bool:
+        """Size-INDEPENDENT предикат: прошёл бы кандидат гейты (без маржевых).
+        Без side-effects — только для ПОДСЧЁТА конкурентов за маржу. Маржевые
+        гейты (exposure/anti-drain) опускаем: их удовлетворяет сам дележ. Лучше
+        чуть пере-считать (консервативно — меньше бюджет на сделку), чем недосчитать.
+        Любая ошибка → не считаем (fail-safe)."""
+        try:
+            if result is None or result.action == "hold" or result.setup_decision != "approve":
+                return False
+            is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
+            if result.action == "short" and not settings.ALLOW_SHORTS and not is_range:
+                return False
+            if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)) and bool(getattr(settings, "OB_GATE_ENTRIES", True)):
+                ob_snap = ORDERBOOK_STORE.snapshot(symbol)
+                if ob_snap and ob_snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
+                    ob_snap = None
+                ob_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+                _is_position = str(result.regime or "").lower() not in ("range", "scalp")
+                _max_spread = float(getattr(settings, "OB_POSITION_MAX_SPREAD_PCT" if _is_position else "OB_MAX_SPREAD_PCT", 0.20 if _is_position else 0.08))
+                ob_ok, _ = OrderBookAnalyzer.entry_gate(
+                    result.action, ob_sig, max_spread_pct=_max_spread,
+                    obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
+                    wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
+                    cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
+                    cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
+                    obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
+                )
+                if not ob_ok:
+                    return False
+            entry_from = float(result.entry_zone[0]); entry_to = float(result.entry_zone[1])
+            entry_mid = (entry_from + entry_to) / 2.0
+            try:
+                entry_price = float(self.trade_plan_builder.htx.price_to_precision(symbol, entry_mid))
+            except Exception:
+                entry_price = entry_mid
+            stop = float(result.stop_price); tp1 = float(result.tp["tp1"]); tp2 = float(result.tp["tp2"])
+            plan = self.trade_plan_builder.build_plan(
+                symbol=symbol, side=result.action, entry_price=entry_price,
+                stop_price=stop, tp1=tp1, tp2=tp2, balance_usdt=balance_usdt, scalp=is_range,
+            )
+            if not plan.is_valid:
+                return False
+            if not is_range:
+                sq = result.setup_quality if isinstance(result.setup_quality, dict) else {}
+                eff = self._intelligence_effective_confidence(result)
+                grade = self.quality.grade(
+                    confidence=result.confidence_hint, rationale=f"intelligence_{result.reason}",
+                    regime=result.regime, setup_score=sq.get("final_score"), effective_confidence=eff,
+                )
+                if not self.quality.should_publish_to_clients(
+                    grade=grade, setup_score=sq.get("final_score"), effective_confidence=eff,
+                    setup_decision=result.setup_decision, setup_quality=sq,
+                ):
+                    return False
+                pd = self.production_gate.check(
+                    grade=grade, setup_score=sq.get("final_score"), effective_confidence=eff,
+                    net_rr_tp1=plan.net_rr_tp1, net_rr_tp2=plan.net_rr_tp2, priority_score=100.0,
+                )
+                if not pd.allowed:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _compute_dynamic_budget(self, db, bot, balance_usdt):
+        """Пред-проход: кэшируем анализ символов, считаем готовых кандидатов и
+        делим свободную маржу. Возвращает (budget_usdt|None, analyses_cache, ready, free)."""
+        analyses: dict = {}
+        ready = 0
+        for symbol in bot.config_json.get("symbols", []):
+            try:
+                result = self.intelligence.analyze_symbol(symbol)
+            except Exception:
+                result = None
+            analyses[symbol] = result
+            if result is not None and self._ready_candidate_check(db, bot, symbol, result, balance_usdt):
+                ready += 1
+        equity = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
+        used_pct = float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))
+        ceiling = equity * used_pct / 100.0
+        try:
+            used = float(self.exposure_guard.used_margin(db, bot.id) or 0.0)
+        except Exception:
+            used = 0.0
+        free = max(0.0, ceiling - used)
+        from services.margin_allocator import per_trade_margin
+        cap = float(getattr(settings, "DYNAMIC_MARGIN_CAP_PCT_OF_FREE", 1.0))
+        budget = per_trade_margin(free, ready, cap_pct_of_free=cap) if ready > 0 else None
+        return budget, analyses, ready, free
 
     async def _publish_new_signal_safely(
         self,

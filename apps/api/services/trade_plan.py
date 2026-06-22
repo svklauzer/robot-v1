@@ -48,6 +48,7 @@ class TradePlanBuilder:
         risk_pct: float | None = None,
         leverage: int | None = None,
         scalp: bool = False,
+        position_margin_usdt_cap: float | None = None,
     ) -> TradePlan:
         risk_pct_value = risk_pct if risk_pct is not None else settings.RISK_PER_TRADE_PCT
 
@@ -99,11 +100,17 @@ class TradePlanBuilder:
 
         # Дополнительный предохранитель: не даём одной сделке занимать
         # слишком большую долю капитала/маржи.
-        if scalp:
-            max_position_margin_pct = float(getattr(settings, "SCALP_MAX_POSITION_MARGIN_PCT", 0.10))
+        # Динамический бюджет (position_margin_usdt_cap) ЗАМЕЩАЕТ статический %-кап:
+        # robot_loop передаёт сюда долю свободной маржи цикла (free/N или всю free,
+        # если кандидат один). Если не передан — старая логика по %.
+        if position_margin_usdt_cap is not None and float(position_margin_usdt_cap) > 0:
+            max_position_margin_usdt = float(position_margin_usdt_cap)
         else:
-            max_position_margin_pct = float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.35))
-        max_position_margin_usdt = balance_usdt * max(0.01, min(max_position_margin_pct, 1.0))
+            if scalp:
+                max_position_margin_pct = float(getattr(settings, "SCALP_MAX_POSITION_MARGIN_PCT", 0.10))
+            else:
+                max_position_margin_pct = float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.35))
+            max_position_margin_usdt = balance_usdt * max(0.01, min(max_position_margin_pct, 1.0))
         max_position_notional = max_position_margin_usdt * leverage_value
         qty_by_position_cap = max_position_notional / entry_price
 
