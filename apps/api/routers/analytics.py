@@ -177,11 +177,19 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
 
 
 @router.get("/symbol-performance", dependencies=[Depends(require_owner_action)])
-def analytics_symbol_performance(lookback: int = 12):
+def analytics_symbol_performance(lookback: int = 12, window_hours: float | None = None):
     db = SessionLocal()
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
-        return SymbolPerformanceSummaryService().summarize(db, bot=bot, lookback=lookback)
+        # Витрина шире живого окна (24ч): по умолчанию SYMBOL_PERF_SUMMARY_WINDOW_HOURS
+        # (30 дней), чтобы оператор видел историю, а не пустые no_history. На решения
+        # публикации НЕ влияет — это отдельный read-only вызов.
+        wh = window_hours if window_hours is not None else float(
+            getattr(settings, "SYMBOL_PERF_SUMMARY_WINDOW_HOURS", 720.0)
+        )
+        return SymbolPerformanceSummaryService().summarize(
+            db, bot=bot, lookback=lookback, window_hours=wh,
+        )
     finally:
         db.close()
 

@@ -28,6 +28,7 @@ class SymbolPerformanceSummaryService:
         bot: Bot | None = None,
         symbols: list[str] | None = None,
         lookback: int = 12,
+        window_hours: float | None = None,
     ) -> dict[str, Any]:
         lookback = min(max(int(lookback or 12), 1), 100)
         resolved_symbols = self._resolve_symbols(db=db, bot=bot, symbols=symbols)
@@ -35,7 +36,9 @@ class SymbolPerformanceSummaryService:
 
         items: list[dict[str, Any]] = []
         for symbol in resolved_symbols:
-            decision = self.guard.analyze(db=db, bot_id=bot_id, symbol=symbol, lookback=lookback)
+            decision = self.guard.analyze(
+                db=db, bot_id=bot_id, symbol=symbol, lookback=lookback, window_hours=window_hours,
+            )
             payload = self.guard.to_dict(decision)
             payload["classification"] = self.guard.classification(payload)
             payload["policy_profile"] = self.guard.policy_profile(payload)
@@ -56,6 +59,7 @@ class SymbolPerformanceSummaryService:
         return {
             "status": "ok",
             "lookback": lookback,
+            "window_hours": window_hours,
             "symbols_count": len(items),
             "blocked_count": by_class.get("blocked", 0),
             "reduced_count": by_class.get("reduced", 0),

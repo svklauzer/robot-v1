@@ -124,7 +124,10 @@ export default function AnalyticsPage() {
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-semibold text-yellow-200">Per-symbol profitability guard</h2>
-              <p className="text-sm text-yellow-100/60">Roadmap P1: какие монеты блокируются или идут с пониженным риском.</p>
+              <p className="text-sm text-yellow-100/60">
+                История по символам за {symbolPerf?.window_hours ? `${Math.round(symbolPerf.window_hours / 24)} дн.` : "30 дн."} (витрина).
+                «no_history» = нет закрытий в окне; живой guard судит по 24ч. Решения публикации тут НЕ меняются.
+              </p>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center text-sm">
               <div className="rounded-lg border border-red-900/50 px-3 py-2 text-red-200">Blocked<br />{symbolPerf?.blocked_count ?? 0}</div>
@@ -142,7 +145,8 @@ export default function AnalyticsPage() {
                     {item.classification}
                   </span>
                 </div>
-                <Metric label="Reason" value={item.reason} />
+                <Metric label="Reason" value={symbolReasonLabel(item.reason)} />
+                <Metric label="Closed (окно)" value={item.closed_count ?? 0} />
                 <Metric label="Risk x" value={item.risk_multiplier} />
                 <Metric label="Net PnL" value={`${item.total_net_pnl} USDT`} />
                 <Metric label="Failed setup" value={item.failed_setup_count} />
@@ -194,6 +198,23 @@ export default function AnalyticsPage() {
         </section>
     </AppShell>
   );
+}
+
+const SYMBOL_REASON_LABELS: Record<string, string> = {
+  no_history: "нет закрытий в окне",
+  small_history_ok: "мало истории — ок",
+  small_history_last_stop_reduce_risk: "после стопа — риск снижен",
+  symbol_near_breakeven_mild_reduce: "около безубытка — лёгкое снижение",
+  symbol_gives_back_profit_reduce_risk: "отдаёт прибыль — риск снижен",
+  symbol_negative_expectancy_blocked: "отрицательное ожидание — блок",
+  symbol_cooldown_losing_streak: "серия убытков — cooldown",
+  symbol_cooldown_failed_setup_streak: "серия failed setup — cooldown",
+  ok: "ок",
+};
+
+function symbolReasonLabel(code: any): string {
+  const key = String(code || "");
+  return SYMBOL_REASON_LABELS[key] || key || "-";
 }
 
 function Panel({ title, icon, children }: { title: string; icon: any; children: any }) {
