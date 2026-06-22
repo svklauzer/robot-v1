@@ -723,9 +723,11 @@ class MarketIntelligenceEngine:
         # TP2 всегда дальше TP1 (страховка от инверсии при узком risk).
         tp2 = max(tp2, round(tp1 * (1 + 0.004), 4))
 
-        # Volume Profile: не целимся сквозь HVN — цели у ближней стороны узлов.
+        # Volume Profile: не целимся сквозь HVN — но ТОЛЬКО для TP2 (runner).
+        # TP1 НЕ ужимаем: телеметрия показывает net_rr_tp1 уже слабое место
+        # (часто 0.16–0.6), тянуть TP1 ближе = добивать и без того кривое RR.
+        # TP1 = достижимая структура из _reachable_tp1, её не трогаем.
         if vp:
-            tp1 = round(self._vp_cap_tp_long(tp1, last, vp), 6)
             tp2 = round(self._vp_cap_tp_long(tp2, last, vp), 6)
             tp2 = max(tp2, round(tp1 * (1 + 0.004), 6))   # порядок TP2>TP1 сохраняем
 
@@ -826,9 +828,9 @@ class MarketIntelligenceEngine:
         # TP2 всегда дальше TP1 вниз (страховка от инверсии при узком risk).
         tp2 = min(tp2, round(tp1 * (1 - 0.004), 4))
 
-        # Volume Profile: не целимся сквозь HVN — цели у ближней стороны узлов.
+        # Volume Profile: не целимся сквозь HVN — но ТОЛЬКО для TP2 (runner).
+        # TP1 НЕ ужимаем (net_rr_tp1 уже слабое место по телеметрии).
         if vp:
-            tp1 = round(self._vp_cap_tp_short(tp1, last, vp), 6)
             tp2 = round(self._vp_cap_tp_short(tp2, last, vp), 6)
             tp2 = min(tp2, round(tp1 * (1 - 0.004), 6))   # порядок TP2<TP1 сохраняем
 
