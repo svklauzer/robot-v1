@@ -1499,6 +1499,22 @@ class MarketIntelligenceEngine:
                     decision = "wait"
                     comment = "trend_exhaustion_long_into_resistance"
 
+        # (#timing-veto) Купируем вход в микро-разворот. Аудит: лосеры шли +0.2%
+        # и разворачивались — вход в ВЕРШИНУ (long) / ДНО (short) на исполнительном
+        # ТФ. entry_timing считался, но аппрув его НЕ гейтил. Теперь: если 5m
+        # истощён ПРОТИВ сделки (overheated для long / oversold для short), а 1m НЕ
+        # подтверждает продолжение — ждём (не покупаем вершину, не шортим дно).
+        # 1m, подтверждающий импульс, оставляет вход (настоящее продолжение).
+        if bool(getattr(settings, "ENTRY_TIMING_VETO_ENABLED", True)) and decision == "approve":
+            _m5_mom = self._ctx_value(m5, "momentum")
+            _m1_mom = self._ctx_value(m1, "momentum")
+            if action == "long" and _m5_mom == "overheated" and _m1_mom != "bullish":
+                decision = "wait"
+                comment = "entry_timing_buying_top"
+            elif action == "short" and _m5_mom == "oversold" and _m1_mom != "bearish":
+                decision = "wait"
+                comment = "entry_timing_shorting_bottom"
+
         return {
             "trend_alignment": round(trend_alignment, 2),
             "entry_timing": round(entry_timing, 2),
