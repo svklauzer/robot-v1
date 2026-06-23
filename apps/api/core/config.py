@@ -403,8 +403,9 @@ class Settings(BaseSettings):
     # (#9) Снижено 0.55→0.20: TP1 теперь стоит на ДОСТИЖИМОЙ встречной структуре
     # (точка частичной фиксации + перевод в безубыток), а НЕ основная награда —
     # награда контролируется по TP2 (economics_use_tp2=True, min_net_rr_tp2).
-    # При прежних 0.55 близкий TP1 резался бы blocked_low_net_rr_tp1.
-    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.20
+    # Софт 0.20→0.10 заодно с production_gate: anti-drain не должен возвращать
+    # гейт на TP1 после того, как мы перенесли экономику на TP2.
+    ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.10
     ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # реальный гейт награды — на TP2
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
@@ -432,11 +433,13 @@ class Settings(BaseSettings):
     PROD_GATE_A_PLUS_MIN_SETUP: float = 76.0
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 68.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95     # live
-    # (#9-fix) Было 0.80→0.25 ради накопления данных. Телеметрия (17 закрытых,
-    # winrate 29%, net -19.5) показала: сделки с net_rr_tp1 0.2–0.45 — это
-    # перевёрнутый RR (на TP1 копейки, на стопе -4..-5), главный источник слива.
-    # Единый RR_tp1-пол 0.50 для всех грейдов: меньше сделок, но без инверсии RR.
-    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.50   # spot 0.2% paper (RR-пол)
+    # TP1 = точка частичной фиксации/перевода в безубыток, BY DESIGN близкая →
+    # net_rr_tp1 мал. Пол 0.50 резал сетапы с отличным TP2 (RR 2.5+), но «крошечным»
+    # TP1 (массовые b_rr_tp1_too_low по AVAX/BTC/ETH/XRP при net_rr_tp2 2.5–2.7).
+    # Софт-пол 0.10 (только санити против вырожденного TP1≈entry). ЭКОНОМИКУ судит
+    # TP2: production_gate min_rr_tp2 (1.30–1.45, «живой» и в paper) + anti-drain
+    # economics_use_tp2 (net_pnl_tp2 ≥ |стоп|+edge). Инверсия RR прикрыта именно TP2.
+    PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.10   # санити, не гейт
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45     # live
     PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.15   # spot 0.2% paper
 
@@ -444,7 +447,7 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_SETUP: float = 65.0
     PROD_GATE_A_MIN_CONFIDENCE: float = 62.0
     PROD_GATE_A_MIN_RR_TP1: float = 0.90          # live
-    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.50    # RR-пол (был 0.22), см. A+ выше
+    PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.10    # санити, не гейт (см. A+ выше)
     PROD_GATE_A_MIN_RR_TP2: float = 1.35          # live
     PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.05    # spot 0.2% paper
 
@@ -452,7 +455,7 @@ class Settings(BaseSettings):
     PROD_GATE_B_MIN_SETUP: float = 58.0
     PROD_GATE_B_MIN_CONFIDENCE: float = 60.0
     PROD_GATE_B_MIN_RR_TP1: float = 0.85          # live
-    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.50    # RR-пол (был 0.20), см. A+ выше
+    PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.10    # санити, не гейт (см. A+ выше)
     PROD_GATE_B_MIN_RR_TP2: float = 1.30          # live
     PROD_GATE_B_MIN_RR_TP2_PAPER: float = 0.85    # spot 0.2% paper
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
