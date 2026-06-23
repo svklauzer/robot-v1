@@ -269,9 +269,13 @@ class Settings(BaseSettings):
     # скальп. Эти параметры применяются ТОЛЬКО к range/scalp-входам; тренд
     # продолжает жить на строгих глобальных порогах.
     SCALP_MAX_POSITION_MARGIN_PCT: float = 0.10        # доля эквити на одну скальп-позицию
-    SCALP_MIN_NET_PNL_TP1_USDT: float = 0.5            # абсолютный минимум net TP1 (USDT)
-    SCALP_MIN_NET_PNL_TP2_USDT: float = 1.0            # абсолютный минимум net TP2 (USDT)
-    SCALP_MIN_NET_RR_TP2: float = 1.0                  # min RR до TP2 в плане (тренд: 1.2)
+    # Экономика скальпа: $ маленькие BY DESIGN (цель 0.4%, размер ~100 → TP1 ≈$0.40,
+    # TP2 ≈$0.89). Прежние $-флоры (TP1 0.5 / TP2 1.0) рубили КАЖДЫЙ скальп
+    # (tp1_net_pnl_below_min_usdt). Софт: TP1 0.20, TP2 0.55 — реальный гейт это
+    # net_rr_tp2 (runner платит >1.10× стопа). Как у тренда: судим по TP2, не по TP1.
+    SCALP_MIN_NET_PNL_TP1_USDT: float = 0.20           # санити, не гейт
+    SCALP_MIN_NET_PNL_TP2_USDT: float = 0.55           # санити, не гейт
+    SCALP_MIN_NET_RR_TP2: float = 1.10                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
     SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 20.0   # маржевый лимит anti-drain для скальпа
     SCALP_ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.40

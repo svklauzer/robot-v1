@@ -602,7 +602,12 @@ class RobotLoop:
                     # RSI 77–88 → −17.5 при развороте). Тренд берём на откатах.
                     block_long_overheated=True,
                     block_short_oversold=True,
-                    economics_use_tp2=bool(not is_range),
+                    # Экономику судим по TP2 (runner) для ВСЕХ профилей: TP1 = точка
+                    # де-риска, она BY DESIGN < стопа (особенно у скальпа: TP1 0.40 <
+                    # стоп 0.65). Раньше is_range судился по TP1 → каждый скальп падал
+                    # blocked_bad_trade_economics даже после софта $-флоров. Награда
+                    # везде на TP2 → его и судим.
+                    economics_use_tp2=True,
                 )
                 anti_allowed, anti_reason = should_open_signal(
                     {
