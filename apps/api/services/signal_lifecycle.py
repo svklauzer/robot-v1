@@ -591,6 +591,24 @@ class SignalLifecycleManager:
             entry_price = float(position.entry_price) if position else entry_from
             lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
 
+            # ХАРД-СТОП после TP1. Раньше в этой ветке НЕ было явной проверки стопа
+            # (только в "opened"), поэтому позиция, прошедшая TP1, при развороте цены
+            # сквозь breakeven-стоп ЗАВИСАЛА open: выход зависел лишь от трейлинга
+            # after_tp1_decision, и если тот не срабатывал — mark замораживался на
+            # стопе (SOL #96: реальная цена 69.5, а позиция «висела» +1.26 по стопу
+            # 73.74). Теперь breakeven/стоп закрывает позицию явно — фиксируем
+            # защищённую прибыль (или безубыток), цена закрытия = уровень стопа.
+            if self._hit_stop(side, price, stop):
+                exit_price = self._stop_exit_price(stop)
+                await self._close_signal(
+                    db,
+                    signal,
+                    exit_price=exit_price,
+                    fallback_result_pct=self._result_pct(side, entry_price, exit_price),
+                    reason="breakeven_stop",
+                )
+                return
+
             if self._hit_tp(side, price, tp2):
                 exit_price = self._tp_exit_price(tp2)
 
@@ -1366,6 +1384,24 @@ class SignalLifecycleManager:
             position = self._get_open_position_for_signal(db, signal)
             entry_price = float(position.entry_price) if position else entry_from
             lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
+
+            # ХАРД-СТОП после TP1. Раньше в этой ветке НЕ было явной проверки стопа
+            # (только в "opened"), поэтому позиция, прошедшая TP1, при развороте цены
+            # сквозь breakeven-стоп ЗАВИСАЛА open: выход зависел лишь от трейлинга
+            # after_tp1_decision, и если тот не срабатывал — mark замораживался на
+            # стопе (SOL #96: реальная цена 69.5, а позиция «висела» +1.26 по стопу
+            # 73.74). Теперь breakeven/стоп закрывает позицию явно — фиксируем
+            # защищённую прибыль (или безубыток), цена закрытия = уровень стопа.
+            if self._hit_stop(side, price, stop):
+                exit_price = self._stop_exit_price(stop)
+                await self._close_signal(
+                    db,
+                    signal,
+                    exit_price=exit_price,
+                    fallback_result_pct=self._result_pct(side, entry_price, exit_price),
+                    reason="breakeven_stop",
+                )
+                return
 
             if self._hit_tp(side, price, tp2):
                 exit_price = self._tp_exit_price(tp2)

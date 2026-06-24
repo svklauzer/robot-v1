@@ -238,16 +238,33 @@ function VPHistogram({ vp }: { vp: any }) {
   const bins: any[] = vp.profile || [];
   if (!bins.length) return null;
   const maxv = Math.max(...bins.map((b) => b.vol_pct), 0.001);
-  const tol = (vp.vah - vp.val) / (bins.length || 1) / 2;
+  const price = vp.price != null ? Number(vp.price) : null;
+  // Бин, БЛИЖАЙШИЙ к текущей цене (argmin). Раньше брали допуск из ширины VA —
+  // он уже ширины бина, поэтому маркер цены не попадал ни в один бин и не рисовался.
+  let priceIdx = -1;
+  if (price != null && Number.isFinite(price)) {
+    let best = Infinity;
+    bins.forEach((b, i) => {
+      const d = Math.abs(Number(b.price) - price);
+      if (d < best) { best = d; priceIdx = i; }
+    });
+  }
+  const lo = Number(bins[0].price), hi = Number(bins[bins.length - 1].price);
+  const priceBelow = price != null && price < lo;
+  const priceAbove = price != null && price > hi;
+  const pf = (v: number) => fmt(v, v >= 100 ? 2 : 5);
   // сверху вниз = от высокой цены к низкой (как в стакане)
-  const rows = [...bins].reverse();
+  const rows = bins.map((b, i) => ({ b, i })).reverse();
   return (
     <div className="rounded-xl border border-emerald-900 bg-black/20 p-3">
+      {priceAbove && price != null && (
+        <div className="mb-1 text-center text-[10px] font-bold text-cyan-300">◄ цена {pf(price)} ВЫШE профиля</div>
+      )}
       <div className="flex flex-col gap-[1px]">
-        {rows.map((b, i) => {
+        {rows.map(({ b, i }) => {
           const isVpoc = Math.abs(b.price - vp.vpoc) < 1e-9;
           const inVA = b.price >= vp.val && b.price <= vp.vah;
-          const nearPrice = vp.price != null && Math.abs(b.price - vp.price) <= tol;
+          const nearPrice = i === priceIdx && !priceBelow && !priceAbove;
           const w = Math.max(1.5, (b.vol_pct / maxv) * 100);
           return (
             <div key={i} className="flex items-center gap-2">
@@ -264,6 +281,9 @@ function VPHistogram({ vp }: { vp: any }) {
           );
         })}
       </div>
+      {priceBelow && price != null && (
+        <div className="mt-1 text-center text-[10px] font-bold text-cyan-300">◄ цена {pf(price)} НИЖE профиля</div>
+      )}
       <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-emerald-100/45">
         <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-yellow-400" /> VPOC</span>
         <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" /> value area (~70%)</span>
