@@ -88,6 +88,11 @@ async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
     ws_url = str(getattr(settings, "OB_WS_URL", "wss://api-aws.huobi.pro/ws"))
     sym_map = {_ws_symbol(s): s for s in symbols}
     backoff = 2.0
+    # Watchdog: HTX шлёт ping/данные часто; тишина дольше этого = «мёртвый» сокет
+    # (бывает без close-frame → ConnectionClosedError). Проактивно реконнектимся.
+    read_timeout = float(getattr(settings, "OB_WS_READ_TIMEOUT_SEC", 30.0))
+    # Ожидаемые разрывы соединения (реконнект) — это НЕ ошибка приложения.
+    _Closed = getattr(websockets, "ConnectionClosed", ())
 
     while enabled_fn():
         try:
@@ -98,8 +103,12 @@ async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
                 log_event(logger, 20, "ob_feed_connected", url=ws_url, symbols=len(sym_map))
                 backoff = 2.0
 
-                async for raw in ws:
-                    if not enabled_fn():
+                while enabled_fn():
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=read_timeout)
+                    except asyncio.TimeoutError:
+                        # тишина дольше read_timeout → сокет завис, реконнект
+                        log_event(logger, 30, "ob_feed_stale_reconnect", timeout_sec=read_timeout)
                         break
                     try:
                         data = gzip.decompress(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode()
@@ -133,7 +142,10 @@ async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
 
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except _Closed as exc:  # ОЖИДАЕМЫЙ транзиент: HTX закрыл сокет → быстрый реконнект
+            log_event(logger, 30, "ob_feed_reconnect", error_type=type(exc).__name__, error=str(exc))
+            await asyncio.sleep(2.0)
+        except Exception as exc:  # noqa: BLE001 — НАСТОЯЩАЯ ошибка: backoff + ERROR
             log_event(logger, 40, "ob_feed_error", error_type=type(exc).__name__, error=str(exc))
             await asyncio.sleep(min(backoff, 30.0))
             backoff = min(backoff * 2.0, 30.0)
