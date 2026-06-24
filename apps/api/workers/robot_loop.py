@@ -112,12 +112,13 @@ class RobotLoop:
         dyn_alloc = bool(getattr(settings, "ENABLE_DYNAMIC_MARGIN_ALLOC", True))
         dyn_budget = None
         analyses_cache: dict = {}
+        _dyn_free = 0.0
         if dyn_alloc:
             try:
                 dyn_budget, analyses_cache, _dyn_ready, _dyn_free = self._compute_dynamic_budget(db, bot, balance_usdt)
             except Exception as exc:  # noqa: BLE001
                 print(f"[DYNAMIC MARGIN ERROR] {exc}")
-                dyn_budget, analyses_cache = None, {}
+                dyn_budget, analyses_cache, _dyn_free = None, {}, 0.0
 
         for symbol in bot.config_json.get("symbols", []):
             result = analyses_cache[symbol] if symbol in analyses_cache else self.intelligence.analyze_symbol(symbol)
@@ -355,6 +356,13 @@ class RobotLoop:
             # у них свой малый scalp-сайзинг). Кандидат один → весь free; несколько →
             # поровну. None → старый %-сайзинг.
             _pos_margin_cap = dyn_budget if (dyn_alloc and dyn_budget and not is_range) else None
+            # (б) Грейд-кап на одинокого кандидата: «берёт всю свободную маржу» — только
+            # A/A+. Слабый B не должен получать весь free (TRX #101 B → 430 маржи → -5.7).
+            # B капаем долей free (DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE).
+            if _pos_margin_cap and str(grade).upper() not in ("A", "A+"):
+                _b_cap = float(_dyn_free) * float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
+                if _b_cap > 0:
+                    _pos_margin_cap = min(_pos_margin_cap, _b_cap)
             plan = self.trade_plan_builder.build_plan(
                 symbol=symbol,
                 side=result.action,
@@ -368,6 +376,11 @@ class RobotLoop:
             )
 
             if not plan.is_valid:
+                # (а) Тихий скип: при динамическом сплите низкая свободная маржа даёт
+                # qty ниже биржевого минимума — это «нет места», а не брак сетапа.
+                # Не засоряем ленту rejected-событиями и алертами.
+                if str(plan.reject_reason or "") == "qty_below_exchange_min_amount":
+                    continue
                 if self._should_send_plan_reject_alert(db, symbol, str(plan.reject_reason or "unknown")):
                     await self.broadcast.send_owner_alert(
                         "INTELLIGENCE TRADE PLAN REJECTED",
