@@ -103,6 +103,26 @@ def compute_grid(anchor: float, atr: float, regime: str, *, lines: int,
     return [asdict(x) for x in out]
 
 
+def respace_levels(unfilled: list[dict], base_price: float, atr: float, side: str,
+                   k_vol: float, m_step: float) -> list[dict]:
+    """Пере-разложить НЕисполненные уровни одной стороны под текущий ATR/якорь.
+
+    Объёмы (мартингейл) и номера n сохраняются — двигаются только цены/дистанции.
+    base_price: якорь (самый глубокий исполненный уровень стороны или текущая цена).
+    Лестница: cum += ATR·k_vol·m_step^(i-1), price = base ∓ cum (buy вниз / sell вверх).
+    """
+    out: list[dict] = []
+    cum = 0.0
+    for i, lv in enumerate(unfilled, start=1):
+        cum += atr * k_vol * (m_step ** (i - 1))
+        price = base_price - cum if side == "buy" else base_price + cum
+        nlv = dict(lv)
+        nlv["price"] = round(price, 10)
+        nlv["distance_pct"] = round(cum / base_price * 100, 4) if base_price else 0.0
+        out.append(nlv)
+    return out
+
+
 # ── позиция/безубыток/TP/SL по ИСПОЛНЕННЫМ уровням ───────────────────────────
 def position_state(filled: list[dict], fee_round_pct: float = 0.0) -> dict:
     """Средняя цена и нетто-направление по исполненным уровням.

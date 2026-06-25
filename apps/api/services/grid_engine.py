@@ -58,6 +58,31 @@ class GridEngine:
         equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
 
+    def _fresh_market(self, symbol: str):
+        """Живые индикаторы + регайм + ATR по grid-ТФ. None при нехватке данных."""
+        try:
+            ema_p = int(getattr(settings, "GRID_EMA_PERIOD", 200))
+            limit = max(ema_p + 60, 260)
+            df = self.market.ohlcv(symbol, timeframe=str(getattr(settings, "GRID_TIMEFRAME", "1h")), limit=limit)
+            if df is None or len(df) < ema_p:
+                return None
+            ind = gc.compute_indicators(
+                df, ema_period=ema_p,
+                rsi_period=int(getattr(settings, "GRID_RSI_PERIOD", 14)),
+                atr_period=int(getattr(settings, "GRID_ATR_PERIOD", 14)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[GRID INDICATORS] {symbol}: {exc}")
+            return None
+        atr = float(ind.get("atr") or 0.0)
+        if atr <= 0:
+            return None
+        regime = gc.detect_regime(
+            ind, float(getattr(settings, "GRID_RSI_HIGH", 70.0)),
+            float(getattr(settings, "GRID_RSI_LOW", 30.0)),
+        )
+        return regime, atr, ind
+
     # ── публичный тик ─────────────────────────────────────────────────────────
     def tick_all(self) -> dict:
         if not self.store.is_enabled():
@@ -82,8 +107,98 @@ class GridEngine:
             self._maybe_open(symbol, price)
             return
 
+        # Адаптация к живому рынку ДО филлов: пере-раскладка пустых уровней под
+        # текущий ATR/дрейф и разворот направления при смене регайма.
+        if bool(getattr(settings, "GRID_ADAPT_ENABLED", True)):
+            if self._adapt(cyc, symbol, price) == "flipped":
+                self._maybe_open(symbol, price)  # сразу открываем в новом направлении
+                return
+            cyc = self.store.get_cycle(symbol)   # перечитать после возможной записи
+            if cyc is None:
+                return
+
         self._process_fills(cyc, symbol, price)
         self._check_exits(cyc, symbol, price)
+
+    # ── адаптация открытого цикла к живому рынку ──────────────────────────────
+    def _adapt(self, cyc: dict, symbol: str, price: float) -> str:
+        """Переоценка цикла по живым EMA200/RSI/ATR.
+
+        Возвращает "flipped" если корзина закрыта под разворот (вызывающий
+        откроет новый цикл), иначе "kept". Исполненные уровни не трогаются.
+        """
+        fm = self._fresh_market(symbol)
+        if not fm:
+            return "kept"
+        regime_now, atr, ind = fm
+        cyc["atr"] = atr
+        cyc["ind"] = {"ema": round(ind["ema"], 6), "rsi": round(ind["rsi"], 2)}
+        cyc["regime_now"] = regime_now
+        cyc["adapted_at"] = _now()
+
+        side = cyc.get("regime")  # исходное направление сетки
+        opposite = (side == "long" and regime_now == "short") or \
+                   (side == "short" and regime_now == "long")
+
+        # гистерезис разворота
+        if opposite and bool(getattr(settings, "GRID_FLIP_ON_REGIME", True)):
+            cyc["flip_streak"] = int(cyc.get("flip_streak", 0)) + 1
+        else:
+            cyc["flip_streak"] = 0
+
+        # заморозка добора на боковике (выходы продолжают работать)
+        if bool(getattr(settings, "GRID_FREEZE_ON_NEUTRAL", True)):
+            cyc["frozen"] = (regime_now == "neutral")
+
+        confirm = int(getattr(settings, "GRID_FLIP_CONFIRM_TICKS", 3))
+        if cyc["flip_streak"] >= confirm:
+            filled = [lv for lv in cyc["levels"] if lv.get("filled")]
+            unreal = gc.unrealized_pnl(filled, price) if filled else 0.0
+            self.store.close_cycle(symbol, realized=unreal, reason="grid_regime_flip", price=price)
+            print(f"[GRID FLIP] {symbol} {side}->{regime_now} streak={cyc['flip_streak']} pnl={unreal:.4f}")
+            return "flipped"
+
+        # пере-раскладка пустых уровней под текущий ATR/дрейф
+        if bool(getattr(settings, "GRID_RESPACE_ENABLED", True)):
+            if self._respace(cyc, symbol, atr):
+                self._recompute(cyc)
+
+        self.store.put_cycle(symbol, cyc)
+        return "kept"
+
+    def _respace(self, cyc: dict, symbol: str, atr: float) -> bool:
+        """Пере-разложить НЕисполненные уровни под текущий ATR. Якорь стороны —
+        самый глубокий исполненный уровень (реальная позиция). Исполненные ордера
+        и их объёмы неизменны. Возвращает True, если цены изменились."""
+        levels = cyc.get("levels", [])
+        k_vol = float(getattr(settings, "GRID_VOL_COEFF", 0.5))
+        m_step = float(getattr(settings, "GRID_STEP_MULTIPLIER", 1.1))
+        last_price = float(cyc.get("last_price") or cyc.get("anchor") or 0.0)
+        changed = False
+
+        for side in ("buy", "sell"):
+            unfilled = [lv for lv in levels if lv["side"] == side and not lv.get("filled")]
+            if not unfilled:
+                continue
+            filled_prices = [float(lv.get("fill_price") or lv["price"])
+                             for lv in levels if lv["side"] == side and lv.get("filled")]
+            if filled_prices:
+                base = min(filled_prices) if side == "buy" else max(filled_prices)
+            else:
+                base = last_price
+            if base <= 0:
+                continue
+            respaced = gc.respace_levels(unfilled, base, atr, side, k_vol, m_step)
+            by_n = {lv["n"]: lv for lv in respaced}
+            for lv in levels:
+                if lv["side"] != side or lv.get("filled") or lv["n"] not in by_n:
+                    continue
+                new_price = self._round_price(symbol, by_n[lv["n"]]["price"])
+                if new_price != lv["price"]:
+                    lv["price"] = new_price
+                    lv["distance_pct"] = by_n[lv["n"]]["distance_pct"]
+                    changed = True
+        return changed
 
     # ── открытие нового цикла ─────────────────────────────────────────────────
     def _maybe_open(self, symbol: str, price: float):
@@ -94,26 +209,10 @@ class GridEngine:
         if free < base_usdt / lev:
             return  # нет свободной маржи в кармане сетки
 
-        try:
-            limit = max(int(getattr(settings, "GRID_EMA_PERIOD", 200)) + 60, 260)
-            df = self.market.ohlcv(symbol, timeframe=str(getattr(settings, "GRID_TIMEFRAME", "1h")), limit=limit)
-            if df is None or len(df) < int(getattr(settings, "GRID_EMA_PERIOD", 200)):
-                return
-            ind = gc.compute_indicators(
-                df,
-                ema_period=int(getattr(settings, "GRID_EMA_PERIOD", 200)),
-                rsi_period=int(getattr(settings, "GRID_RSI_PERIOD", 14)),
-                atr_period=int(getattr(settings, "GRID_ATR_PERIOD", 14)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[GRID INDICATORS] {symbol}: {exc}")
+        fm = self._fresh_market(symbol)
+        if not fm:
             return
-
-        atr = float(ind.get("atr") or 0.0)
-        if atr <= 0:
-            return
-        regime = gc.detect_regime(ind, float(getattr(settings, "GRID_RSI_HIGH", 70.0)),
-                                  float(getattr(settings, "GRID_RSI_LOW", 30.0)))
+        regime, atr, ind = fm
 
         v_base_qty = base_usdt / price  # базовый объём в базовой монете
         levels = gc.compute_grid(
@@ -138,12 +237,15 @@ class GridEngine:
             "leverage": lev, "status": "active", "created_at": _now(),
             "levels": levels, "breakeven": None, "tp_price": None, "sl_price": None,
             "ind": {"ema": round(ind["ema"], 6), "rsi": round(ind["rsi"], 2)},
+            "regime_now": regime, "flip_streak": 0, "frozen": False,
         }
         self.store.put_cycle(symbol, cyc)
         print(f"[GRID OPEN] {symbol} regime={regime} anchor={price} atr={atr:.6f} levels={len(levels)}")
 
     # ── симуляция филлов (paper) ──────────────────────────────────────────────
     def _process_fills(self, cyc: dict, symbol: str, price: float):
+        if cyc.get("frozen"):
+            return  # боковик: новые уровни не добираем, ждём выхода по TP/SL
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         max_orders = int(getattr(settings, "GRID_MAX_SAFETY_ORDERS", 6))
         envelope = self._envelope()
@@ -246,6 +348,10 @@ class GridEngine:
                 "last_price": cyc.get("last_price"),
                 "position": cyc.get("position"),
                 "ind": cyc.get("ind"),
+                "regime_now": cyc.get("regime_now"),
+                "flip_streak": cyc.get("flip_streak", 0),
+                "frozen": bool(cyc.get("frozen")),
+                "adapted_at": cyc.get("adapted_at"),
                 "levels": cyc.get("levels", []),
             })
         return {**summary, "cycles": cycles, "history": self.store.history[-20:]}

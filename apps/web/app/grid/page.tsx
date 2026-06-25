@@ -154,6 +154,15 @@ export default function GridPage() {
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-bold text-emerald-200">{c.symbol}</h3>
                   <span className={`rounded-lg px-2 py-1 text-xs font-bold ${REGIME_COLOR[c.regime] || "bg-slate-600 text-white"}`}>{c.regime}</span>
+                  {c.regime_now && c.regime_now !== c.regime && (
+                    <span className={`rounded-lg px-2 py-1 text-xs font-bold ${REGIME_COLOR[c.regime_now] || "bg-slate-600 text-white"}`} title="живой регайм отличается от регайма цикла">→ {c.regime_now}</span>
+                  )}
+                  {c.frozen && (
+                    <span className="rounded-lg bg-sky-900/70 px-2 py-1 text-xs font-bold text-sky-200" title="боковик: добор уровней заморожен, выходы работают">❄ заморожен</span>
+                  )}
+                  {(c.flip_streak ?? 0) > 0 && (
+                    <span className="rounded-lg bg-amber-900/70 px-2 py-1 text-xs font-bold text-amber-200" title="тиков подряд против цикла; при достижении порога — разворот">↻ {c.flip_streak}</span>
+                  )}
                 </div>
                 <button onClick={() => closeCycle(c.symbol)} className="flex items-center gap-1 rounded-lg bg-red-800/70 px-3 py-1 text-xs hover:bg-red-700">
                   <XCircle size={14} /> закрыть
