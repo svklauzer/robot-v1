@@ -1000,11 +1000,14 @@ def list_signals(limit: int = 50, offset: int = 0):
 
 
 @app.get("/positions", dependencies=[Depends(require_owner_action)])
-def list_positions():
+def list_positions(limit: int = 500):
     db = SessionLocal()
 
     try:
-        positions = db.query(Position).order_by(Position.id.desc()).limit(50).all()
+        # Лимит поднят 50→500: на 50 фронт-сводка по позициям недосчитывала PnL/Closed
+        # и расходилась с analytics/summary. 500 покрывает всю историю paper.
+        limit = max(1, min(int(limit), 2000))
+        positions = db.query(Position).order_by(Position.id.desc()).limit(limit).all()
 
         return [
             {

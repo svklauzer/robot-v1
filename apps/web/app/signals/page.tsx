@@ -33,6 +33,7 @@ function closeReasonLabel(code: string | null | undefined): string {
 
 export default function SignalsPage() {
   const [signals, setSignals] = useState<SignalItem[]>([]);
+  const [summaryData, setSummaryData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState("all");
@@ -45,8 +46,14 @@ export default function SignalsPage() {
     setLoading(true);
 
     try {
-      const data = await apiGet("/signals?limit=100&offset=0");
+      // analytics/summary — ЕДИНЫЙ источник истины для сводных карточек (по ВСЕЙ
+      // истории). Таблица сигналов — отдельный урезанный вид (limit=100).
+      const [data, summary] = await Promise.all([
+        apiGet("/signals?limit=100&offset=0"),
+        apiGet("/analytics/summary").catch(() => null),
+      ]);
       setSignals(Array.isArray(data) ? data : data?.items || []);
+      setSummaryData(summary);
     } finally {
       setLoading(false);
     }
@@ -147,15 +154,18 @@ export default function SignalsPage() {
           </button>
         </header>
 
+        {/* Сводные карточки — из analytics/summary (вся история), единый источник
+            с Dashboard/Analytics. Фолбэк на клиентский расчёт по таблице, если summary
+            недоступен. Таблица ниже — урезанный вид (limit=100). */}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-          <Card title="Сигналов" value={stats.total} />
-          <Card title="Активные" value={stats.active} />
-          <Card title="Закрыто" value={stats.closed} />
-          <Card title="Expired" value={stats.expired} />
-          <Card title="Rejected" value={stats.rejected} />
-          <Card title="Winrate" value={`${stats.winrate}%`} />
-          <Card title="Итог %" value={`${stats.totalPct}%`} valueClass={numClass(stats.totalPct)} />
-          <Card title="Net PnL" value={`${stats.totalNet} USDT`} valueClass={numClass(stats.totalNet)} />
+          <Card title="Сигналов" value={summaryData?.total_signals ?? stats.total} />
+          <Card title="Активные" value={summaryData?.active_signals ?? stats.active} />
+          <Card title="Закрыто" value={summaryData?.closed_signals ?? stats.closed} />
+          <Card title="Expired" value={summaryData?.expired_signals ?? stats.expired} />
+          <Card title="Rejected" value={summaryData?.rejected_signals ?? stats.rejected} />
+          <Card title="Winrate" value={`${summaryData?.winrate ?? stats.winrate}%`} />
+          <Card title="Итог %" value={`${summaryData?.total_result_pct ?? stats.totalPct}%`} valueClass={numClass(summaryData?.total_result_pct ?? stats.totalPct)} />
+          <Card title="Net PnL" value={`${summaryData?.total_net_pnl_usdt != null ? Number(summaryData.total_net_pnl_usdt).toFixed(2) : stats.totalNet} USDT`} valueClass={numClass(summaryData?.total_net_pnl_usdt ?? stats.totalNet)} />
         </section>
 
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">

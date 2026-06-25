@@ -9,6 +9,7 @@ const ACTIVE_STATUSES = new Set(["open", "active", "published"]);
 
 export default function PositionsPage() {
   const [positions, setPositions] = useState<any[]>([]);
+  const [summaryData, setSummaryData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState("active");
   const [symbolFilter, setSymbolFilter] = useState("");
@@ -16,8 +17,14 @@ export default function PositionsPage() {
   async function loadPositions() {
     setLoading(true);
     try {
-      const data = await apiGet("/positions");
+      // analytics/summary — ЕДИНЫЙ источник истины по Net PnL (по всей истории,
+      // как на Dashboard/Analytics). Таблица позиций — отдельный урезанный вид.
+      const [data, summary] = await Promise.all([
+        apiGet("/positions"),
+        apiGet("/analytics/summary").catch(() => null),
+      ]);
       setPositions(Array.isArray(data) ? data : []);
+      setSummaryData(summary);
     } finally {
       setLoading(false);
     }
@@ -30,16 +37,22 @@ export default function PositionsPage() {
   const summary = useMemo(() => {
     const active = positions.filter((p) => ACTIVE_STATUSES.has(String(p.status || "").toLowerCase()));
     const closed = positions.filter((p) => String(p.status || "").toLowerCase() === "closed");
-    const netPnl = positions.reduce((sum, p) => sum + numeric(p.unrealized_pnl), 0);
+    // Реализованный Net PnL берём из analytics/summary (вся история, источник истины),
+    // а не из суммы unrealized_pnl по урезанной выборке позиций. Открытые позиции —
+    // отдельно (живой unrealized), чтобы не смешивать с реализованным.
+    const realizedNet = numeric(summaryData?.total_net_pnl_usdt);
+    const openUnrealized = active.reduce((sum, p) => sum + numeric(p.unrealized_pnl), 0);
 
     return {
       total: positions.length,
       active: active.length,
       closed: closed.length,
-      netPnl,
+      realizedNet,
+      openUnrealized,
+      hasSummary: summaryData != null,
       lastSignalId: positions[0]?.signal_id || "-",
     };
-  }, [positions]);
+  }, [positions, summaryData]);
 
   const filteredPositions = useMemo(() => {
     const query = symbolFilter.trim().toLowerCase();
@@ -80,10 +93,10 @@ export default function PositionsPage() {
       </header>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-5">
-        <SummaryCard title="Всего" value={summary.total} />
+        <SummaryCard title="Позиции (показано)" value={summary.total} />
         <SummaryCard title="Active/Open" value={summary.active} tone={summary.active > 0 ? "good" : "warn"} />
-        <SummaryCard title="Closed" value={summary.closed} />
-        <SummaryCard title="Net PnL" value={`${summary.netPnl.toFixed(4)} USDT`} tone={summary.netPnl < 0 ? "bad" : "good"} />
+        <SummaryCard title="Open unrealized" value={`${summary.openUnrealized.toFixed(2)} USDT`} tone={summary.openUnrealized < 0 ? "bad" : "good"} />
+        <SummaryCard title="Net PnL (реализ., вся история)" value={summary.hasSummary ? `${summary.realizedNet.toFixed(2)} USDT` : "—"} tone={summary.realizedNet < 0 ? "bad" : "good"} />
         <SummaryCard title="Latest signal" value={summary.lastSignalId === "-" ? "-" : `#${summary.lastSignalId}`} />
       </section>
 
