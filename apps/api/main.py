@@ -869,6 +869,19 @@ def ml_status():
     }
 
 
+@app.get("/ml/shadow-report", dependencies=[Depends(require_owner_action)])
+def ml_shadow_report():
+    """Shadow-валидация: предсказанный ml_score vs РЕАЛЬНЫЙ исход на закрытых
+    сделках. Калибровка по бакетам + live-AUC + эффект порога. На сделки НЕ влияет.
+    Пусто, пока ML_MODE=shadow не накопит закрытий с ml_score."""
+    from services.ml_shadow_report import build as _shadow_build
+    db = SessionLocal()
+    try:
+        return _shadow_build(db)
+    finally:
+        db.close()
+
+
 @app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])
 def ml_feature_analysis():
     """Дешёвый descriptive-тест: какие фичи (вкл. стакан OBI/CVD) разделяют

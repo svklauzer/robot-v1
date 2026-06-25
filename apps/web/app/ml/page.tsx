@@ -19,8 +19,16 @@ const MODE_HINT: Record<string, string> = {
   full_auto: "ML гейтит и масштабирует сделки в пределах guardrails.",
 };
 
+const SHADOW_VERDICT: Record<string, { label: string; cls: string }> = {
+  edge_visible: { label: "есть сигнал", cls: "bg-emerald-600 text-white" },
+  weak_signal: { label: "слабый сигнал", cls: "bg-yellow-500 text-black" },
+  no_edge_yet: { label: "пока нет края", cls: "bg-slate-600 text-white" },
+  insufficient_sample: { label: "мало выборки", cls: "bg-slate-700 text-white" },
+};
+
 export default function MLPage() {
   const [status, setStatus] = useState<any>(null);
+  const [shadow, setShadow] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [training, setTraining] = useState(false);
   const [trainResult, setTrainResult] = useState<any>(null);
@@ -30,7 +38,12 @@ export default function MLPage() {
     setLoading(true);
     setErr(null);
     try {
-      setStatus(await apiGet("/ml/status"));
+      const [st, sh] = await Promise.all([
+        apiGet("/ml/status"),
+        apiGet("/ml/shadow-report").catch(() => null),
+      ]);
+      setStatus(st);
+      setShadow(sh);
     } catch (e: any) {
       setErr(String(e?.message || e));
     } finally {
@@ -130,6 +143,64 @@ export default function MLPage() {
           <Row k="Мин. ml_score для входа" v={status?.min_score_to_trade ?? "—"} />
           <Row k="Множитель размера" v={status?.size_mult_range ? `${status.size_mult_range[0]}–${status.size_mult_range[1]}×` : "—"} />
         </div>
+      </div>
+
+      {/* Shadow: прогноз vs факт */}
+      <div className="mt-4 rounded-3xl border border-cyan-900/60 bg-slate-950/60 p-5">
+        <div className="flex items-center justify-between">
+          <div className="text-xs uppercase tracking-wide text-cyan-100/60">Shadow — прогноз vs факт (на сделки НЕ влияет)</div>
+          {shadow?.status === "ok" && (
+            <span className={`rounded-lg px-2 py-1 text-xs font-bold ${SHADOW_VERDICT[shadow.verdict]?.cls || "bg-slate-700 text-white"}`}>
+              {SHADOW_VERDICT[shadow.verdict]?.label || shadow.verdict}
+            </span>
+          )}
+        </div>
+
+        {shadow?.status === "ok" ? (
+          <div className="mt-3 space-y-4">
+            <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+              <Row k="Закрытых со score" v={shadow.scored_closed} />
+              <Row k="Live AUC" v={shadow.live_auc ?? "—"} highlight={shadow.live_auc != null && shadow.live_auc >= 0.55} />
+              <Row k="Базовый winrate" v={`${shadow.base_winrate_pct}%`} />
+              <Row k="Порог входа" v={shadow.threshold} />
+            </div>
+
+            <div>
+              <div className="mb-2 text-xs font-semibold text-cyan-200">Калибровка по ml_score (выше score → должен быть выше winrate)</div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[420px] text-left text-xs">
+                  <thead className="text-cyan-100/50">
+                    <tr><th className="py-1 pr-3">Диапазон score</th><th className="pr-3">N</th><th className="pr-3">Winrate</th><th className="pr-3">avg score</th><th>Net PnL</th></tr>
+                  </thead>
+                  <tbody>
+                    {(shadow.buckets || []).map((b: any, i: number) => (
+                      <tr key={i} className="border-t border-cyan-950/60">
+                        <td className="py-1 pr-3 font-mono text-cyan-100/80">{b.range}</td>
+                        <td className="pr-3">{b.count}</td>
+                        <td className={"pr-3 " + ((b.winrate_pct ?? 0) >= 50 ? "text-emerald-300" : "text-emerald-100/70")}>{b.winrate_pct == null ? "—" : `${b.winrate_pct}%`}</td>
+                        <td className="pr-3 text-cyan-100/60">{b.avg_score ?? "—"}</td>
+                        <td className={(b.net_pnl_usdt ?? 0) < 0 ? "text-red-300" : "text-emerald-300"}>{b.net_pnl_usdt}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-cyan-900/50 bg-black/30 p-3 text-xs">
+              <div className="mb-1 font-semibold text-cyan-200">Если бы full_auto резал score &lt; {shadow.threshold}</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
+                <Row k="Взято" v={`${shadow.threshold_impact?.taken_count} (wr ${shadow.threshold_impact?.taken_winrate_pct ?? "—"}%)`} />
+                <Row k="Отрезано" v={`${shadow.threshold_impact?.skipped_count} (wr ${shadow.threshold_impact?.skipped_winrate_pct ?? "—"}%)`} />
+                <Row k="Выгода гейта" v={`${shadow.threshold_impact?.ml_gate_benefit_usdt} USDT`} highlight={(shadow.threshold_impact?.ml_gate_benefit_usdt ?? 0) > 0} />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-cyan-100/60">
+            {shadow?.message || "Нет данных. Включи ML_MODE=shadow после обучения — здесь появится калибровка прогноза против факта."}
+          </p>
+        )}
       </div>
 
       {trainResult && (
