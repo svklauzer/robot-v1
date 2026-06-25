@@ -1515,6 +1515,28 @@ class MarketIntelligenceEngine:
                 decision = "wait"
                 comment = "entry_timing_shorting_bottom"
 
+        # (#anti-chop) Сила тренда через веер EMA, нормированный на ATR якорного ТФ.
+        # Лосеры #104/#106 — шорты в чоп/разворот: EMA свёрнуты или развёрнуты
+        # вверх, спред мал/отрицателен → не трендовый рынок для этой стороны.
+        # Reversal-кандидаты исключены: они намеренно контртрендовые и уже прошли
+        # тугие гейты _try_reversal_*. Выходная логика тут бессильна — режем вход.
+        if (
+            bool(getattr(settings, "ANTI_CHOP_GATE_ENABLED", True))
+            and decision == "approve"
+            and not is_reversal
+        ):
+            _anchor = self._tf(contexts, str(getattr(settings, "ANTI_CHOP_ANCHOR_TF", "1h")))
+            _e20 = float(self._ctx_value(_anchor, "ema20", 0) or 0)
+            _e200 = float(self._ctx_value(_anchor, "ema200", 0) or 0)
+            _atr = float(self._ctx_value(_anchor, "atr14", 0) or 0)
+            if _e20 > 0 and _e200 > 0 and _atr > 0:
+                _spread = (_e20 - _e200) if action == "long" else (_e200 - _e20)
+                _fan_atr = _spread / _atr
+                _min_fan = float(getattr(settings, "ANTI_CHOP_MIN_EMA_FAN_ATR", 0.5))
+                if _fan_atr < _min_fan:
+                    decision = "wait"
+                    comment = f"anti_chop_no_trend(fan_atr={_fan_atr:.2f}<{_min_fan:.2f})"
+
         return {
             "trend_alignment": round(trend_alignment, 2),
             "entry_timing": round(entry_timing, 2),
