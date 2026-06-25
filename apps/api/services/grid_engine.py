@@ -1,0 +1,251 @@
+"""GridEngine — движок умной сетки (paper). Считает регайм/уровни, симулирует
+филлы лимитов по живой цене, ведёт безубыток/TP/SL по ВСЕЙ корзине.
+
+Принципы:
+  • Изоляция: работает на СВОЙ карман маржи (GRID_MAX_USED_MARGIN_PCT), Position/
+    Signal тренда НЕ трогает. Открытые тренд-ордера в безопасности.
+  • «Знает свои ордера»: всё состояние — в GridStore (циклы/уровни/филлы).
+  • Округление tick/lot — через htx.price_to_precision/amount_to_precision (best-effort).
+  • Закрытие — по агрегату корзины (а не по расчётному числу ордеров) → нет «пыли».
+  • Цены — из существующего фида (WS-снэпшот рынка), ордера — только на отправку (REST).
+  • fail-open: любая ошибка тика логируется, движок не падает.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from core.config import settings
+from services.market_data import MarketDataService
+from services.grid_store import GridStore
+from services import grid_calculator as gc
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class GridEngine:
+    def __init__(self):
+        self.market = MarketDataService()
+        self.store = GridStore()
+        try:
+            from services.htx_client import HTXClient
+            self.htx = HTXClient()
+        except Exception:
+            self.htx = None
+
+    # ── вспомогательные ───────────────────────────────────────────────────────
+    def _price(self, symbol: str) -> float:
+        try:
+            snap = self.market.snapshot(symbol)
+            return float(snap["last"])
+        except Exception:
+            return 0.0
+
+    def _round_price(self, symbol: str, price: float) -> float:
+        try:
+            return float(self.htx.price_to_precision(symbol, price)) if self.htx else round(price, 8)
+        except Exception:
+            return round(price, 8)
+
+    def _round_qty(self, symbol: str, qty: float) -> float:
+        try:
+            return float(self.htx.amount_to_precision(symbol, qty)) if self.htx else round(qty, 8)
+        except Exception:
+            return round(qty, 8)
+
+    def _envelope(self) -> float:
+        equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+        return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
+
+    # ── публичный тик ─────────────────────────────────────────────────────────
+    def tick_all(self) -> dict:
+        if not self.store.is_enabled():
+            return {"enabled": False, "ticked": 0}
+        n = 0
+        for sym in settings.grid_symbols:
+            try:
+                self.tick(sym)
+                n += 1
+            except Exception as exc:  # noqa: BLE001 — fail-open на символ
+                print(f"[GRID ERROR] {sym}: {type(exc).__name__}: {exc}")
+        return {"enabled": True, "ticked": n}
+
+    def tick(self, symbol: str):
+        symbol = symbol.upper()
+        price = self._price(symbol)
+        if price <= 0:
+            return
+
+        cyc = self.store.get_cycle(symbol)
+        if cyc is None:
+            self._maybe_open(symbol, price)
+            return
+
+        self._process_fills(cyc, symbol, price)
+        self._check_exits(cyc, symbol, price)
+
+    # ── открытие нового цикла ─────────────────────────────────────────────────
+    def _maybe_open(self, symbol: str, price: float):
+        # карман маржи: есть ли место хотя бы под базовый ордер
+        lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
+        base_usdt = float(getattr(settings, "GRID_BASE_ORDER_USDT", 20.0))
+        free = self._envelope() - self.store.grid_used_margin()
+        if free < base_usdt / lev:
+            return  # нет свободной маржи в кармане сетки
+
+        try:
+            limit = max(int(getattr(settings, "GRID_EMA_PERIOD", 200)) + 60, 260)
+            df = self.market.ohlcv(symbol, timeframe=str(getattr(settings, "GRID_TIMEFRAME", "1h")), limit=limit)
+            if df is None or len(df) < int(getattr(settings, "GRID_EMA_PERIOD", 200)):
+                return
+            ind = gc.compute_indicators(
+                df,
+                ema_period=int(getattr(settings, "GRID_EMA_PERIOD", 200)),
+                rsi_period=int(getattr(settings, "GRID_RSI_PERIOD", 14)),
+                atr_period=int(getattr(settings, "GRID_ATR_PERIOD", 14)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[GRID INDICATORS] {symbol}: {exc}")
+            return
+
+        atr = float(ind.get("atr") or 0.0)
+        if atr <= 0:
+            return
+        regime = gc.detect_regime(ind, float(getattr(settings, "GRID_RSI_HIGH", 70.0)),
+                                  float(getattr(settings, "GRID_RSI_LOW", 30.0)))
+
+        v_base_qty = base_usdt / price  # базовый объём в базовой монете
+        levels = gc.compute_grid(
+            anchor=price, atr=atr, regime=regime,
+            lines=int(getattr(settings, "GRID_LINES", 6)),
+            k_vol=float(getattr(settings, "GRID_VOL_COEFF", 0.5)),
+            m_step=float(getattr(settings, "GRID_STEP_MULTIPLIER", 1.1)),
+            v_base=v_base_qty,
+            m_vol=float(getattr(settings, "GRID_VOL_MULTIPLIER", 1.2)),
+        )
+        if not levels:
+            return
+        for lv in levels:
+            lv["price"] = self._round_price(symbol, lv["price"])
+            lv["volume"] = self._round_qty(symbol, lv["volume"])
+            lv["filled"] = False
+            lv["fill_price"] = None
+
+        cyc = {
+            "symbol": symbol, "regime": regime, "anchor": price, "atr": atr,
+            "timeframe": str(getattr(settings, "GRID_TIMEFRAME", "1h")),
+            "leverage": lev, "status": "active", "created_at": _now(),
+            "levels": levels, "breakeven": None, "tp_price": None, "sl_price": None,
+            "ind": {"ema": round(ind["ema"], 6), "rsi": round(ind["rsi"], 2)},
+        }
+        self.store.put_cycle(symbol, cyc)
+        print(f"[GRID OPEN] {symbol} regime={regime} anchor={price} atr={atr:.6f} levels={len(levels)}")
+
+    # ── симуляция филлов (paper) ──────────────────────────────────────────────
+    def _process_fills(self, cyc: dict, symbol: str, price: float):
+        lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
+        max_orders = int(getattr(settings, "GRID_MAX_SAFETY_ORDERS", 6))
+        envelope = self._envelope()
+        filled_now = sum(1 for lv_ in cyc["levels"] if lv_.get("filled"))
+        changed = False
+
+        for lv_ in cyc["levels"]:
+            if lv_.get("filled"):
+                continue
+            if filled_now >= max_orders:
+                break  # лимит страховочных ордеров достигнут
+            crossed = (lv_["side"] == "buy" and price <= lv_["price"]) or \
+                      (lv_["side"] == "sell" and price >= lv_["price"])
+            if not crossed:
+                continue
+            # проверка кармана маржи перед филлом
+            add_margin = float(lv_["volume"]) * float(lv_["price"]) / lev
+            if self.store.grid_used_margin() + add_margin > envelope:
+                break  # карман сетки заполнен
+            lv_["filled"] = True
+            lv_["fill_price"] = lv_["price"]  # paper: лимит исполняется по своей цене
+            filled_now += 1
+            changed = True
+
+        if changed:
+            self._recompute(cyc)
+            self.store.put_cycle(symbol, cyc)
+
+    def _recompute(self, cyc: dict):
+        filled = [lv for lv in cyc["levels"] if lv.get("filled")]
+        if not filled:
+            cyc["breakeven"] = cyc["tp_price"] = cyc["sl_price"] = None
+            return
+        fee = float(getattr(settings, "GRID_FEE_ROUND_PCT", 0.1))
+        ps = gc.position_state(filled, fee)
+        side = ps["dominant_side"]
+        if side == "flat":
+            cyc["breakeven"] = cyc["tp_price"] = cyc["sl_price"] = None
+            cyc["position"] = ps
+            return
+        be = gc.breakeven_price(ps["avg_price"], side, fee)
+        cyc["breakeven"] = round(be, 8)
+        cyc["tp_price"] = round(gc.take_profit_price(be, side, float(getattr(settings, "GRID_TP_PCT", 0.5))), 8)
+        cyc["sl_price"] = round(gc.stop_loss_price(filled, cyc["atr"], side,
+                                                   float(getattr(settings, "GRID_SL_ATR_MULT", 1.5))), 8)
+        cyc["position"] = ps
+
+    # ── проверка выходов (TP / SL по всей корзине) ────────────────────────────
+    def _check_exits(self, cyc: dict, symbol: str, price: float):
+        filled = [lv for lv in cyc["levels"] if lv.get("filled")]
+        if not filled:
+            return
+        self._recompute(cyc)
+        side = (cyc.get("position") or {}).get("dominant_side")
+        tp, sl = cyc.get("tp_price"), cyc.get("sl_price")
+        if side not in ("long", "short") or not tp or not sl:
+            return
+
+        unreal = gc.unrealized_pnl(filled, price)
+
+        tp_hit = (side == "long" and price >= tp) or (side == "short" and price <= tp)
+        sl_hit = (side == "long" and price <= sl) or (side == "short" and price >= sl)
+
+        if tp_hit:
+            self.store.close_cycle(symbol, realized=unreal, reason="grid_take_profit", price=price)
+            print(f"[GRID TP] {symbol} closed basket pnl={unreal:.4f} @ {price}")
+        elif sl_hit:
+            self.store.close_cycle(symbol, realized=unreal, reason="grid_stop_loss", price=price)
+            print(f"[GRID SL] {symbol} closed basket pnl={unreal:.4f} @ {price}")
+        else:
+            # просто обновим текущий нереализованный для фронта
+            cyc["unrealized_pnl"] = unreal
+            cyc["last_price"] = price
+            self.store.put_cycle(symbol, cyc)
+
+    def close_now(self, symbol: str, reason: str = "manual_close") -> dict:
+        """Ручное закрытие цикла по символу (по агрегату корзины)."""
+        symbol = symbol.upper()
+        cyc = self.store.get_cycle(symbol)
+        if not cyc:
+            return {"status": "no_cycle", "symbol": symbol}
+        price = self._price(symbol)
+        filled = [lv for lv in cyc["levels"] if lv.get("filled")]
+        unreal = gc.unrealized_pnl(filled, price) if filled else 0.0
+        self.store.close_cycle(symbol, realized=unreal, reason=reason, price=price)
+        return {"status": "closed", "symbol": symbol, "realized": round(unreal, 6), "price": price}
+
+    # ── снимок для фронта ─────────────────────────────────────────────────────
+    def snapshot(self) -> dict:
+        summary = self.store.summary()
+        cycles = []
+        for cyc in self.store.cycles.values():
+            filled = [lv for lv in cyc.get("levels", []) if lv.get("filled")]
+            cycles.append({
+                "symbol": cyc["symbol"], "regime": cyc["regime"], "anchor": cyc["anchor"],
+                "atr": cyc["atr"], "status": cyc["status"], "created_at": cyc["created_at"],
+                "levels_total": len(cyc.get("levels", [])), "levels_filled": len(filled),
+                "breakeven": cyc.get("breakeven"), "tp_price": cyc.get("tp_price"),
+                "sl_price": cyc.get("sl_price"), "unrealized_pnl": cyc.get("unrealized_pnl"),
+                "last_price": cyc.get("last_price"),
+                "position": cyc.get("position"),
+                "ind": cyc.get("ind"),
+                "levels": cyc.get("levels", []),
+            })
+        return {**summary, "cycles": cycles, "history": self.store.history[-20:]}

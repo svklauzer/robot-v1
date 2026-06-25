@@ -497,6 +497,35 @@ class Settings(BaseSettings):
     # не должен получать весь free (TRX #101 B → 430 маржи → -5.7). Для B бюджет
     # капается этой долей свободной маржи. A/A+ — без этого капа.
     DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE: float = 0.5
+
+    # =========================
+    # УМНАЯ СЕТКА (GRID) — отдельный движок на swap, работает ПАРАЛЛЕЛЬНО тренду
+    # на СВОЙ карман маржи. Тренд-позиции/ордера НЕ трогает. Toggle из API/фронта
+    # (рантайм-флаг в grid_store; GRID_ENABLED — лишь дефолт при старте).
+    # =========================
+    GRID_ENABLED: bool = False                  # дефолт выкл; вкл/выкл из /grid
+    GRID_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT"  # ликвидные swap-пары
+    GRID_TIMEFRAME: str = "1h"                  # ТФ для ATR/EMA/RSI (1h меньше шума)
+    GRID_LINES: int = 6                         # число уровней (на сторону для neutral)
+    GRID_BASE_ORDER_USDT: float = 20.0          # базовый объём ордера (нотионал, USDT)
+    GRID_VOL_MULTIPLIER: float = 1.2            # m_vol: мартингейл объёма (1.1–1.5)
+    GRID_STEP_MULTIPLIER: float = 1.1           # m_step: расширение шага (1.05–1.2)
+    GRID_VOL_COEFF: float = 0.5                 # k_vol: шаг = ATR·k_vol
+    GRID_ATR_PERIOD: int = 14
+    GRID_EMA_PERIOD: int = 200
+    GRID_RSI_PERIOD: int = 14
+    GRID_RSI_HIGH: float = 70.0                 # RSI выше → не лонг-сетка (перегрев)
+    GRID_RSI_LOW: float = 30.0                  # RSI ниже → не шорт-сетка (перепрод.)
+    GRID_TP_PCT: float = 0.5                    # тейк = безубыток + этот % (вся сетка)
+    GRID_SL_ATR_MULT: float = 1.5              # стоп = крайний уровень ± k·ATR
+    GRID_MAX_SAFETY_ORDERS: int = 6            # макс. исполненных уровней; дальше стоп выставлять
+    GRID_MAX_USED_MARGIN_PCT: float = 20.0     # СВОЙ карман маржи (% экв), отдельно от тренда (70%)
+    GRID_LEVERAGE: float = 1.0                 # плечо для нотионала/маржи (swap)
+    GRID_FEE_ROUND_PCT: float = 0.1            # round-trip комиссия для безубытка, %
+    GRID_REARM: bool = True                    # после TP/SL переоткрывать новый цикл
+    GRID_SLIPPAGE_PCT: float = 0.05            # допуск проскальзывания при paper-филле, %
+    GRID_TICK_INTERVAL_SEC: float = 20.0       # период фонового тика сетки
+
     # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
     # его $-награда мала by design. Реальная награда и её гейт — на TP2.
     MIN_NET_PNL_TP1_USDT: float = 0.20
@@ -782,5 +811,9 @@ class Settings(BaseSettings):
     @property
     def funding_arb_symbols(self) -> List[str]:
         return [s.strip() for s in self.FUNDING_ARB_SYMBOLS.split(",") if s.strip()]
+
+    @property
+    def grid_symbols(self) -> List[str]:
+        return [s.strip().upper() for s in self.GRID_SYMBOLS.split(",") if s.strip()]
 
 settings = Settings()

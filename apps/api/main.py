@@ -84,6 +84,7 @@ from pydantic import BaseModel
 from routers.analytics import router as analytics_router
 from routers.audit import router as audit_router
 from routers.funding_arb import router as funding_arb_router
+from routers.grid import router as grid_router
 from routers.ml import router as ml_router
 from routers.payments import router as payments_router
 from routers.reports import router as reports_router
@@ -109,6 +110,9 @@ payment_reconciliation_loop_enabled = True
 
 funding_arb_task = None
 funding_arb_loop_enabled = True
+
+grid_task = None
+grid_loop_enabled = True
 
 manage_task = None
 manage_loop_enabled = True
@@ -413,6 +417,30 @@ async def background_funding_arb_loop():
         await asyncio.sleep(monitor.scan_interval_seconds())
 
 
+async def background_grid_loop():
+    """Фоновый цикл умной сетки. Работает ПАРАЛЛЕЛЬНО тренду на свой карман маржи;
+    тик только когда сетка включена (рантайм-флаг). Тренд-позиции/ордера не трогает.
+    Тяжёлый расчёт (OHLCV/индикаторы) выносим в to_thread, чтобы не душить event loop."""
+    global grid_loop_enabled
+
+    await asyncio.sleep(35)
+    try:
+        from services.grid_engine import GridEngine
+        engine = GridEngine()
+    except Exception as e:  # noqa: BLE001
+        log_event(logger, logging.ERROR, "grid_loop_init_error", error_type=type(e).__name__, error=str(e))
+        return
+
+    interval = float(getattr(settings, "GRID_TICK_INTERVAL_SEC", 20.0))
+    while grid_loop_enabled:
+        try:
+            if engine.store.is_enabled():
+                await asyncio.to_thread(engine.tick_all)
+        except Exception as e:  # noqa: BLE001 — fail-open, цикл не падает
+            log_event(logger, logging.ERROR, "grid_loop_error", error_type=type(e).__name__, error=str(e))
+        await asyncio.sleep(interval)
+
+
 class CloseSignalRequest(BaseModel):
     result_pct: float
     reason: str = "manual_close"
@@ -443,7 +471,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, grid_task, grid_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -492,6 +520,9 @@ async def lifespan(app: FastAPI):
     funding_arb_loop_enabled = True
     funding_arb_task = asyncio.create_task(background_funding_arb_loop())
 
+    grid_loop_enabled = True
+    grid_task = asyncio.create_task(background_grid_loop())
+
     yield
 
     robot_loop_enabled = False
@@ -526,6 +557,10 @@ async def lifespan(app: FastAPI):
     if funding_arb_task:
         funding_arb_task.cancel()
 
+    grid_loop_enabled = False
+    if grid_task:
+        grid_task.cancel()
+
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
 
@@ -541,6 +576,7 @@ app.add_middleware(
 app.include_router(analytics_router)
 app.include_router(audit_router)
 app.include_router(funding_arb_router)
+app.include_router(grid_router)
 app.include_router(ml_router)
 app.include_router(payments_router)
 app.include_router(reports_router)
