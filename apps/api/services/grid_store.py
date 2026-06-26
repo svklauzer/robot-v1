@@ -2,7 +2,9 @@
 
 Хранит активные циклы (по символу), историю закрытых, рантайм-флаг вкл/выкл и
 агрегаты. Полностью ИЗОЛИРОВАН от Position/Signal (тренд-движок не трогается).
-Персист в storage/grid/grid_state.json (best-effort, fail-open) — переживает рестарт.
+Персист в Postgres (таблица grid_state, singleton-строка id=1) — переживает
+redeploy/restart так же, как trade-сделки. Старый JSON-файл импортируется
+одноразово при первом запуске и больше не используется.
 
 Цикл сетки (dict, JSON-сериализуемый):
   symbol, regime(long/short/neutral), anchor, atr, timeframe, leverage,
@@ -47,8 +49,31 @@ class GridStore:
         self.closed_count: int = 0
         self._load()
 
-    # ── персист ────────────────────────────────────────────────────────────
+    # ── персист (Postgres — переживает redeploy, как trade-сделки) ───────────
     def _load(self):
+        # Источник правды — БД. Эфемерный диск контейнера больше не используется;
+        # состояние обнулится только при сбросе тома БД (docker compose down -v).
+        try:
+            from core.db import SessionLocal
+            from models.grid_state import GridState
+            db = SessionLocal()
+            try:
+                row = db.get(GridState, 1)
+                if row is not None:
+                    self.enabled = bool(row.enabled)
+                    self.cycles = dict(row.cycles or {})
+                    self.history = list(row.history or [])[-200:]
+                    self.realized_pnl = float(row.realized_pnl or 0.0)
+                    self.closed_count = int(row.closed_count or 0)
+                    return
+            finally:
+                db.close()
+        except Exception:
+            pass  # БД ещё не готова → пробуем одноразовый импорт старого файла
+        self._import_legacy_file()
+
+    def _import_legacy_file(self):
+        """Одноразовый перенос состояния со старого JSON-файла в БД (если был)."""
         try:
             if _PATH.exists():
                 data = json.loads(_PATH.read_text(encoding="utf-8"))
@@ -57,22 +82,30 @@ class GridStore:
                 self.history = (data.get("history", []) or [])[-200:]
                 self.realized_pnl = float(data.get("realized_pnl", 0.0) or 0.0)
                 self.closed_count = int(data.get("closed_count", 0) or 0)
+                self._save()  # переносим в БД
         except Exception:
-            pass  # битый файл → начинаем с пустого, не валимся
+            pass
 
     def _save(self):
         try:
-            _PATH.parent.mkdir(parents=True, exist_ok=True)
-            _PATH.write_text(json.dumps({
-                "enabled": self.enabled,
-                "cycles": self.cycles,
-                "history": self.history[-200:],
-                "realized_pnl": round(self.realized_pnl, 8),
-                "closed_count": self.closed_count,
-                "saved_at": _now(),
-            }, ensure_ascii=False), encoding="utf-8")
+            from core.db import SessionLocal
+            from models.grid_state import GridState
+            db = SessionLocal()
+            try:
+                row = db.get(GridState, 1)
+                if row is None:
+                    row = GridState(id=1)
+                    db.add(row)
+                row.enabled = bool(self.enabled)
+                row.cycles = dict(self.cycles)            # копия → SQLAlchemy видит изменение JSON
+                row.history = list(self.history[-200:])
+                row.realized_pnl = round(float(self.realized_pnl), 8)
+                row.closed_count = int(self.closed_count)
+                db.commit()
+            finally:
+                db.close()
         except Exception:
-            pass
+            pass  # сбой записи не должен ронять тик сетки
 
     # ── управление ───────────────────────────────────────────────────────────
     def is_enabled(self) -> bool:

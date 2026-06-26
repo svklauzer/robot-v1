@@ -12,3 +12,4 @@ from models.telegram_profile import TelegramProfile
 from models.audit_event import AuditEvent
 
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
+from models.grid_state import GridState

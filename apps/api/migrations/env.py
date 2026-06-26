@@ -16,6 +16,7 @@ from models.telegram_profile import TelegramProfile
 from models.audit_event import AuditEvent
 from models.payment import BillingPlan, Payment, PaymentEvent
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
+from models.grid_state import GridState
 
 config = context.config
 
