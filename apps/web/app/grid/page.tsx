@@ -87,11 +87,11 @@ export default function GridPage() {
           <h1 className="flex items-center gap-3 text-3xl font-bold text-emerald-300">
             <Grid3x3 /> Smart Grid
           </h1>
-          <p className="mt-2 text-sm text-emerald-100/70">
+          <p className="mt-1 max-w-3xl text-sm text-emerald-100/60">
             Адаптивная сетка (ATR-шаг, EMA200/RSI-регайм) на swap. Параллельно тренду, свой карман маржи, тренд-ордера не трогает. Сейчас paper.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">
           <label className="flex items-center gap-2 text-sm text-emerald-100/70">
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> авто 5с
           </label>
