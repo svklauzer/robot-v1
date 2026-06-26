@@ -71,7 +71,13 @@ class GridEngine:
             return round(qty, 8)
 
     def _envelope(self) -> float:
-        equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+        # В LIVE — реальный свободный USDT счёта сетки (swap для USDT-M / spot),
+        # в paper — RISK_EQUITY_USDT. Карман = доля свободного баланса.
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+            equity = LIVE_EXECUTOR.effective_equity_usdt(getattr(settings, "EXECUTION_MARKET", "swap"))
+        except Exception:
+            equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
 
     def _fresh_market(self, symbol: str):

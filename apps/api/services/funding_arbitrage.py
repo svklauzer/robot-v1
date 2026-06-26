@@ -344,6 +344,21 @@ class FundingArbEngine:
         if opportunity.status != "candidate":
             raise ValueError(f"funding_arb_opportunity_not_candidate:{opportunity.status}")
 
+        # Live-сайзинг: хедж занимает ОБА счёта (spot buy + swap sell), поэтому
+        # нотионал ограничен МЕНЬШИМ свободным остатком из двух (с буфером).
+        if mode == "live":
+            try:
+                from services.live_executor import LIVE_EXECUTOR
+                spot_free = LIVE_EXECUTOR.free_usdt("spot")
+                swap_free = LIVE_EXECUTOR.free_usdt("swap")
+                if spot_free is not None and swap_free is not None:
+                    buf = float(getattr(settings, "FUNDING_ARB_FREE_BUFFER_PCT", 95.0)) / 100.0
+                    cap = min(spot_free, swap_free) * buf
+                    if cap > 0:
+                        notional_usdt = min(float(notional_usdt or cap), cap)
+            except Exception:
+                pass
+
         hedge = self.hedge_builder.build(opportunity, notional_usdt=notional_usdt)
         raw_orders: dict[str, Any] = {}
 
@@ -362,6 +377,7 @@ class FundingArbEngine:
             swap_res = LIVE_EXECUTOR.place_market(
                 opportunity.swap_symbol, "sell", hedge["swap_qty"],
                 market_type="swap", reduce_only=False,
+                leverage=float(getattr(settings, "FUNDING_LEVERAGE", 2)),
                 reference_price=opportunity.swap_price, purpose="fund_swap_open",
             )
             raw_orders["spot_open"] = spot_res.as_dict()
@@ -584,6 +600,7 @@ class FundingArbEngine:
                 "swap_close": LIVE_EXECUTOR.place_market(
                     position.swap_symbol, "buy", float(position.swap_qty),
                     market_type="swap", reduce_only=True,
+                    leverage=float(getattr(settings, "FUNDING_LEVERAGE", 2)),
                     reference_price=float(swap_exit_price),
                     purpose="fund_swap_close").as_dict(),
             }

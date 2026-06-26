@@ -862,7 +862,12 @@ def live_state():
         "robot_mode": getattr(settings, "ROBOT_MODE", "paper"),
         "trading_mode": getattr(settings, "TRADING_MODE", "paper_trade"),
         "execution_market": settings.execution_market_type,
-        "execution_leverage": settings.execution_leverage,
+        "leverage_by_engine": {
+            "trend": settings.execution_leverage,
+            "grid": getattr(settings, "GRID_LEVERAGE", 1.0),
+            "funding_swap": getattr(settings, "FUNDING_LEVERAGE", 2),
+            "max_cap": getattr(settings, "LIVE_MAX_LEVERAGE", 5.0),
+        },
         "safety": {
             "set_leverage": bool(getattr(settings, "LIVE_SET_LEVERAGE", True)),
             "margin_mode": getattr(settings, "LIVE_MARGIN_MODE", "cross"),
@@ -873,7 +878,11 @@ def live_state():
         "validation_blockers": settings.production_blockers() if hasattr(settings, "production_blockers") else None,
     }
     if eff == "live":
-        out["account_equity_usdt"] = LIVE_EXECUTOR.account_equity_usdt()
+        out["free_balance_usdt"] = {
+            "spot": LIVE_EXECUTOR.free_usdt("spot"),
+            "swap": LIVE_EXECUTOR.free_usdt("swap"),
+        }
+        out["sizing_equity_usdt"] = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
     return out
 
 

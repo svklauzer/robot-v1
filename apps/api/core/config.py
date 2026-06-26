@@ -124,7 +124,25 @@ class Settings(BaseSettings):
     # Для старта живой торговли держим крошечным (напр. 25), потом поднимаем.
     LIVE_MAX_ORDER_NOTIONAL_USDT: float = 25.0
     # Сайзинг от РЕАЛЬНОГО баланса биржи (fetch_balance), а не от RISK_EQUITY_USDT.
+    # В live эквити = свободный USDT соответствующего счёта в моменте (SPOT и
+    # USDT-M фьючерсы — РАЗНЫЕ счета HTX). Растёт с пополнениями владельца и
+    # прибылью. RISK_EQUITY_USDT остаётся дефолтом для paper/dry_run и fallback.
     LIVE_SIZE_FROM_BALANCE: bool = True
+    LIVE_BALANCE_CACHE_SEC: float = 30.0      # TTL кэша баланса (не дёргать API на каждый сайзинг)
+
+    # ── Плечо ПО ДВИЖКУ (разный риск-профиль → разное плечо) ──────────────────
+    # Жёсткий потолок: ни один движок не выставит плечо выше (предохранитель).
+    LIVE_MAX_LEVERAGE: float = 5.0
+    # FUNDING: дельта-нейтральный хедж (лонг spot + шорт swap равного размера) —
+    # ценовой риск захеджирован, поэтому swap-ногу можно вести с бОльшим плечом
+    # ради капиталоэффективности. НО: spot и swap в HTX — РАЗНЫЕ счета, маржа НЕ
+    # взаимозачитывается, и swap-нога может быть ликвидирована на резком ходе,
+    # даже когда spot-нога в плюсе. Поэтому умеренно (2x), а не «сколько дают».
+    FUNDING_LEVERAGE: int = 2
+    # TREND — направленная ставка: плечо ПРЯМО множит риск → консервативно
+    # (execution_leverage = FUTURES_LEVERAGE, по умолчанию 1, поднимать на edge).
+    # GRID — мартингейл (добор в просадку): плечо + мартингейл = ликвидация,
+    # держим минимальным (GRID_LEVERAGE, по умолчанию 1).
 
     ENABLE_FUTURES: bool = False
     FUTURES_MARGIN_MODE: str = "isolated"
@@ -763,6 +781,9 @@ class Settings(BaseSettings):
     FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0
     FUNDING_ARB_MAX_NOTIONAL_USDT: float = 500.0
     FUNDING_ARB_MAX_OPEN_HEDGES: int = 2         # max concurrent paper/live positions
+    # Live: доля МЕНЬШЕГО свободного остатка (spot/swap), которую можно занять под
+    # один хедж (буфер на проскальзывание/комиссии). Хедж занимает оба счёта.
+    FUNDING_ARB_FREE_BUFFER_PCT: float = 95.0
 
     # Exit thresholds
     FUNDING_ARB_CLOSE_RATE_PCT: float = 0.005   # close when funding rate drops below this

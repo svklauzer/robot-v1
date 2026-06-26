@@ -145,8 +145,10 @@ class HTXClient:
             )
             return {}
 
-    def fetch_balance(self):
-        return self._retry(self.exchange.fetch_balance)
+    def fetch_balance(self, params: dict | None = None):
+        # params={'type':'spot'} или {'type':'swap'} — у HTX SPOT и USDT-M фьючерсы
+        # это РАЗНЫЕ счета со своими свободными остатками.
+        return self._retry(self.exchange.fetch_balance, params or {})
 
     def fetch_ticker(self, symbol: str):
         # Прогреваем кросс-инстансный кэш рынков, иначе ccxt дергает полный

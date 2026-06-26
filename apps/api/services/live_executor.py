@@ -66,6 +66,7 @@ class LiveExecutor:
     def __init__(self):
         self.client = HTXClient()
         self._leverage_set: set[str] = set()
+        self._bal_cache: dict[str, tuple[float, float]] = {}  # market_type -> (free_usdt, ts)
 
     # ── режим ─────────────────────────────────────────────────────────────────
     @staticmethod
@@ -118,6 +119,7 @@ class LiveExecutor:
         if symbol in self._leverage_set:
             return
         lev = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
+        lev = max(1.0, min(lev, float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))))  # потолок-предохранитель
         margin_mode = str(getattr(settings, "LIVE_MARGIN_MODE", "cross")).lower()
         try:
             self.client.set_margin_mode(margin_mode, symbol)
@@ -146,22 +148,49 @@ class LiveExecutor:
                 break
         return last or order
 
-    # ── сайзинг от реального баланса ────────────────────────────────────────────
-    def account_equity_usdt(self) -> float | None:
-        """Свободный USDT по бирже для live-сайзинга (LIVE_SIZE_FROM_BALANCE).
-        None → не удалось получить (вызывающий падает обратно на RISK_EQUITY_USDT)."""
-        if not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
-            return None
+    # ── свободный баланс по счёту (SPOT и USDT-M — РАЗНЫЕ счета HTX) ─────────────
+    @staticmethod
+    def _account_type(market_type: str | None) -> str:
+        mt = str(market_type or "").lower()
+        return "swap" if mt in ("swap", "future", "futures", "linear", "usdt-m") else "spot"
+
+    def free_usdt(self, market_type: str | None = None) -> float | None:
+        """Свободный USDT на СООТВЕТСТВУЮЩЕМ счёте (spot ИЛИ swap). С TTL-кэшем,
+        чтобы не дёргать API на каждый сайзинг. None → не удалось получить."""
+        acct = self._account_type(market_type)
+        ttl = float(getattr(settings, "LIVE_BALANCE_CACHE_SEC", 30.0))
+        cached = self._bal_cache.get(acct)
+        if cached and (time.time() - cached[1]) < ttl:
+            return cached[0]
         try:
-            bal = self.client.fetch_balance() or {}
-            usdt = (bal.get("USDT") or {})
+            bal = self.client.fetch_balance(params={"type": acct}) or {}
+            usdt = bal.get("USDT") or {}
             free = usdt.get("free") if isinstance(usdt, dict) else None
-            total = usdt.get("total") if isinstance(usdt, dict) else None
-            val = free if free is not None else total
-            return float(val) if val is not None else None
+            if free is None:
+                free = usdt.get("total") if isinstance(usdt, dict) else None
+            if free is None:
+                return None
+            free = float(free)
+            self._bal_cache[acct] = (free, time.time())
+            return free
         except Exception as exc:  # noqa: BLE001
-            log_event(logger, logging.WARNING, "live_balance_fetch_fail", error=str(exc))
+            log_event(logger, logging.WARNING, "live_balance_fetch_fail", account=acct, error=str(exc))
             return None
+
+    def account_equity_usdt(self) -> float | None:
+        """Свободный USDT счёта исполнения (для /live/state)."""
+        return self.free_usdt(getattr(settings, "execution_market_type", "spot"))
+
+    def effective_equity_usdt(self, market_type: str | None = None) -> float:
+        """Эквити для сайзинга/экспозиции. В LIVE — РЕАЛЬНЫЙ свободный баланс
+        соответствующего счёта (растёт с пополнениями владельца и прибылью). В
+        paper/dry_run/off — конфиг RISK_EQUITY_USDT (бумага не меняется).
+        Fallback на RISK_EQUITY_USDT, если баланс недоступен."""
+        fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+        if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
+            return fallback
+        free = self.free_usdt(market_type or getattr(settings, "execution_market_type", "spot"))
+        return float(free) if free is not None and free > 0 else fallback
 
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,

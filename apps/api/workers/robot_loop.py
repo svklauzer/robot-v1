@@ -584,12 +584,20 @@ class RobotLoop:
             if float(plan.qty or 0) <= 0:
                 continue
 
+            # Эквити для сайзинга/экспозиции: в LIVE — реальный свободный USDT счёта
+            # исполнения (растёт с пополнениями/прибылью); в paper — RISK_EQUITY_USDT.
+            try:
+                from services.live_executor import LIVE_EXECUTOR
+                _equity_usdt = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
+            except Exception:
+                _equity_usdt = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
+
             exposure_result = self.exposure_guard.check_before_publish(
                 db=db,
                 bot_id=bot.id,
                 symbol=symbol,
                 required_margin=float(plan.required_margin or 0),
-                equity_usdt=float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt)),
+                equity_usdt=_equity_usdt,
                 max_used_margin_pct=float(getattr(settings, "MAX_USED_MARGIN_PCT", 0.85)),
                 max_active_signals=int(getattr(settings, "MAX_ACTIVE_SIGNALS", 2)),
                 max_active_per_symbol=int(getattr(settings, "MAX_ACTIVE_SIGNALS_PER_SYMBOL", 1)),
@@ -657,7 +665,7 @@ class RobotLoop:
                         "net_pnl_stop": plan.net_pnl_stop,
                     },
                     {
-                        "equity_usdt": float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt)),
+                        "equity_usdt": _equity_usdt,
                         "used_margin_usdt": float(exposure_result.used_margin or 0),
                         "daily_pnl_usdt": -abs(float(daily_loss_pct or 0)) * float(balance_usdt) / 100.0,
                         "drawdown_pct": float(drawdown_pct or 0),
@@ -1035,7 +1043,11 @@ class RobotLoop:
             analyses[symbol] = result
             if result is not None and self._ready_candidate_check(db, bot, symbol, result, balance_usdt):
                 ready += 1
-        equity = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+            equity = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
+        except Exception:
+            equity = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
         used_pct = float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))
         ceiling = equity * used_pct / 100.0
         try:
