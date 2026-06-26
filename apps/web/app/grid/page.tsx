@@ -91,7 +91,7 @@ export default function GridPage() {
             Адаптивная сетка (ATR-шаг, EMA200/RSI-регайм) на swap. Параллельно тренду, свой карман маржи, тренд-ордера не трогает. Сейчас paper.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-2 text-sm text-emerald-100/70">
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> авто 5с
           </label>
