@@ -554,6 +554,11 @@ class Settings(BaseSettings):
     # (рантайм-флаг в grid_store; GRID_ENABLED — лишь дефолт при старте).
     # =========================
     GRID_ENABLED: bool = False                  # дефолт выкл; вкл/выкл из /grid
+    # Путь состояния сетки. Локально — относительный. На Render файловая система
+    # эфемерна (деплой стирает диск) → состояние ДОЛЖНО лежать на persistent-диске.
+    # В render.yaml выставляем /app/storage/ml/grid_state.json (тот же ml-disk, что
+    # переживает деплой) — иначе сетка сбрасывается и выключается на каждом деплое.
+    GRID_STATE_PATH: str = "storage/grid/grid_state.json"
     GRID_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT"  # ликвидные swap-пары
     GRID_TIMEFRAME: str = "1h"                  # ТФ для ATR/EMA/RSI (1h меньше шума)
     GRID_LINES: int = 6                         # число уровней (на сторону для neutral)

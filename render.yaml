@@ -41,6 +41,11 @@ services:
         value: https://robot-web-ap8n.onrender.com
       - key: TRADE_OUTCOMES_PATH
         value: /app/storage/ml/trade_outcomes.jsonl
+      # Состояние сетки — на persistent-диск (тот же ml-disk), иначе деплой стирает
+      # storage/grid и сетка сбрасывается/выключается. Один диск на сервис у Render,
+      # поэтому переиспользуем ml-mount /app/storage/ml.
+      - key: GRID_STATE_PATH
+        value: /app/storage/ml/grid_state.json
       - key: NEWS_ENABLED
         value: "true"
 

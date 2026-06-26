@@ -20,7 +20,7 @@ from typing import Any
 
 from core.config import settings
 
-_PATH = Path("storage/grid/grid_state.json")
+_PATH = Path(str(getattr(settings, "GRID_STATE_PATH", "storage/grid/grid_state.json")))
 _LOCK = threading.RLock()
 
 
