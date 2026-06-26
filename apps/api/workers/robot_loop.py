@@ -593,6 +593,15 @@ class RobotLoop:
                 max_used_margin_pct=float(getattr(settings, "MAX_USED_MARGIN_PCT", 0.85)),
                 max_active_signals=int(getattr(settings, "MAX_ACTIVE_SIGNALS", 2)),
                 max_active_per_symbol=int(getattr(settings, "MAX_ACTIVE_SIGNALS_PER_SYMBOL", 1)),
+                side=result.action,
+                max_same_direction_cluster=(
+                    int(getattr(settings, "CORR_CLUSTER_MAX_SAME_DIR", 2))
+                    if bool(getattr(settings, "CORR_CLUSTER_ENABLED", True)) else 0
+                ),
+                cluster_symbols=(
+                    {s.strip().upper() for s in str(getattr(settings, "CORR_CLUSTER_SYMBOLS", "")).split(",") if s.strip()}
+                    or None
+                ),
             )
 
             if bool(getattr(settings, "ANTI_DRAIN_ENABLED", True)):
@@ -630,6 +639,8 @@ class RobotLoop:
                     # blocked_bad_trade_economics даже после софта $-флоров. Награда
                     # везде на TP2 → его и судим.
                     economics_use_tp2=True,
+                    # (#leak-cost-bleed) TP1-нетто не под водой после издержек.
+                    min_net_pnl_tp1_usdt=float(getattr(settings, "ANTI_DRAIN_MIN_NET_PNL_TP1_USDT", 0.0)),
                 )
                 anti_allowed, anti_reason = should_open_signal(
                     {

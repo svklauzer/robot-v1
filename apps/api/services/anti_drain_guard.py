@@ -27,6 +27,12 @@ class AntiDrainConfig:
     # POSITION: награда на TP2 (TP1 частичный, RR_tp1<1 by design). Проверяем
     # экономику по TP2, иначе трендовая сделка никогда не пройдёт "TP1≥стоп".
     economics_use_tp2: bool = False
+    # (#leak-cost-bleed) Минимальный модельный TP1-нетто (USDT) ПОСЛЕ издержек.
+    # Аудит: издержки ~0.3-0.45% round-trip; сделки выходили у входа (failed_setup/
+    # breakeven) и банкали комиссию убытком, хотя TP2-экономика проходила. TP1 —
+    # точка де-риска, она НЕ должна быть модельно под водой. 0.0 → TP1 хотя бы
+    # не отрицателен после costs (мягко, не режет TP2-логику).
+    min_net_pnl_tp1_usdt: float = 0.0
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -84,6 +90,10 @@ def should_open_signal(signal: Any, account_state: Any, cfg: AntiDrainConfig) ->
         return False, "blocked_short_oversold"
     if net_rr_tp1 < cfg.min_net_rr_tp1:
         return False, "blocked_low_net_rr_tp1"
+    # (#leak-cost-bleed) TP1-нетто после издержек не должен быть под водой: иначе
+    # ранний/софт-выход у входа гарантированно банкает комиссию убытком.
+    if net_pnl_tp1 < cfg.min_net_pnl_tp1_usdt:
+        return False, "blocked_tp1_below_cost"
     if net_rr_tp2 < cfg.min_net_rr_tp2:
         return False, "blocked_low_net_rr_tp2"
     econ_ref = net_pnl_tp2 if cfg.economics_use_tp2 else net_pnl_tp1

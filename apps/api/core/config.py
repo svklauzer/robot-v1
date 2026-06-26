@@ -82,6 +82,20 @@ class Settings(BaseSettings):
     RISK_EQUITY_USDT: float = 950.0
     MAX_USED_MARGIN_PCT: float = 0.85
 
+    # (#leak-correlation) Кластерный лимит нетто-направления. Наша вселенная —
+    # коррелированные мажоры (BTC/ETH/SOL/AVAX/XRP, corr~0.85+): шорт по всем сразу
+    # = одна ставка с плечом, на общем движении проигрывают разом (аудит: −15.5 за
+    # одно up-движение по 4 шортам). Лимит одновременных однонаправленных позиций
+    # в кластере. CORR_CLUSTER_SYMBOLS пусто → весь портфель = один кластер.
+    CORR_CLUSTER_ENABLED: bool = True
+    CORR_CLUSTER_MAX_SAME_DIR: int = 2
+    CORR_CLUSTER_SYMBOLS: str = ""  # "" → вся вселенная один кластер
+
+    # (#leak-cost-bleed) Минимальный модельный TP1-нетто после издержек (USDT).
+    # 0.0 → TP1 хотя бы не под водой (мягко). Поднять, если мелкие минусы у входа
+    # продолжатся (издержки ~0.3-0.45% round-trip съедают флэт-сделки).
+    ANTI_DRAIN_MIN_NET_PNL_TP1_USDT: float = 0.0
+
     # =========================
     # NEWS / ROBOT
     # =========================

@@ -19,6 +19,7 @@ class ExposureGuardResult:
     max_allowed_margin: float
     free_margin: float
     required_margin: float
+    cluster_same_dir_count: int = 0
 
 
 class ExposureGuard:
@@ -44,6 +45,21 @@ class ExposureGuard:
             .order_by(Signal.id.desc())
             .all()
         )
+
+    def active_same_direction_in_cluster(
+        self, db: Session, bot_id: int, side: str, cluster_symbols: set[str] | None
+    ) -> int:
+        """Сколько активных позиций в ТОМ ЖЕ направлении внутри коррелированного
+        кластера. cluster_symbols=None → весь портфель = один кластер (наша
+        вселенная — коррелированные мажоры, шорт по всем = одна ставка с плечом)."""
+        side = str(side).lower()
+        n = 0
+        for sig in self.active_signals(db, bot_id):
+            if str(getattr(sig, "side", "")).lower() != side:
+                continue
+            if cluster_symbols is None or str(sig.symbol).upper() in cluster_symbols:
+                n += 1
+        return n
 
     def estimate_signal_margin(self, signal: Signal) -> float:
         if getattr(signal, "required_margin", None):
@@ -73,6 +89,9 @@ class ExposureGuard:
         max_used_margin_pct: float,
         max_active_signals: int,
         max_active_per_symbol: int,
+        side: str | None = None,
+        max_same_direction_cluster: int = 0,
+        cluster_symbols: set[str] | None = None,
     ) -> ExposureGuardResult:
         active = self.active_signals(db, bot_id)
         active_for_symbol = self.active_signals_for_symbol(db, bot_id, symbol)
@@ -84,6 +103,11 @@ class ExposureGuard:
         max_allowed_margin = round(equity_usdt * max_used_margin_pct, 6)
         free_margin = round(max_allowed_margin - used_margin, 6)
 
+        cluster_same_dir = (
+            self.active_same_direction_in_cluster(db, bot_id, side, cluster_symbols)
+            if side else 0
+        )
+
         base = {
             "active_signals_count": active_count,
             "active_symbol_signals_count": symbol_active_count,
@@ -91,7 +115,18 @@ class ExposureGuard:
             "max_allowed_margin": max_allowed_margin,
             "free_margin": free_margin,
             "required_margin": round(float(required_margin or 0), 6),
+            "cluster_same_dir_count": cluster_same_dir,
         }
+
+        # (#leak-correlation) Кластерный лимит нетто-направления: не складываем одно
+        # направление по коррелированным мажорам (шорт BTC+ETH+SOL+AVAX+XRP = одна
+        # ставка с плечом; на общем движении проигрывают разом). 0 → выкл.
+        if side and max_same_direction_cluster > 0 and cluster_same_dir >= max_same_direction_cluster:
+            return ExposureGuardResult(
+                allowed=False,
+                reason="cluster_direction_cap",
+                **base,
+            )
 
         if symbol_active_count >= max_active_per_symbol:
             return ExposureGuardResult(
