@@ -217,11 +217,19 @@ class ExecutionEngine:
         self.db.add(position)
         self.db.flush()
 
+        # Live-путь (off/dry_run/live) — маршрутизация ордера открытия через ядро.
+        live = self._submit_live(open_side, signal.symbol, plan.qty, entry_price,
+                                 reduce_only=False, purpose="trend_open")
+        if live is not None:
+            order.exchange_order_id = live.get("exchange_order_id")
+            self.db.flush()
+
         return {
             "status": "opened",
             "order": order,
             "position": position,
             "plan": plan,
+            "live": live,
         }
 
     async def close_paper_position(
@@ -288,6 +296,13 @@ class ExecutionEngine:
         self.db.add(close_order)
         self.db.flush()
 
+        # Live-путь закрытия (reduceOnly) через ядро. off=пропуск, dry_run=лог.
+        live = self._submit_live(close_side, position.symbol, position.qty, exit_price,
+                                 reduce_only=True, purpose="trend_close")
+        if live is not None:
+            close_order.exchange_order_id = live.get("exchange_order_id")
+            self.db.flush()
+
         return {
             "status": "closed",
             "position": position,
@@ -303,3 +318,27 @@ class ExecutionEngine:
 
     def _close_order_side(self, signal_side: str) -> str:
         return "sell" if signal_side == "long" else "buy"
+
+    def _submit_live(self, side: str, symbol: str, qty: float, ref_price: float,
+                     reduce_only: bool, purpose: str) -> dict | None:
+        """Маршрутизация ордера тренда через безопасное ядро LIVE_EXECUTOR.
+
+        off → пропуск (чистая бумага, как сейчас). dry_run → логирует «что бы
+        отправил» (валидация живой логики на бумаге). live → реальный ордер
+        (идемпотентность/плечо/подтверждение филла). НИКОГДА не ломает бумажный
+        поток: любая ошибка проглатывается и возвращает None.
+        """
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+            if LIVE_EXECUTOR.effective_mode() == "off":
+                return None
+            res = LIVE_EXECUTOR.place_market(
+                symbol, side, float(qty),
+                market_type=settings.execution_market_type,
+                reduce_only=reduce_only, reference_price=float(ref_price),
+                leverage=settings.execution_leverage, purpose=purpose,
+            )
+            return res.as_dict()
+        except Exception as exc:  # noqa: BLE001 — бумага не должна падать из-за live-слоя
+            print(f"[LIVE submit skip] {symbol} {side}: {type(exc).__name__}: {exc}")
+            return None

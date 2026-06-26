@@ -111,6 +111,21 @@ class Settings(BaseSettings):
     LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT: float = 0.35
     LIVE_SHADOW_SLIPPAGE_PCT: float = 0.10
 
+    # ── LiveExecutor: безопасное ядро исполнения (готовность к Live) ──────────
+    # Режим живого пути: off | dry_run | live. dry_run по умолчанию — живая логика
+    # проходит ПОЛНОСТЬЮ, но реальный ордер НЕ отправляется (валидация на бумаге).
+    # live разрешён ТОЛЬКО при ENABLE_LIVE_ORDERS=true (иначе понижается до dry_run).
+    LIVE_EXECUTION_MODE: str = "dry_run"
+    LIVE_SET_LEVERAGE: bool = True            # выставлять плечо/режим маржи для swap
+    LIVE_MARGIN_MODE: str = "cross"           # cross | isolated (swap)
+    LIVE_FILL_POLL_TIMEOUT_SEC: float = 10.0  # ждать подтверждения филла
+    LIVE_FILL_POLL_INTERVAL_SEC: float = 1.0
+    # Предохранитель live_limited: макс. нотионал ОДНОГО ордера (USDT). 0 → выкл.
+    # Для старта живой торговли держим крошечным (напр. 25), потом поднимаем.
+    LIVE_MAX_ORDER_NOTIONAL_USDT: float = 25.0
+    # Сайзинг от РЕАЛЬНОГО баланса биржи (fetch_balance), а не от RISK_EQUITY_USDT.
+    LIVE_SIZE_FROM_BALANCE: bool = True
+
     ENABLE_FUTURES: bool = False
     FUTURES_MARGIN_MODE: str = "isolated"
     FUTURES_LEVERAGE: int = 1

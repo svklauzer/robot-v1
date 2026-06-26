@@ -352,15 +352,20 @@ class FundingArbEngine:
                 raise RuntimeError(
                     "live funding arbitrage requires ENABLE_FUNDING_ARB, ENABLE_FUTURES and ENABLE_LIVE_ORDERS"
                 )
-            raw_orders["spot_open"] = self.client.create_market_order(
-                opportunity.spot_symbol, "buy", hedge["spot_qty"]
+            # Через безопасное ядро: идемпотентность (clientOrderId), плечо, dry_run.
+            # LIVE_EXECUTOR сам решает off/dry_run/live по LIVE_EXECUTION_MODE.
+            from services.live_executor import LIVE_EXECUTOR
+            spot_res = LIVE_EXECUTOR.place_market(
+                opportunity.spot_symbol, "buy", hedge["spot_qty"],
+                market_type="spot", reference_price=opportunity.spot_price, purpose="fund_spot_open",
             )
-            raw_orders["swap_open"] = self.client.create_market_order(
-                opportunity.swap_symbol,
-                "sell",
-                hedge["swap_qty"],
-                params={"hedge": "funding_arb", "reduceOnly": False},
+            swap_res = LIVE_EXECUTOR.place_market(
+                opportunity.swap_symbol, "sell", hedge["swap_qty"],
+                market_type="swap", reduce_only=False,
+                reference_price=opportunity.swap_price, purpose="fund_swap_open",
             )
+            raw_orders["spot_open"] = spot_res.as_dict()
+            raw_orders["swap_open"] = swap_res.as_dict()
         elif mode != "paper":
             raise ValueError("funding_arb_mode_must_be_paper_or_live")
 
@@ -548,6 +553,51 @@ class FundingArbEngine:
         position.closed_at = datetime.now(timezone.utc)
         return position
 
+    def close_hedge(
+        self,
+        db: Session,
+        position_id: int,
+        spot_exit_price: float,
+        swap_exit_price: float,
+        funding_periods: int = 1,
+        exit_funding_rate: float | None = None,
+    ) -> FundingArbPosition:
+        """Закрытие хеджа с РЕАЛЬНЫМИ ордерами для live-позиций (через LIVE_EXECUTOR).
+
+        Закрывает обе ноги: spot SELL (выход из лонга) + swap BUY reduceOnly (выход
+        из шорта). Для paper-позиций (mode != live) — только бухгалтерия, как
+        close_paper. Симметрично open_hedge — устраняет «осиротевший хедж на бирже».
+        """
+        position = db.query(FundingArbPosition).filter(FundingArbPosition.id == position_id).first()
+        if not position:
+            raise ValueError("funding_arb_position_not_found")
+        if position.status != "open":
+            raise ValueError("funding_arb_position_not_open")
+
+        if str(getattr(position, "mode", "paper")).lower() == "live":
+            from services.live_executor import LIVE_EXECUTOR
+            close_orders = {
+                "spot_close": LIVE_EXECUTOR.place_market(
+                    position.spot_symbol, "sell", float(position.spot_qty),
+                    market_type="spot", reference_price=float(spot_exit_price),
+                    purpose="fund_spot_close").as_dict(),
+                "swap_close": LIVE_EXECUTOR.place_market(
+                    position.swap_symbol, "buy", float(position.swap_qty),
+                    market_type="swap", reduce_only=True,
+                    reference_price=float(swap_exit_price),
+                    purpose="fund_swap_close").as_dict(),
+            }
+            raw = dict(position.raw_json or {})
+            raw["close_orders"] = close_orders
+            position.raw_json = raw
+
+        # бухгалтерия закрытия (та же, что в close_paper)
+        return self.close_paper(
+            db, position_id=position_id, spot_exit_price=spot_exit_price,
+            swap_exit_price=swap_exit_price, funding_periods=funding_periods,
+            exit_funding_rate=exit_funding_rate,
+        )
+
     def _estimate_funding_periods(self, position: FundingArbPosition, now: datetime | None = None) -> int:
         now = now or datetime.now(timezone.utc)
         opened_at = position.opened_at
@@ -598,7 +648,23 @@ class FundingArbEngine:
                         "position": self.serialize_position(closed_position),
                     })
                 else:
-                    close_required.append(decision)
+                    # live-позиция: закрываем РЕАЛЬНЫМИ ордерами через close_hedge
+                    # (LIVE_EXECUTOR сам решает dry_run/live). Симметрия с open_hedge.
+                    spot_exit = float(self.client.fetch_mark_price(position.spot_symbol))
+                    swap_exit = float(self.client.fetch_mark_price(position.swap_symbol))
+                    closed_position = self.close_hedge(
+                        db,
+                        position.id,
+                        spot_exit_price=spot_exit,
+                        swap_exit_price=swap_exit,
+                        funding_periods=self._estimate_funding_periods(position),
+                        exit_funding_rate=current_rate,
+                    )
+                    closed.append({
+                        "decision": decision,
+                        "position": self.serialize_position(closed_position),
+                        "live_close": True,
+                    })
             except Exception as exc:
                 errors.append({
                     "position_id": position.id,

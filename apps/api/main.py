@@ -848,6 +848,35 @@ def liquidity_state():
     }
 
 
+@app.get("/live/state", dependencies=[Depends(require_owner_action)])
+def live_state():
+    """Готовность к Live: режим исполнения, предохранители, баланс. Показывает,
+    что реальные ордера уходят ТОЛЬКО при ENABLE_LIVE_ORDERS=true И mode=live."""
+    from services.live_executor import LIVE_EXECUTOR
+    eff = LIVE_EXECUTOR.effective_mode()
+    out = {
+        "configured_mode": LIVE_EXECUTOR.configured_mode(),
+        "effective_mode": eff,
+        "is_live": eff == "live",
+        "enable_live_orders": bool(getattr(settings, "ENABLE_LIVE_ORDERS", False)),
+        "robot_mode": getattr(settings, "ROBOT_MODE", "paper"),
+        "trading_mode": getattr(settings, "TRADING_MODE", "paper_trade"),
+        "execution_market": settings.execution_market_type,
+        "execution_leverage": settings.execution_leverage,
+        "safety": {
+            "set_leverage": bool(getattr(settings, "LIVE_SET_LEVERAGE", True)),
+            "margin_mode": getattr(settings, "LIVE_MARGIN_MODE", "cross"),
+            "max_order_notional_usdt": getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0),
+            "size_from_balance": bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)),
+            "fill_poll_timeout_sec": getattr(settings, "LIVE_FILL_POLL_TIMEOUT_SEC", 10.0),
+        },
+        "validation_blockers": settings.production_blockers() if hasattr(settings, "production_blockers") else None,
+    }
+    if eff == "live":
+        out["account_equity_usdt"] = LIVE_EXECUTOR.account_equity_usdt()
+    return out
+
+
 @app.get("/orderbook/volume-profile", dependencies=[Depends(require_owner_action)])
 def orderbook_volume_profile(symbol: str = "BTC/USDT", timeframe: str = "1h",
                              limit: int = 1000, bins: int = 50):

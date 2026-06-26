@@ -192,6 +192,34 @@ class HTXClient:
             params or {},
         )
 
+    # ── Live-safe примитивы (без слепого ретрая create — он не идемпотентен) ───
+    def create_order_once(self, symbol: str, type_: str, side: str, amount: float,
+                          price: float | None = None, params: dict | None = None):
+        """ОДНА попытка отправки ордера (НЕ _retry). Повтор create при таймауте
+        может удвоить позицию — идемпотентность обеспечивает вызывающий слой
+        (LiveExecutor) через сверку по clientOrderId."""
+        return self.exchange.create_order(symbol, type_, side, amount, price, params or {})
+
+    def set_leverage(self, leverage: float, symbol: str, params: dict | None = None):
+        """Выставить плечо для символа (swap). best-effort, идемпотентно."""
+        if hasattr(self.exchange, "set_leverage"):
+            return self._retry(self.exchange.set_leverage, leverage, symbol, params or {})
+        return None
+
+    def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
+        """cross/isolated для символа (swap). best-effort."""
+        if hasattr(self.exchange, "set_margin_mode"):
+            try:
+                return self._retry(self.exchange.set_margin_mode, margin_mode, symbol, params or {})
+            except Exception as exc:  # noqa: BLE001 — некоторые аккаунты не дают менять режим с позицией
+                log_event(logger, logging.WARNING, "htx_set_margin_mode_skip", symbol=symbol, error=str(exc))
+        return None
+
+    def fetch_closed_orders(self, symbol: str | None = None, limit: int = 20):
+        if hasattr(self.exchange, "fetch_closed_orders"):
+            return self._retry(self.exchange.fetch_closed_orders, symbol, None, limit)
+        return []
+
     def cancel_order(self, order_id: str, symbol: str):
         return self._retry(self.exchange.cancel_order, order_id, symbol)
 
