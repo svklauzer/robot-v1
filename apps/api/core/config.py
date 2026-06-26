@@ -162,6 +162,21 @@ class Settings(BaseSettings):
     # есть, флаг включает её проверку в robot_loop.
     REENTRY_COOLDOWN_ENABLED: bool = True
 
+    # ── LiquidityGuard: защита от расширения спреда (тонкая ликвидность) ───────
+    # Единый адаптивный спред-гард для ВСЕХ движков (trend/grid/funding/ML).
+    # «Широко» = текущий спред > mult×(EWMA-база символа) ИЛИ > абс. потолка.
+    # Это не часы по UTC (данные опровергли ночную гипотезу), а живое состояние
+    # ликвидности — реагирует на реальный спайк спреда когда бы он ни случился.
+    LIQUIDITY_GUARD_ENABLED: bool = True
+    LIQ_BLOCK_ENTRY: bool = True            # не открываться при широком спреде
+    LIQ_PROTECT_EXIT: bool = True           # не давать спайку выбивать софт-стопы
+    LIQ_SPREAD_ABS_MAX_BPS: float = 25.0    # абс. потолок входа, bps (0.25%)
+    LIQ_SPREAD_BASELINE_MULT: float = 3.0   # вход: широко если >3× базы символа
+    LIQ_EXIT_SPREAD_MULT: float = 4.0       # выход подавляем только на бОльшем спайке
+    LIQ_SPREAD_BASELINE_ALPHA: float = 0.05 # EWMA-сглаживание базы (≈20 семплов)
+    LIQ_SPREAD_MIN_BASELINE_BPS: float = 1.0  # пол базы (ранний/нулевой не перетриггерит)
+    LIQ_EXIT_MAX_AGE_SEC: float = 30.0      # свежесть кэша для подавления выхода
+
     # (#leak-bad-entry) Анти-чоп gate на входе. Аудит: ETH #104 (MFE 0.0 → −4.45)
     # и BTC #106 (MFE 0.30 → −4.68) — шорты в чопповый/разворачивающийся рынок,
     # выходной логикой не спасти. Меряем силу тренда ADX-подобно через веер EMA:

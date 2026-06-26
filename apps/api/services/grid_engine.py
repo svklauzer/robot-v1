@@ -42,6 +42,22 @@ class GridEngine:
         except Exception:
             return 0.0
 
+    def _quote(self, symbol: str):
+        """(last, bid, ask) одним снимком + кормит LiquidityGuard спредом."""
+        try:
+            snap = self.market.snapshot(symbol)
+            last = float(snap.get("last") or 0.0)
+            bid = snap.get("bid")
+            ask = snap.get("ask")
+            try:
+                from services.liquidity_guard import LIQUIDITY_GUARD
+                LIQUIDITY_GUARD.observe(symbol, bid, ask)
+            except Exception:
+                pass
+            return last, bid, ask
+        except Exception:
+            return 0.0, None, None
+
     def _round_price(self, symbol: str, price: float) -> float:
         try:
             return float(self.htx.price_to_precision(symbol, price)) if self.htx else round(price, 8)
@@ -98,27 +114,28 @@ class GridEngine:
 
     def tick(self, symbol: str):
         symbol = symbol.upper()
-        price = self._price(symbol)
+        last, bid, ask = self._quote(symbol)  # греет LiquidityGuard спредом символа
+        price = last
         if price <= 0:
             return
 
         cyc = self.store.get_cycle(symbol)
         if cyc is None:
-            self._maybe_open(symbol, price)
+            self._maybe_open(symbol, price, bid=bid, ask=ask)
             return
 
         # Адаптация к живому рынку ДО филлов: пере-раскладка пустых уровней под
         # текущий ATR/дрейф и разворот направления при смене регайма.
         if bool(getattr(settings, "GRID_ADAPT_ENABLED", True)):
             if self._adapt(cyc, symbol, price) == "flipped":
-                self._maybe_open(symbol, price)  # сразу открываем в новом направлении
+                self._maybe_open(symbol, price, bid=bid, ask=ask)  # сразу в новом направлении
                 return
             cyc = self.store.get_cycle(symbol)   # перечитать после возможной записи
             if cyc is None:
                 return
 
         self._process_fills(cyc, symbol, price)
-        self._check_exits(cyc, symbol, price)
+        self._check_exits(cyc, symbol, price, bid=bid, ask=ask)
 
     # ── адаптация открытого цикла к живому рынку ──────────────────────────────
     def _adapt(self, cyc: dict, symbol: str, price: float) -> str:
@@ -201,13 +218,23 @@ class GridEngine:
         return changed
 
     # ── открытие нового цикла ─────────────────────────────────────────────────
-    def _maybe_open(self, symbol: str, price: float):
+    def _maybe_open(self, symbol: str, price: float, *, bid=None, ask=None):
         # карман маржи: есть ли место хотя бы под базовый ордер
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         base_usdt = float(getattr(settings, "GRID_BASE_ORDER_USDT", 20.0))
         free = self._envelope() - self.store.grid_used_margin()
         if free < base_usdt / lev:
             return  # нет свободной маржи в кармане сетки
+
+        # LiquidityGuard: не открываем новый цикл при широком спреде (свип-риск).
+        try:
+            from services.liquidity_guard import LIQUIDITY_GUARD
+            blocked, reason, sp = LIQUIDITY_GUARD.entry_blocked(symbol, bid, ask)
+            if blocked:
+                print(f"[GRID LIQ-BLOCK] {symbol} open skipped: {reason}")
+                return
+        except Exception:
+            pass
 
         fm = self._fresh_market(symbol)
         if not fm:
@@ -294,7 +321,7 @@ class GridEngine:
         cyc["position"] = ps
 
     # ── проверка выходов (TP / SL по всей корзине) ────────────────────────────
-    def _check_exits(self, cyc: dict, symbol: str, price: float):
+    def _check_exits(self, cyc: dict, symbol: str, price: float, *, bid=None, ask=None):
         filled = [lv for lv in cyc["levels"] if lv.get("filled")]
         if not filled:
             return
@@ -313,6 +340,22 @@ class GridEngine:
             self.store.close_cycle(symbol, realized=unreal, reason="grid_take_profit", price=price)
             print(f"[GRID TP] {symbol} closed basket pnl={unreal:.4f} @ {price}")
         elif sl_hit:
+            # LiquidityGuard: на спайке спреда стоп может быть «сносом» — не закрываем
+            # корзину по раздутому стакану, ждём нормализации (хард-риск ATR-стопа
+            # остаётся: при реальном ходе цена удержится за SL и закроемся следующим
+            # тиком без спайка).
+            try:
+                from services.liquidity_guard import LIQUIDITY_GUARD
+                if LIQUIDITY_GUARD.exit_suppressed(symbol, bid, ask):
+                    cyc["unrealized_pnl"] = unreal
+                    cyc["last_price"] = price
+                    cyc["sl_suppressed_spread"] = True
+                    self.store.put_cycle(symbol, cyc)
+                    print(f"[GRID SL-HOLD] {symbol} SL отложен: спайк спреда @ {price}")
+                    return
+            except Exception:
+                pass
+            cyc.pop("sl_suppressed_spread", None)
             self.store.close_cycle(symbol, realized=unreal, reason="grid_stop_loss", price=price)
             print(f"[GRID SL] {symbol} closed basket pnl={unreal:.4f} @ {price}")
         else:

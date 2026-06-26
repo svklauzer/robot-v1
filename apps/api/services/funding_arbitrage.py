@@ -453,6 +453,16 @@ class FundingArbEngine:
         for opp in unique_candidates:
             if open_count >= max_hedges:
                 break
+            # LiquidityGuard: не открываем хедж при широком спреде (свип-риск ноги).
+            # Кэш спреда греют trend/grid; нет данных по символу → fail-open.
+            try:
+                from services.liquidity_guard import LIQUIDITY_GUARD
+                if LIQUIDITY_GUARD.entry_blocked(opp.symbol)[0]:
+                    errors.append({"opportunity_id": opp.id, "symbol": opp.symbol,
+                                   "error": "liquidity_guard_wide_spread"})
+                    continue
+            except Exception:
+                pass
             try:
                 pos = self.open_paper(db, opp.id)
                 db.flush()

@@ -42,6 +42,14 @@ def _depth_flow_against(signal, side: str) -> bool:
         if snap and snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
             snap = None
         sig = OrderBookAnalyzer.analyze(snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+        # Греем LiquidityGuard спредом удерживаемой позиции (для подавления
+        # софт-выходов на спайке спреда в exit_policy).
+        try:
+            from services.liquidity_guard import LIQUIDITY_GUARD
+            if sig and sig.spread_pct is not None:
+                LIQUIDITY_GUARD.observe_bps(signal.symbol, sig.spread_pct * 100.0)
+        except Exception:
+            pass
         return OrderBookAnalyzer.flow_against(
             side, sig,
             cvd_exit_ratio=float(getattr(settings, "OB_CVD_EXIT_RATIO", 0.6)),

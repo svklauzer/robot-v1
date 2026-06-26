@@ -316,6 +316,14 @@ class RobotLoop:
                 if ob_snap and ob_snap.get("age_sec", 1e9) > float(getattr(settings, "OB_DATA_MAX_AGE_SEC", 15.0)):
                     ob_snap = None
                 ob_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
+                # LiquidityGuard: кормим адаптивную базу спредом символа и блокируем
+                # вход при аномально широком спреде (свип-риск тонкой ликвидности).
+                try:
+                    from services.liquidity_guard import LIQUIDITY_GUARD
+                    _sp_bps = (ob_sig.spread_pct * 100.0) if ob_sig and ob_sig.spread_pct is not None else None
+                    _liq_block, _liq_reason, _ = LIQUIDITY_GUARD.entry_blocked(symbol, sp_bps=_sp_bps)
+                except Exception:
+                    _liq_block, _liq_reason = False, ""
                 # Профиль-зависимый спред-кап: scalp/range — туго (фил критичен),
                 # trend/crt (POSITION) — шире (едем 1.5–3%, спред 0.1–0.2% = шум).
                 _is_position = str(result.regime or "").lower() not in ("range", "scalp")
@@ -335,7 +343,8 @@ class RobotLoop:
                     # Жёсткое вето при подавляющем OBI против входа (стенка не спасает).
                     obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
                 )
-                if not ob_ok:
+                if not ob_ok or _liq_block:
+                    _block_reason = ob_reason if not ob_ok else f"liq_spread:{_liq_reason}"
                     db.add(
                         IntelligenceEvent(
                             symbol=symbol,
@@ -346,7 +355,7 @@ class RobotLoop:
                             radar_state=result.radar_state,
                             confidence_hint=result.confidence_hint,
                             setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                            payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_depth_gate", "reason": ob_reason, "depth": ob_sig.as_dict()},
+                            payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_depth_gate", "reason": _block_reason, "depth": ob_sig.as_dict()},
                         )
                     )
                     db.flush()
@@ -959,6 +968,14 @@ class RobotLoop:
                 )
                 if not ob_ok:
                     return False
+                # LiquidityGuard: адаптивный спред-блок (свип-риск тонкой ликвидности).
+                try:
+                    from services.liquidity_guard import LIQUIDITY_GUARD
+                    _sp_bps = (ob_sig.spread_pct * 100.0) if ob_sig and ob_sig.spread_pct is not None else None
+                    if LIQUIDITY_GUARD.entry_blocked(symbol, sp_bps=_sp_bps)[0]:
+                        return False
+                except Exception:
+                    pass
             entry_from = float(result.entry_zone[0]); entry_to = float(result.entry_zone[1])
             entry_mid = (entry_from + entry_to) / 2.0
             try:

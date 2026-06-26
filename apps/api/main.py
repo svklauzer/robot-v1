@@ -828,6 +828,26 @@ def orderbook_state():
     }
 
 
+@app.get("/liquidity/state", dependencies=[Depends(require_owner_action)])
+def liquidity_state():
+    """LiquidityGuard: текущий спред vs скользящая база по символам (bps), и
+    активные пороги. Единый адаптивный спред-гард для trend/grid/funding/ML."""
+    from services.liquidity_guard import LIQUIDITY_GUARD
+    return {
+        "enabled": bool(getattr(settings, "LIQUIDITY_GUARD_ENABLED", True)),
+        "block_entry": bool(getattr(settings, "LIQ_BLOCK_ENTRY", True)),
+        "protect_exit": bool(getattr(settings, "LIQ_PROTECT_EXIT", True)),
+        "thresholds": {
+            "abs_max_bps": getattr(settings, "LIQ_SPREAD_ABS_MAX_BPS", 25.0),
+            "entry_mult": getattr(settings, "LIQ_SPREAD_BASELINE_MULT", 3.0),
+            "exit_mult": getattr(settings, "LIQ_EXIT_SPREAD_MULT", 4.0),
+            "baseline_alpha": getattr(settings, "LIQ_SPREAD_BASELINE_ALPHA", 0.05),
+            "min_baseline_bps": getattr(settings, "LIQ_SPREAD_MIN_BASELINE_BPS", 1.0),
+        },
+        "symbols": LIQUIDITY_GUARD.snapshot(),
+    }
+
+
 @app.get("/orderbook/volume-profile", dependencies=[Depends(require_owner_action)])
 def orderbook_volume_profile(symbol: str = "BTC/USDT", timeframe: str = "1h",
                              limit: int = 1000, bins: int = 50):

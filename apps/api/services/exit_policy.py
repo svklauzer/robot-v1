@@ -152,6 +152,19 @@ class ExitPolicyService:
         mfe = float(mfe_pct or 0.0)
         current_pct = self._result_pct(side, entry_price, current_price)
 
+        # (#liq) Защита от свипа спредом: на аномальном спайке спреда НЕ исполняем
+        # софт-выходы до TP1 (breakeven_lock / failed_setup / protective) — их и
+        # «сносит» раздутым стаканом. Реальный хард-стоп в signal_lifecycle и
+        # глубокий deep-порог остаются бэкстопом; при настоящем ходе цена удержится
+        # и закроемся следующим тиком уже без спайка. Только свежий кэш (fail-open).
+        if symbol:
+            try:
+                from services.liquidity_guard import LIQUIDITY_GUARD
+                if LIQUIDITY_GUARD.exit_suppressed(symbol):
+                    return ExitDecision(exit=False, note="liq_spread_spike_hold")
+            except Exception:
+                pass
+
         stop_distance_pct = (
             abs(entry_price - float(stop_price)) / entry_price * 100
             if stop_price is not None and float(stop_price) > 0
