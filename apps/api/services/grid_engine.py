@@ -267,7 +267,8 @@ class GridEngine:
         cyc = {
             "symbol": symbol, "regime": regime, "anchor": price, "atr": atr,
             "timeframe": str(getattr(settings, "GRID_TIMEFRAME", "1h")),
-            "leverage": lev, "status": "active", "created_at": _now(),
+            "leverage": lev, "margin_mode": settings.grid_effective_margin_mode,
+            "status": "active", "created_at": _now(),
             "levels": levels, "breakeven": None, "tp_price": None, "sl_price": None,
             "ind": {"ema": round(ind["ema"], 6), "rsi": round(ind["rsi"], 2)},
             "regime_now": regime, "flip_streak": 0, "frozen": False,

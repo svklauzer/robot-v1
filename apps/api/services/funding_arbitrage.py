@@ -378,6 +378,7 @@ class FundingArbEngine:
                 opportunity.swap_symbol, "sell", hedge["swap_qty"],
                 market_type="swap", reduce_only=False,
                 leverage=float(getattr(settings, "FUNDING_LEVERAGE", 2)),
+                margin_mode=getattr(settings, "FUNDING_MARGIN_MODE", "cross"),
                 reference_price=opportunity.swap_price, purpose="fund_swap_open",
             )
             raw_orders["spot_open"] = spot_res.as_dict()
@@ -601,6 +602,7 @@ class FundingArbEngine:
                     position.swap_symbol, "buy", float(position.swap_qty),
                     market_type="swap", reduce_only=True,
                     leverage=float(getattr(settings, "FUNDING_LEVERAGE", 2)),
+                    margin_mode=getattr(settings, "FUNDING_MARGIN_MODE", "cross"),
                     reference_price=float(swap_exit_price),
                     purpose="fund_swap_close").as_dict(),
             }

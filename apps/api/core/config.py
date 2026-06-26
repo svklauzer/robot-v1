@@ -144,6 +144,21 @@ class Settings(BaseSettings):
     # GRID — мартингейл (добор в просадку): плечо + мартингейл = ликвидация,
     # держим минимальным (GRID_LEVERAGE, по умолчанию 1).
 
+    # ── Режим маржи ПО ДВИЖКУ (cross/isolated) ───────────────────────────────
+    # TREND isolated: локализуем риск каждой направленной ставки (одна сделка не
+    #   каскадит на другие; макс. убыток предсказуем; стоп срабатывает раньше).
+    # GRID isolated: при плече 1x ликвидация ~100% от входа → ATR-стоп корзины
+    #   всегда раньше; изоляция не даёт просадке сетки выесть маржу других движков.
+    # FUNDING cross: дельта-нейтральной swap-ноге нужен буфер ВСЕГО swap-счёта,
+    #   иначе isolated-ликвидация одной ноги РАЗОРВЁТ хедж (spot и swap — разные
+    #   счета HTX, маржа не взаимозачитывается). Cross держит хедж живым.
+    TREND_MARGIN_MODE: str = "isolated"
+    GRID_MARGIN_MODE: str = "isolated"   # базовый режим сетки (при плече 1x)
+    FUNDING_MARGIN_MODE: str = "cross"
+    # Порог плеча сетки, ВЫШЕ которого isolated небезопасен (ликвиднёт корзину до
+    # mean-reversion) → авто-переключение на cross (см. grid_effective_margin_mode).
+    GRID_MARGIN_ISOLATED_MAX_LEV: float = 1.0
+
     ENABLE_FUTURES: bool = False
     FUTURES_MARGIN_MODE: str = "isolated"
     FUTURES_LEVERAGE: int = 1
@@ -857,6 +872,23 @@ class Settings(BaseSettings):
         if self.ENABLE_FUTURES_EXECUTION:
             return max(int(self.FUTURES_LEVERAGE), 1)
         return 1
+
+    @property
+    def grid_effective_margin_mode(self) -> str:
+        """Режим маржи сетки С УЧЁТОМ плеча.
+
+        При плече 1x isolated безопасен: ликвидация ~100% от входа, ATR-стоп
+        корзины всегда срабатывает раньше. Но при плече >1x дистанция до
+        ликвидации ≈1/плечо сжимается и становится МЕНЬШЕ длины лестницы сетки —
+        isolated ликвиднёт корзину на дне просадки, ДО mean-reversion. Поэтому
+        выше порога авто-переключаемся на cross (буфер всего счёта держит корзину).
+        Рекомендация при cross: выделенный субсчёт под сетку, чтобы её просадка не
+        затрагивала маржу других движков (риск тогда локализован счётом сетки).
+        """
+        lev = float(getattr(self, "GRID_LEVERAGE", 1.0) or 1.0)
+        if lev > float(getattr(self, "GRID_MARGIN_ISOLATED_MAX_LEV", 1.0)):
+            return "cross"
+        return str(getattr(self, "GRID_MARGIN_MODE", "isolated")).lower()
 
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []

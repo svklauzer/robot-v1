@@ -336,7 +336,9 @@ class ExecutionEngine:
                 symbol, side, float(qty),
                 market_type=settings.execution_market_type,
                 reduce_only=reduce_only, reference_price=float(ref_price),
-                leverage=settings.execution_leverage, purpose=purpose,
+                leverage=settings.execution_leverage,
+                margin_mode=getattr(settings, "TREND_MARGIN_MODE", "isolated"),
+                purpose=purpose,
             )
             return res.as_dict()
         except Exception as exc:  # noqa: BLE001 — бумага не должна падать из-за live-слоя

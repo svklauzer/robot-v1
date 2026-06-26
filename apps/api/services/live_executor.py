@@ -113,14 +113,15 @@ class LiveExecutor:
         return None
 
     # ── плечо / режим маржи ─────────────────────────────────────────────────────
-    def _ensure_leverage(self, symbol: str, market_type: str, leverage: float | None):
+    def _ensure_leverage(self, symbol: str, market_type: str, leverage: float | None,
+                         margin_mode: str | None = None):
         if market_type != "swap" or not bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
             return
         if symbol in self._leverage_set:
             return
         lev = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
         lev = max(1.0, min(lev, float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))))  # потолок-предохранитель
-        margin_mode = str(getattr(settings, "LIVE_MARGIN_MODE", "cross")).lower()
+        margin_mode = str(margin_mode or getattr(settings, "LIVE_MARGIN_MODE", "cross")).lower()
         try:
             self.client.set_margin_mode(margin_mode, symbol)
             self.client.set_leverage(lev, symbol)
@@ -195,6 +196,7 @@ class LiveExecutor:
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
                      reduce_only: bool = False, leverage: float | None = None,
+                     margin_mode: str | None = None,
                      reference_price: float | None = None, purpose: str = "") -> OrderResult:
         mode = self.effective_mode()
         amount = float(amount)
@@ -223,8 +225,8 @@ class LiveExecutor:
                                client_order_id=client_id, filled_qty=amount,
                                avg_price=float(reference_price) if reference_price else None, **base)
 
-        # LIVE: плечо → отправка (одна попытка) → сверка при сбое → подтверждение филла
-        self._ensure_leverage(symbol, market_type, leverage)
+        # LIVE: плечо/режим маржи → отправка (одна попытка) → сверка → подтверждение
+        self._ensure_leverage(symbol, market_type, leverage, margin_mode)
         params: dict[str, Any] = {"clientOrderId": client_id}
         if market_type:
             params["defaultType"] = market_type

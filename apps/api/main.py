@@ -862,15 +862,23 @@ def live_state():
         "robot_mode": getattr(settings, "ROBOT_MODE", "paper"),
         "trading_mode": getattr(settings, "TRADING_MODE", "paper_trade"),
         "execution_market": settings.execution_market_type,
-        "leverage_by_engine": {
-            "trend": settings.execution_leverage,
-            "grid": getattr(settings, "GRID_LEVERAGE", 1.0),
-            "funding_swap": getattr(settings, "FUNDING_LEVERAGE", 2),
-            "max_cap": getattr(settings, "LIVE_MAX_LEVERAGE", 5.0),
+        "by_engine": {
+            "trend": {"leverage": settings.execution_leverage,
+                      "margin_mode": getattr(settings, "TREND_MARGIN_MODE", "isolated")},
+            "grid": {"leverage": getattr(settings, "GRID_LEVERAGE", 1.0),
+                     "margin_mode": settings.grid_effective_margin_mode,
+                     "margin_mode_base": getattr(settings, "GRID_MARGIN_MODE", "isolated"),
+                     "auto_cross_on_leverage": settings.grid_effective_margin_mode != getattr(settings, "GRID_MARGIN_MODE", "isolated"),
+                     "advisory": ("плечо>1x → cross; рекомендуется выделенный субсчёт под сетку"
+                                  if float(getattr(settings, "GRID_LEVERAGE", 1.0)) > float(getattr(settings, "GRID_MARGIN_ISOLATED_MAX_LEV", 1.0))
+                                  else None)},
+            "funding_swap": {"leverage": getattr(settings, "FUNDING_LEVERAGE", 2),
+                             "margin_mode": getattr(settings, "FUNDING_MARGIN_MODE", "cross")},
+            "max_leverage_cap": getattr(settings, "LIVE_MAX_LEVERAGE", 5.0),
         },
         "safety": {
             "set_leverage": bool(getattr(settings, "LIVE_SET_LEVERAGE", True)),
-            "margin_mode": getattr(settings, "LIVE_MARGIN_MODE", "cross"),
+            "margin_mode_default": getattr(settings, "LIVE_MARGIN_MODE", "cross"),
             "max_order_notional_usdt": getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0),
             "size_from_balance": bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)),
             "fill_poll_timeout_sec": getattr(settings, "LIVE_FILL_POLL_TIMEOUT_SEC", 10.0),
