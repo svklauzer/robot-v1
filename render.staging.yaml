@@ -1,0 +1,163 @@
+# render.staging.yaml — PAPER-контур (staging), изолированный от прод-контура.
+#
+# Зачем: разработка/обновления/бумажные тесты идут здесь, прод (render.yaml,
+# ветка main) не трогается. ТОТ ЖЕ код — отличается только конфигом, БД и ключами.
+#
+# Как подключить (один раз):
+#   Render Dashboard → New → Blueprint → выбрать этот репозиторий →
+#   указать Blueprint file path: render.staging.yaml → Apply.
+#   Создастся ВТОРОЙ независимый набор сервисов (*-paper) + robot-db-paper.
+#
+# После первого деплоя дозаполнить (URL генерятся Render-ом):
+#   • robot-web-paper → API_BASE_URL = https://<robot-api-paper-URL>.onrender.com
+#   • robot-api-paper → CORS_ORIGINS  = https://<robot-web-paper-URL>.onrender.com
+#
+# Инвариант безопасности: торговать живыми деньгами здесь НЕЛЬЗЯ —
+#   ENABLE_LIVE_ORDERS=false + LIVE_EXECUTION_MODE=dry_run + ROBOT_MODE=paper.
+#   HTX-ключи отдельные (желательно read-only / без права торговли).
+
+services:
+
+  # ── API (paper) ────────────────────────────────────────────────────────────
+  - type: web
+    name: robot-api-paper
+    runtime: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: apps/api
+    plan: starter
+    region: singapore
+    branch: staging          # ← отдельная ветка разработки
+    autoDeploy: true
+    healthCheckPath: /health
+    preDeployCommand: sh migrate.sh
+
+    disk:
+      name: ml-storage-paper
+      mountPath: /app/storage/ml
+      sizeGB: 1
+
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: DB_AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: CORS_ORIGINS
+        value: https://robot-web-paper.onrender.com   # дозаполнить реальным URL
+      - key: TRADE_OUTCOMES_PATH
+        value: /app/storage/ml/trade_outcomes.jsonl
+      - key: NEWS_ENABLED
+        value: "true"
+
+      # ── ПРЕДОХРАНИТЕЛИ: paper-контур НИКОГДА не торгует живьём ───────────────
+      - key: ROBOT_MODE
+        value: paper
+      - key: TRADING_MODE
+        value: paper_trade
+      - key: ENABLE_LIVE_ORDERS
+        value: "false"
+      - key: LIVE_EXECUTION_MODE
+        value: dry_run
+
+      # ── Secrets (отдельные от прода) ────────────────────────────────────────
+      - key: JWT_SECRET
+        sync: false
+      - key: OWNER_API_TOKEN
+        sync: false
+      - key: OWNER_PASSWORD
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+
+      # ── БД/Redis — привязка к paper-инстансам ───────────────────────────────
+      - key: DATABASE_URL
+        fromDatabase:
+          name: robot-db-paper
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: robot-redis-paper
+          type: keyvalue
+          property: connectionString
+
+      # ── Telegram (отдельный бот/каналы для staging, чтобы не спамить прод) ───
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_CHAT_ID
+        sync: false
+      - key: TELEGRAM_FREE_SIGNALS_CHAT_ID
+        sync: false
+      - key: TELEGRAM_VIP_SIGNALS_CHAT_ID
+        sync: false
+      - key: TELEGRAM_CONNECT_TIMEOUT
+        value: "15.0"
+      - key: TELEGRAM_READ_TIMEOUT
+        value: "30.0"
+
+      # ── HTX — ОТДЕЛЬНЫЕ ключи (рекомендуется read-only / без трейда) ─────────
+      - key: HTX_API_KEY
+        sync: false
+      - key: HTX_API_SECRET
+        sync: false
+      - key: HTX_API_HOSTNAME
+        value: api-aws.huobi.pro
+      - key: HTX_MARKET_TYPE
+        value: spot
+      - key: HTX_SYMBOLS
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,ADA/USDT,LINK/USDT,AVAX/USDT,DOT/USDT
+
+      # ── Risk (как в проде — поведение должно совпадать) ─────────────────────
+      - key: RISK_EQUITY_USDT
+        value: "950"
+      - key: RISK_PER_TRADE_PCT
+        value: "0.4"
+      - key: MAX_ACTIVE_SIGNALS
+        value: "5"
+      - key: MAX_DAILY_LOSS_PCT
+        value: "3"
+      - key: MAX_DRAWDOWN_PCT
+        value: "15"
+
+      # ── Funding arb (paper) ─────────────────────────────────────────────────
+      - key: ENABLE_FUNDING_ARB
+        value: "true"
+      - key: ENABLE_FUTURES
+        value: "true"
+      - key: FUNDING_ARB_SYMBOLS
+        value: BTC/USDT,ETH/USDT,SOL/USDT,DOGE/USDT,XRP/USDT,SUI/USDT
+      - key: FUNDING_ARB_AUTO_OPEN_PAPER
+        value: "true"
+
+  # ── Web (paper) ─────────────────────────────────────────────────────────────
+  - type: web
+    name: robot-web-paper
+    runtime: docker
+    dockerfilePath: apps/web/Dockerfile
+    dockerContext: apps/web
+    plan: starter
+    region: singapore
+    branch: staging
+    autoDeploy: true
+
+    envVars:
+      # Указывает на paper-API. Дозаполнить реальным URL после первого деплоя.
+      - key: API_BASE_URL
+        value: https://robot-api-paper.onrender.com
+      - key: OWNER_API_TOKEN
+        sync: false          # тот же, что у robot-api-paper
+
+  # ── Redis (paper) ───────────────────────────────────────────────────────────
+  - type: keyvalue
+    name: robot-redis-paper
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+
+  # ── PostgreSQL (paper) — ОТДЕЛЬНАЯ от прод-БД ───────────────────────────────
+  - name: robot-db-paper
+    plan: basic-256mb
+    databaseName: robot_paper
+    user: robot_paper
+    region: singapore
