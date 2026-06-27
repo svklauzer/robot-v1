@@ -251,20 +251,27 @@ class Settings(BaseSettings):
     ANTI_CHOP_GATE_ENABLED: bool = True
     # Якорный ТФ для оценки силы тренда (структурный, не исполнительный).
     ANTI_CHOP_ANCHOR_TF: str = "1h"
-    # Мин. раскрытие веера EMA в ATR. 0.5 — мягко: блокирует только свёрнутые
-    # (коил) и противотрендовые входы, здоровый тренд (несколько ATR) проходит.
-    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.5
+    # Мин. раскрытие веера EMA в ATR. Поднято 0.5→0.8 (#expectancy-cleanup):
+    # данные показали 52% входов с MFE<0.35% (сразу мимо) и E/сделку trend-long
+    # −1.60 / «strong confirmed» −1.68 — это входы БЕЗ реального тренда по
+    # направлению. 0.8 требует явный веер EMA в сторону сделки → стоим в стороне
+    # в боковике/против тренда. Регайм-симметрично (лонги и шорты на равных).
+    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.8
 
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.90
+    # Поднято 0.90→1.30 (#expectancy-cleanup): только 4/101 сделки дошли до MFE≥2%,
+    # но дали ВСЮ прибыль (+20). Победителей резали на ~60% MFE (capture ~40%).
+    # Старт трейла/фиксации позже → раннеры доезжают к TP2; мелкие плюсы (0.45–1.3)
+    # держит безубыток-замок, не давая откатиться в минус.
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 1.30
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.90
+    MFE_CAPTURE_START_PCT: float = 1.30   # 0.90→1.30 (#expectancy-cleanup): дать раннерам дойти до TP2
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
