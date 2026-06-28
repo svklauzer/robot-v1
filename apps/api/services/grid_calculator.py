@@ -45,12 +45,20 @@ def compute_indicators(df, ema_period: int = 200, rsi_period: int = 14,
     return {"price": price, "ema": float(ema), "rsi": rsi, "atr": atr}
 
 
-def detect_regime(ind: dict, rsi_high: float = 70.0, rsi_low: float = 30.0) -> str:
-    """LONG / SHORT / NEUTRAL по EMA200 + RSI14."""
+def detect_regime(ind: dict, rsi_high: float = 70.0, rsi_low: float = 30.0,
+                  ema_band_pct: float = 0.25) -> str:
+    """LONG / SHORT / NEUTRAL по EMA200 + RSI14.
+
+    (#grid-flip-thrash) Мёртвая зона вокруг EMA200: пока цена в пределах
+    ±ema_band_pct% от EMA, регайм = NEUTRAL. Иначе в боковике (цена висит на
+    EMA200, как SOL @70.7) регайм флипается long/short каждые пару тиков →
+    бесконечные grid_regime_flip (в срезе: 20+ циклов с realized 0). Зона гасит пилу.
+    """
     price, ema, rsi = ind["price"], ind["ema"], ind["rsi"]
-    if price > ema and rsi < rsi_high:
+    band = ema * max(0.0, ema_band_pct) / 100.0
+    if price > ema + band and rsi < rsi_high:
         return "long"
-    if price < ema and rsi > rsi_low:
+    if price < ema - band and rsi > rsi_low:
         return "short"
     return "neutral"
 

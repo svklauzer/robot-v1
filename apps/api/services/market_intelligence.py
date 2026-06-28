@@ -1537,6 +1537,27 @@ class MarketIntelligenceEngine:
                     decision = "wait"
                     comment = f"anti_chop_no_trend(fan_atr={_fan_atr:.2f}<{_min_fan:.2f})"
 
+        # (#htf-align) Выравнивание со СТАРШИМ ТФ. Аудит свежих тестов: AVAX-лонги
+        # (#146/#147) открывались, пока 4h структурно ВНИЗ (price << ema200_4h) —
+        # контртренд к большому ТФ, MFE~0.06-0.13 → стоп −2.3…−3.0. Не лонгуем,
+        # если старший ТФ в даунтренде; не шортим, если в аптренде. Reversal — мимо.
+        if (
+            bool(getattr(settings, "HTF_ALIGN_ENABLED", True))
+            and decision == "approve"
+            and not is_reversal
+        ):
+            _htf = self._tf(contexts, str(getattr(settings, "HTF_ALIGN_TF", "4h")))
+            _hpx = float(self._ctx_value(_htf, "last_close", 0) or 0)
+            _he200 = float(self._ctx_value(_htf, "ema200", 0) or 0)
+            if _hpx > 0 and _he200 > 0:
+                _htf_up = _hpx > _he200
+                if action == "long" and not _htf_up:
+                    decision = "wait"
+                    comment = "htf_against_long_4h_down"
+                elif action == "short" and _htf_up:
+                    decision = "wait"
+                    comment = "htf_against_short_4h_up"
+
         return {
             "trend_alignment": round(trend_alignment, 2),
             "entry_timing": round(entry_timing, 2),

@@ -258,6 +258,11 @@ class Settings(BaseSettings):
     # в боковике/против тренда. Регайм-симметрично (лонги и шорты на равных).
     ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.8
 
+    # (#htf-align) Выравнивание со старшим ТФ: не лонгуем против 4h-даунтренда,
+    # не шортим против 4h-аптренда (price vs ema200 на HTF). Бьёт контртренд-входы.
+    HTF_ALIGN_ENABLED: bool = True
+    HTF_ALIGN_TF: str = "4h"
+
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
@@ -626,6 +631,9 @@ class Settings(BaseSettings):
     GRID_RSI_PERIOD: int = 14
     GRID_RSI_HIGH: float = 70.0                 # RSI выше → не лонг-сетка (перегрев)
     GRID_RSI_LOW: float = 30.0                  # RSI ниже → не шорт-сетка (перепрод.)
+    # Мёртвая зона ±% вокруг EMA200: цена в зоне → регайм NEUTRAL (не флипаем).
+    # Гасит grid_regime_flip-пилу, когда цена висит на EMA200 в боковике.
+    GRID_REGIME_EMA_BAND_PCT: float = 0.25
     GRID_TP_PCT: float = 0.5                    # тейк = безубыток + этот % (вся сетка)
     GRID_SL_ATR_MULT: float = 1.5              # стоп = крайний уровень ± k·ATR
     GRID_MAX_SAFETY_ORDERS: int = 6            # макс. исполненных уровней; дальше стоп выставлять

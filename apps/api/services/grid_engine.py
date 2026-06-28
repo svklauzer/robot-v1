@@ -102,6 +102,7 @@ class GridEngine:
         regime = gc.detect_regime(
             ind, float(getattr(settings, "GRID_RSI_HIGH", 70.0)),
             float(getattr(settings, "GRID_RSI_LOW", 30.0)),
+            ema_band_pct=float(getattr(settings, "GRID_REGIME_EMA_BAND_PCT", 0.25)),
         )
         return regime, atr, ind
 
