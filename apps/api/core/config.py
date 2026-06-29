@@ -263,6 +263,14 @@ class Settings(BaseSettings):
     HTF_ALIGN_ENABLED: bool = True
     HTF_ALIGN_TF: str = "4h"
 
+    # (#range-pos) Не входить в невыгодный край диапазона: шорт — только в верхней
+    # части (range_pos>=SHORT_MIN), лонг — только в нижней (range_pos<=LONG_MAX).
+    # Бьёт 0%-WR паттерн «шорт у поддержки / лонг у сопротивления».
+    RANGE_POS_GATE_ENABLED: bool = True
+    RANGE_POS_ANCHOR_TF: str = "1h"
+    RANGE_POS_SHORT_MIN: float = 0.40   # шорт нельзя в нижних 40% диапазона
+    RANGE_POS_LONG_MAX: float = 0.60    # лонг нельзя в верхних 40% диапазона
+
     # MFE-протекция и частичная фиксация в процентах.
     PROTECTIVE_MFE_START_PCT: float = 0.80
     PROTECTIVE_DRAWDOWN_SHARE: float = 0.35

@@ -1558,6 +1558,33 @@ class MarketIntelligenceEngine:
                     decision = "wait"
                     comment = "htf_against_short_4h_up"
 
+        # (#range-pos) Не входим в НЕВЫГОДНЫЙ край диапазона. Аудит 0%-WR окна:
+        # #157 шортил у дна 59.2k (range_pos 0.16) → отскок в безубыток. Внутри
+        # тренда цена ходит вбок, и вход у противоположного края = смерть. Позиция
+        # в диапазоне якорного ТФ: 0=поддержка(низ), 1=сопротивление(верх).
+        #   short разрешён только в ВЕРХНЕЙ части (range_pos >= порога),
+        #   long  — только в НИЖНЕЙ части (range_pos <= 1-порога).
+        # Reversal — мимо (он намеренно фейдит экстремум).
+        if (
+            bool(getattr(settings, "RANGE_POS_GATE_ENABLED", True))
+            and decision == "approve"
+            and not is_reversal
+        ):
+            _rp_anchor = self._tf(contexts, str(getattr(settings, "RANGE_POS_ANCHOR_TF", "1h")))
+            _sup = float(self._ctx_value(_rp_anchor, "support", 0) or 0)
+            _res = float(self._ctx_value(_rp_anchor, "resistance", 0) or 0)
+            _px = float(self._ctx_value(_rp_anchor, "last_close", 0) or 0)
+            if _res > _sup > 0 and _px > 0:
+                _range_pos = (_px - _sup) / (_res - _sup)
+                _short_min = float(getattr(settings, "RANGE_POS_SHORT_MIN", 0.40))
+                _long_max = float(getattr(settings, "RANGE_POS_LONG_MAX", 0.60))
+                if action == "short" and _range_pos < _short_min:
+                    decision = "wait"
+                    comment = f"range_pos_short_too_low({_range_pos:.2f}<{_short_min:.2f})"
+                elif action == "long" and _range_pos > _long_max:
+                    decision = "wait"
+                    comment = f"range_pos_long_too_high({_range_pos:.2f}>{_long_max:.2f})"
+
         return {
             "trend_alignment": round(trend_alignment, 2),
             "entry_timing": round(entry_timing, 2),
