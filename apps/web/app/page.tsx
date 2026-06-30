@@ -13,6 +13,8 @@ export default function DashboardPage() {
   const [dailyQuality, setDailyQuality] = useState<any>(null);
   const [orderbook, setOrderbook] = useState<any>(null);
   const [mlStats, setMlStats] = useState<any>(null);
+  const [grid, setGrid] = useState<any>(null);
+  const [funding, setFunding] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   async function loadAll() {
@@ -31,6 +33,9 @@ export default function DashboardPage() {
       // depth + ML: не валим дашборд, если движок off / эндпоинт недоступен
       apiGet("/orderbook/state").then(setOrderbook).catch(() => setOrderbook(null));
       apiGet("/ml/outcomes/stats").then(setMlStats).catch(() => setMlStats(null));
+      // Три книги: Grid и Funding считаются раздельно — тянем их PnL отдельно, не валим дашборд
+      apiGet("/grid/state").then(setGrid).catch(() => setGrid(null));
+      apiGet("/funding-arb/summary").then(setFunding).catch(() => setFunding(null));
     } finally {
       setLoading(false);
     }
@@ -52,6 +57,12 @@ export default function DashboardPage() {
 
   const bot = botState?.bot;
   const blockers = readiness?.blockers || [];
+
+  // Три книги — realized PnL по движкам (раздельные карманы, статистики не смешиваем)
+  const trendPnl = Number(analytics?.total_net_pnl_usdt ?? 0);
+  const gridPnl = Number(grid?.realized_pnl_usdt ?? 0);
+  const fundingPnl = Number(funding?.realized_pnl ?? 0);
+  const totalPnl = trendPnl + gridPnl + fundingPnl;
 
   return (
     <AppShell>
@@ -85,6 +96,20 @@ export default function DashboardPage() {
           </button>
         </div>
       </header>
+
+      {/* Три книги — честный консолидированный PnL по движкам */}
+      <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-100/50">Три книги · realized PnL</h2>
+          <span className="text-xs text-emerald-100/40">движки на раздельных карманах — статистики не смешиваются</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <BookCard title="Trend" href="/signals" pnl={trendPnl} sub={`${analytics?.total_signals ?? 0} сигналов · WR ${analytics?.winrate ?? 0}%`} />
+          <BookCard title="Grid" href="/grid" pnl={gridPnl} off={!grid} sub={grid ? `${grid?.active_cycles ?? 0} активных · ${grid?.closed_cycles ?? 0} закрыто` : "движок выкл/нет данных"} />
+          <BookCard title="Funding" href="/funding" pnl={fundingPnl} off={!funding} sub={funding ? `${funding?.open_positions ?? 0} хеджей · unreal ${fmt(funding?.unrealized_pnl_estimate, 2)}` : "движок выкл/нет данных"} />
+          <BookCard title="ИТОГО" pnl={totalPnl} total sub="сумма трёх книг" />
+        </div>
+      </section>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Bot" value={bot?.status || "-"} subtitle={bot?.mode || "-"} icon={<Bot size={18} />} good={bot?.status === "running"} warn={bot?.status !== "running"} />
@@ -171,6 +196,28 @@ function StatCard({ title, value, subtitle, icon, good, warn, danger }: { title:
       <div className={`text-2xl font-bold ${valueClass}`}>{value}</div>
       <div className="mt-1 text-xs text-emerald-100/50">{subtitle}</div>
     </div>
+  );
+}
+
+function BookCard({ title, href, pnl, sub, total, off }: { title: string; href?: string; pnl: number; sub: string; total?: boolean; off?: boolean }) {
+  const tone = pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-red-300" : "text-emerald-200";
+  const valueCls = total ? (pnl >= 0 ? "text-emerald-200" : "text-red-200") : tone;
+  const sign = pnl > 0 ? "+" : "";
+  const box = `rounded-xl border p-4 ${total ? "border-emerald-600 bg-emerald-950/30" : "border-emerald-950 bg-black/20"}`;
+  const inner = (
+    <>
+      <div className="flex items-center justify-between">
+        <span className={`text-sm ${total ? "font-bold text-emerald-200" : "text-emerald-100/60"}`}>{title}</span>
+        {off && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-emerald-100/40">off</span>}
+      </div>
+      <div className={`mt-2 text-2xl font-bold ${valueCls}`}>{sign}{fmt(pnl, 2)} USDT</div>
+      <div className="mt-1 text-xs text-emerald-100/50">{sub}</div>
+    </>
+  );
+  return href ? (
+    <Link href={href} className={`${box} transition hover:border-emerald-500`}>{inner}</Link>
+  ) : (
+    <div className={box}>{inner}</div>
   );
 }
 
