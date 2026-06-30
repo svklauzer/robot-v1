@@ -169,6 +169,9 @@ export default function GridPage() {
                 </button>
               </div>
 
+              {/* Живой регайм — ВСЕГДА виден: спокойный long не путать с «нет данных» */}
+              <LiveRegime c={c} confirm={cfg.flip_confirm_ticks ?? 3} band={cfg.regime_band_pct} />
+
               <div className="mt-3 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
                 <Metric k="Якорь" v={fmt(c.anchor, 4)} />
                 <Metric k="ATR" v={fmt(c.atr, 4)} />
@@ -233,6 +236,30 @@ export default function GridPage() {
         </section>
       )}
     </AppShell>
+  );
+}
+
+function LiveRegime({ c, confirm, band }: { c: any; confirm: number; band?: number }) {
+  const cycle = c.regime;
+  const now = c.regime_now;
+  let txt: string, cls: string;
+  if (!now) {
+    txt = "нет живых данных регайма"; cls = "text-slate-400";
+  } else if (c.frozen || now === "neutral") {
+    txt = `боковик ±${band ?? "?"}% у EMA — добор заморожен, выходы работают`; cls = "text-sky-300";
+  } else if (now !== cycle) {
+    txt = `разворот зреет: ${c.flip_streak ?? 0}/${confirm} тиков → ${now}`; cls = "text-amber-300";
+  } else {
+    txt = "рынок подтверждает направление сетки"; cls = "text-emerald-300";
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-emerald-950 bg-black/20 px-3 py-1.5 text-xs">
+      <span className="text-emerald-100/50">цикл встал:</span>
+      <span className={`rounded px-1.5 py-0.5 font-bold ${REGIME_COLOR[cycle] || "bg-slate-600 text-white"}`}>{cycle}</span>
+      <span className="text-emerald-100/50">рынок сейчас:</span>
+      <span className={`rounded px-1.5 py-0.5 font-bold ${REGIME_COLOR[now] || "bg-slate-700 text-white"}`}>{now ?? "—"}</span>
+      <span className={`ml-auto font-semibold ${cls}`}>{txt}</span>
+    </div>
   );
 }
 

@@ -29,6 +29,8 @@ def _config() -> dict:
         "leverage": settings.GRID_LEVERAGE,
         "rearm": settings.GRID_REARM,
         "market": settings.EXECUTION_MARKET,
+        "flip_confirm_ticks": settings.GRID_FLIP_CONFIRM_TICKS,
+        "regime_band_pct": settings.GRID_REGIME_EMA_BAND_PCT,
     }
 
 
