@@ -30,6 +30,7 @@ def _config() -> dict:
         "rearm": settings.GRID_REARM,
         "market": settings.EXECUTION_MARKET,
         "flip_confirm_ticks": settings.GRID_FLIP_CONFIRM_TICKS,
+        "flip_cooldown_sec": settings.GRID_FLIP_COOLDOWN_SEC,
         "regime_band_pct": settings.GRID_REGIME_EMA_BAND_PCT,
     }
 

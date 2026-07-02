@@ -245,6 +245,8 @@ function LiveRegime({ c, confirm, band }: { c: any; confirm: number; band?: numb
   let txt: string, cls: string;
   if (!now) {
     txt = "нет живых данных регайма"; cls = "text-slate-400";
+  } else if (c.flip_cooldown) {
+    txt = `кулдаун после флипа — развороты заблокированы, даём направлению отработать`; cls = "text-violet-300";
   } else if (c.frozen || now === "neutral") {
     txt = `боковик ±${band ?? "?"}% у EMA — добор заморожен, выходы работают`; cls = "text-sky-300";
   } else if (now !== cycle) {

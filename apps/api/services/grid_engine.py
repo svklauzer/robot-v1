@@ -24,6 +24,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _age_sec(created_at) -> float:
+    """Возраст цикла в секундах по created_at (ISO). Ошибка → «очень старый»."""
+    if not created_at:
+        return 1e9
+    try:
+        dt = datetime.fromisoformat(str(created_at))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds()
+    except Exception:
+        return 1e9
+
+
 class GridEngine:
     def __init__(self):
         self.market = MarketDataService()
@@ -164,8 +177,15 @@ class GridEngine:
         opposite = (side == "long" and regime_now == "short") or \
                    (side == "short" and regime_now == "long")
 
+        # (#grid-flip-cooldown) тихое окно после открытия/флипа: не переворачиваемся,
+        # пока не прошло GRID_FLIP_COOLDOWN_SEC. Лечит почасовую пилу на монетах у EMA
+        # (ETH/AAVE). streak держим на 0 → после окна нужны свежие confirm-тики.
+        cooldown = float(getattr(settings, "GRID_FLIP_COOLDOWN_SEC", 0) or 0)
+        in_cooldown = cooldown > 0 and _age_sec(cyc.get("created_at")) < cooldown
+        cyc["flip_cooldown"] = bool(in_cooldown)
+
         # гистерезис разворота
-        if opposite and bool(getattr(settings, "GRID_FLIP_ON_REGIME", True)):
+        if opposite and bool(getattr(settings, "GRID_FLIP_ON_REGIME", True)) and not in_cooldown:
             cyc["flip_streak"] = int(cyc.get("flip_streak", 0)) + 1
         else:
             cyc["flip_streak"] = 0
@@ -402,6 +422,7 @@ class GridEngine:
                 "regime_now": cyc.get("regime_now"),
                 "flip_streak": cyc.get("flip_streak", 0),
                 "frozen": bool(cyc.get("frozen")),
+                "flip_cooldown": bool(cyc.get("flip_cooldown")),
                 "adapted_at": cyc.get("adapted_at"),
                 "levels": cyc.get("levels", []),
             })
