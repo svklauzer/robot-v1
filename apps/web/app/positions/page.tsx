@@ -5,6 +5,12 @@ import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import { RefreshCw, WalletCards } from "lucide-react";
 
+function rowPnl(p: any): number | null {
+  const closed = String(p.status || "").toLowerCase() === "closed";
+  if (closed) return p.realized_pnl ?? null;
+  return p.unrealized_pnl ?? 0;
+}
+
 const ACTIVE_STATUSES = new Set(["open", "active", "published"]);
 
 export default function PositionsPage() {
@@ -167,7 +173,8 @@ export default function PositionsPage() {
                   <td className="px-4 py-3">{p.qty ?? "-"}</td>
                   <td className="px-4 py-3">{p.entry_price ?? "-"}</td>
                   <td className="px-4 py-3">{p.mark_price ?? "-"}</td>
-                  <td className={(p.unrealized_pnl ?? 0) < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>{p.unrealized_pnl ?? 0}</td>
+                  {/* закрытая позиция: реализованный результат сделки; открытая: живой unrealized */}
+                  <td className={(rowPnl(p) ?? 0) < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>{rowPnl(p) ?? 0}</td>
                   <td className="px-4 py-3">{p.status}</td>
                   <td className="px-4 py-3 text-emerald-100/60">{p.signal_id ? `#${p.signal_id}` : "-"}</td>
                 </tr>

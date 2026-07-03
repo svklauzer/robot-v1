@@ -1124,6 +1124,19 @@ def list_positions(limit: int = 500):
         limit = max(1, min(int(limit), 2000))
         positions = db.query(Position).order_by(Position.id.desc()).limit(limit).all()
 
+        # (#audit-positions) У закрытой позиции unrealized_pnl = 0; реализованный
+        # результат отдаём отдельным полем realized_pnl из Signal.closed_net_pnl
+        # (покрывает и старые строки, где unrealized хранил net закрытия).
+        signal_ids = [p.signal_id for p in positions if p.signal_id is not None]
+        realized_map: dict = {}
+        if signal_ids:
+            rows = (
+                db.query(Signal.id, Signal.closed_net_pnl)
+                .filter(Signal.id.in_(signal_ids))
+                .all()
+            )
+            realized_map = {sid: pnl for sid, pnl in rows}
+
         return [
             {
                 "id": p.id,
@@ -1133,6 +1146,7 @@ def list_positions(limit: int = 500):
                 "entry_price": p.entry_price,
                 "mark_price": p.mark_price,
                 "unrealized_pnl": p.unrealized_pnl,
+                "realized_pnl": realized_map.get(p.signal_id) if str(p.status or "").lower() == "closed" else None,
                 "status": p.status,
                 "signal_id": p.signal_id,
             }
