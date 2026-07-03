@@ -28,7 +28,7 @@ def _config() -> dict:
         "max_used_margin_pct": settings.GRID_MAX_USED_MARGIN_PCT,
         "leverage": settings.GRID_LEVERAGE,
         "rearm": settings.GRID_REARM,
-        "market": settings.EXECUTION_MARKET,
+        "market": settings.execution_market_type,
         "flip_confirm_ticks": settings.GRID_FLIP_CONFIRM_TICKS,
         "flip_cooldown_sec": settings.GRID_FLIP_COOLDOWN_SEC,
         "regime_band_pct": settings.GRID_REGIME_EMA_BAND_PCT,

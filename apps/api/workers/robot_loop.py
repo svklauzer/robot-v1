@@ -148,7 +148,7 @@ class RobotLoop:
                         (
                             f"{symbol}\n"
                             f"Short-кандидат найден, но текущий режим исполнения "
-                            f"{getattr(settings, 'EXECUTION_MARKET', 'spot')} / shorts_disabled.\n"
+                            f"{settings.execution_market_type} / shorts_disabled.\n"
                             f"Short-сигнал не публикуется до подключения margin/futures short execution module.\n"
                             f"Regime: {result.regime}\n"
                             f"Confidence: {result.confidence_hint}\n"
@@ -170,7 +170,7 @@ class RobotLoop:
                             "status": "blocked",
                             "decision": "short_candidate_but_shorts_disabled",
                             "alert_decision": "robot_short_candidate_alert_sent",
-                            "block_reason": f"current_execution_mode_{getattr(settings, 'EXECUTION_MARKET', 'spot')}_shorts_disabled",
+                            "block_reason": f"current_execution_mode_{settings.execution_market_type}_shorts_disabled",
                             "action": result.action,
                             "regime": result.regime,
                             "radar_state": result.radar_state,

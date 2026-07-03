@@ -60,7 +60,7 @@ def trade_cost_preview(payload: CostPreviewRequest):
                 "slippage_buffer_pct": settings.SLIPPAGE_BUFFER_PCT,
                 "funding_buffer_pct": settings.FUNDING_BUFFER_PCT,
                 "allow_shorts": settings.ALLOW_SHORTS,
-                "execution_market": settings.EXECUTION_MARKET,
+                "execution_market": settings.execution_market_type,
             },
         }
     except Exception as e:

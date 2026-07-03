@@ -52,7 +52,10 @@ class TradePlanBuilder:
     ) -> TradePlan:
         risk_pct_value = risk_pct if risk_pct is not None else settings.RISK_PER_TRADE_PCT
 
-        market_type = getattr(settings, "EXECUTION_MARKET", settings.MARKET_TYPE)
+        # (#audit-cost-model) Эффективный рынок исполнения (swap при
+        # ENABLE_FUTURES_EXECUTION), а не сырой env EXECUTION_MARKET: тот по
+        # дефолту "spot" и заставлял считать экономику плана по спот-комиссиям.
+        market_type = settings.execution_market_type
 
         # Важно: если фьючерсы выключены, плечо принудительно = 1.
         # Иначе spot-план может случайно рассчитать позицию как leveraged.

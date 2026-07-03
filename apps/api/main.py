@@ -2109,7 +2109,7 @@ async def force_intelligence_signal(symbol: str = "BTC/USDT"):
                     (
                         f"{symbol}\n"
                         f"Short candidate detected, but current execution mode is "
-                        f"{getattr(settings, 'EXECUTION_MARKET', 'spot')} / shorts_disabled.\n"
+                        f"{settings.execution_market_type} / shorts_disabled.\n"
                         f"Enable margin/futures short execution module before publishing short signals.\n"
                         f"Regime: {result.regime}\n"
                         f"Confidence: {result.confidence_hint}\n"
@@ -2913,7 +2913,7 @@ async def intelligence_scan_run():
                     item["status"] = "blocked"
                     item["decision"] = "short_candidate_but_shorts_disabled"
                     item["block_reason"] = (
-                        f"current_execution_mode_{getattr(settings, 'EXECUTION_MARKET', 'spot')}_shorts_disabled"
+                        f"current_execution_mode_{settings.execution_market_type}_shorts_disabled"
                     )
 
                     append_result(item)
