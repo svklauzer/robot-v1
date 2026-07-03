@@ -123,8 +123,16 @@ class GridEngine:
     def tick_all(self) -> dict:
         if not self.store.is_enabled():
             return {"enabled": False, "ticked": 0}
+        # (#grid-drain) Тикаем ОБЪЕДИНЕНИЕ: настроенные символы + символы с активными
+        # циклами. Иначе при сужении GRID_SYMBOLS де-листнутые циклы осиротеют (не
+        # тикаются → нет TP/SL/флипа/выхода, маржа заперта). Тик их обслужит, а
+        # новые циклы по ним не откроются (см. tick()).
+        symbols = list(dict.fromkeys(
+            [s.upper() for s in settings.grid_symbols]
+            + [str(s).upper() for s in self.store.cycles.keys()]
+        ))
         n = 0
-        for sym in settings.grid_symbols:
+        for sym in symbols:
             try:
                 self.tick(sym)
                 n += 1
@@ -139,16 +147,22 @@ class GridEngine:
         if price <= 0:
             return
 
+        # (#grid-drain) Символ в активном универсуме? Де-листнутый обслуживаем
+        # (доводим цикл до выхода), но НОВЫХ циклов по нему не открываем.
+        configured = symbol in {s.upper() for s in settings.grid_symbols}
+
         cyc = self.store.get_cycle(symbol)
         if cyc is None:
-            self._maybe_open(symbol, price, bid=bid, ask=ask)
+            if configured:
+                self._maybe_open(symbol, price, bid=bid, ask=ask)
             return
 
         # Адаптация к живому рынку ДО филлов: пере-раскладка пустых уровней под
         # текущий ATR/дрейф и разворот направления при смене регайма.
         if bool(getattr(settings, "GRID_ADAPT_ENABLED", True)):
             if self._adapt(cyc, symbol, price) == "flipped":
-                self._maybe_open(symbol, price, bid=bid, ask=ask)  # сразу в новом направлении
+                if configured:
+                    self._maybe_open(symbol, price, bid=bid, ask=ask)  # сразу в новом направлении
                 return
             cyc = self.store.get_cycle(symbol)   # перечитать после возможной записи
             if cyc is None:
