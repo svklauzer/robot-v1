@@ -284,6 +284,8 @@ class RobotLoop:
                         closed_at = closed_at.replace(tzinfo=timezone.utc)
                     age_min = (datetime.now(timezone.utc) - closed_at).total_seconds() / 60.0
                     if age_min < cd_min:
+                        if not self._should_record_block_event(db, symbol, "blocked_post_loss_cooldown"):
+                            continue
                         db.add(
                             IntelligenceEvent(
                                 symbol=symbol,
@@ -345,6 +347,8 @@ class RobotLoop:
                 )
                 if not ob_ok or _liq_block:
                     _block_reason = ob_reason if not ob_ok else f"liq_spread:{_liq_reason}"
+                    if not self._should_record_block_event(db, symbol, "blocked_depth_gate"):
+                        continue
                     db.add(
                         IntelligenceEvent(
                             symbol=symbol,
@@ -675,6 +679,8 @@ class RobotLoop:
                     anti_cfg,
                 )
                 if not anti_allowed:
+                    if not self._should_record_block_event(db, symbol, anti_reason):
+                        continue
                     db.add(
                         IntelligenceEvent(
                             symbol=symbol,
@@ -760,6 +766,8 @@ class RobotLoop:
                     current_rr_tp2=float(plan.net_rr_tp2 or 0),
                 )
                 if not cooldown.allowed:
+                    if not self._should_record_block_event(db, symbol, "reentry_cooldown_active"):
+                        continue
                     db.add(
                         IntelligenceEvent(
                             symbol=symbol,
@@ -1220,6 +1228,26 @@ class RobotLoop:
             except Exception:
                 pass  # stale cache is fine; never block the loop
         return self._grade_stats_cache
+
+    def _should_record_block_event(self, db: Session, symbol: str, decision: str) -> bool:
+        """(#audit-event-spam) Дедуп повторяющихся blocked-событий: одно и то же
+        (symbol, decision) не пишем чаще INTEL_EVENT_DEDUP_MINUTES. До фикса
+        blocked_post_loss_cooldown/blocked_depth_gate писались каждый тик (~70с)
+        весь период блокировки — 34.7k строк в intelligence_events."""
+        minutes = float(getattr(settings, "INTEL_EVENT_DEDUP_MINUTES", 10.0))
+        if minutes <= 0:
+            return True
+        since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        recent = (
+            db.query(IntelligenceEvent.id)
+            .filter(
+                IntelligenceEvent.symbol == symbol,
+                IntelligenceEvent.decision == decision,
+                IntelligenceEvent.created_at >= since,
+            )
+            .first()
+        )
+        return recent is None
 
     def _should_send_short_block_alert(self, db: Session, symbol: str) -> bool:
         minutes = getattr(settings, "SHORT_ALERT_THROTTLE_MINUTES", 60)

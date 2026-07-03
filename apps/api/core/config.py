@@ -410,6 +410,18 @@ class Settings(BaseSettings):
     # чтобы «мёртвая» сделка не дрейфовала в свинг-убыток и освободила слот.
     SCALP_TIME_STOP_ENABLED: bool = True
     SCALP_TIME_STOP_MIN: float = 45.0            # минут до тайм-стопа невооружённого скальпа
+    # (#audit-time-stop) Cost-aware grace: не в значимом минусе и поток не против →
+    # держим до жёсткого стопа (MIN × MULT). Реальный минус/CVD-разворот — закрытие сразу.
+    SCALP_TIME_STOP_HARD_MULT: float = 2.0
+
+    # (#audit-cost-model) Полы net-safe по типу рынка. Единый пол 0.60% (производный
+    # от спот-комиссии 0.2%) завышал защитные пороги swap-сделок вдвое.
+    NET_SAFE_FLOOR_SPOT_PCT: float = 0.60
+    NET_SAFE_FLOOR_SWAP_PCT: float = 0.30
+
+    # (#audit-event-spam) Дедуп повторяющихся blocked-событий intelligence_events:
+    # одно и то же (symbol, decision) не пишем чаще, чем раз в N минут.
+    INTEL_EVENT_DEDUP_MINUTES: float = 10.0
 
     # --- Post-loss cooldown (только range-скальп) ---
     # После убыточного закрытия по паре символ+сторона не лезем повторно N минут
@@ -634,6 +646,23 @@ class Settings(BaseSettings):
     GRID_VOL_MULTIPLIER: float = 1.2            # m_vol: мартингейл объёма (1.1–1.5)
     GRID_STEP_MULTIPLIER: float = 1.1           # m_step: расширение шага (1.05–1.2)
     GRID_VOL_COEFF: float = 0.5                 # k_vol: шаг = ATR·k_vol
+    # (#audit-grid) Анти-пила флипа: разворот засчитывается только когда цена
+    # реально ушла от EMA на k×ATR — почасовое обнимание EMA больше не пилит
+    # корзину (12 из 20 последних закрытий были flip-минусами, −1.73 USDT).
+    GRID_FLIP_MIN_ATR_DIST: float = 0.5
+    # (#audit-grid) Анти-мартингейл: не доливаем уровни против импульса.
+    # Шорт-корзина не доливается при RSI ≥ max, лонг — при RSI ≤ min
+    # (кейс TRX: 5 доливок в шорт на импульсе вверх → у стопа).
+    GRID_ANTI_MARTINGALE_ENABLED: bool = True
+    GRID_SHORT_FILL_RSI_MAX: float = 65.0
+    GRID_LONG_FILL_RSI_MIN: float = 35.0
+    # (#audit-grid) Экономика открытия: шаг 1-го уровня должен превышать
+    # spread×mult + fee_round, иначе цикл платит спред каждым кругом (кейс
+    # AAVE neutral-грид при спреде 0.1–0.5%).
+    GRID_OPEN_MIN_EDGE_SPREAD_MULT: float = 1.0
+    # (#audit-grid) Вычитать round-trip комиссии из realized при закрытии корзины
+    # (раньше realized был gross → +1.80 за 79 циклов ещё и завышен).
+    GRID_FEES_IN_REALIZED: bool = True
     GRID_ATR_PERIOD: int = 14
     GRID_EMA_PERIOD: int = 200
     GRID_RSI_PERIOD: int = 14

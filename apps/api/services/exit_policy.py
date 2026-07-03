@@ -69,16 +69,28 @@ class ExitPolicyService:
             return 0.0
         return max(mfe_pct - current_pct, 0.0)
 
-    def _estimated_net_usdt(self, result_pct: float, position_notional_usdt: float | None) -> float | None:
+    def _estimated_net_usdt(
+        self,
+        result_pct: float,
+        position_notional_usdt: float | None,
+        fee_rate: float | None = None,
+    ) -> float | None:
+        # (#audit-cost-model) Ставка комиссии — рыночная (spot/swap), а не
+        # захардкоженный SPOT_TAKER_FEE: для swap спот-ставка завышала издержки
+        # в 4 раза и глушила защитные выходы через min_protective_net_usdt.
         if position_notional_usdt is None or position_notional_usdt <= 0:
             return None
+        rate = float(fee_rate) if fee_rate is not None else float(settings.SPOT_TAKER_FEE)
         gross = position_notional_usdt * (result_pct / 100.0)
-        fees = position_notional_usdt * float(settings.SPOT_TAKER_FEE) * 2
+        fees = position_notional_usdt * rate * 2
         slippage = position_notional_usdt * float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0))
         return gross - fees - slippage
 
     def _fee_rate(self, symbol: str | None, market_type: str | None = None) -> tuple[float, str]:
-        market_type_value = market_type or settings.MARKET_TYPE
+        # Дефолт — рынок ИСПОЛНЕНИЯ (swap при ENABLE_FUTURES_EXECUTION), а не
+        # MARKET_TYPE данных: расхождение этих двух и было источником спот-комиссий
+        # в swap-расчётах (#audit-cost-model).
+        market_type_value = market_type or getattr(settings, "execution_market_type", settings.MARKET_TYPE)
         if symbol:
             try:
                 rates = self.htx.trading_fee_rates(symbol, market_type_value)
@@ -91,15 +103,23 @@ class ExitPolicyService:
             return float(settings.FUTURES_TAKER_FEE), "fallback_futures_settings"
         return float(settings.SPOT_TAKER_FEE), "fallback_spot_settings"
 
-    def _net_safe_profit_pct(self, symbol: str | None = None, market_type: str | None = None) -> tuple[float, str]:
-        """Minimum price move that should cover fees, slippage and a safety buffer."""
+    def _net_safe_floor_pct(self, fee_rate: float) -> float:
+        """Пол net-safe: спот (fee ≥0.1%/сторона) — 0.60%; деривативы (0.02–0.05%)
+        — 0.30%. Единый 0.60% для swap завышал все защитные пороги вдвое."""
+        if fee_rate <= 0.001:
+            return float(getattr(settings, "NET_SAFE_FLOOR_SWAP_PCT", 0.30))
+        return float(getattr(settings, "NET_SAFE_FLOOR_SPOT_PCT", 0.60))
+
+    def _net_safe_profit_pct(self, symbol: str | None = None, market_type: str | None = None) -> tuple[float, str, float]:
+        """Minimum price move that should cover fees, slippage and a safety buffer.
+        Возвращает (net_safe_pct, fee_source, fee_rate)."""
         fee_rate, fee_source = self._fee_rate(symbol, market_type)
         calculated = fee_rate * 2 * 100 + float(settings.SLIPPAGE_BUFFER_PCT) * 100 + 0.15
-        return round(max(calculated, 0.60), 4), fee_source
+        floor = self._net_safe_floor_pct(fee_rate)
+        return round(max(calculated, floor), 4), fee_source, fee_rate
 
-    def _dynamic_thresholds(self, stop_distance_pct: float) -> dict:
+    def _dynamic_thresholds(self, stop_distance_pct: float, net_safe_floor: float = 0.60) -> dict:
         sd = abs(float(stop_distance_pct or 0.0))
-        net_safe_floor = 0.60
         mfe_absolute_min = float(
             getattr(settings, "FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT", self.DEFAULT_MFE_ABSOLUTE_MIN_FOR_GUARD)
         )
@@ -124,11 +144,11 @@ class ExitPolicyService:
             "mfe_absolute_min": mfe_absolute_min,
         }
 
-    def _get_thresholds(self, stop_distance_pct: float | None) -> tuple[dict, str]:
+    def _get_thresholds(self, stop_distance_pct: float | None, net_safe_floor: float = 0.60) -> tuple[dict, str]:
         if stop_distance_pct is not None and stop_distance_pct > 0:
-            return self._dynamic_thresholds(stop_distance_pct), f"dynamic(stop={round(stop_distance_pct, 3)}%)"
+            return self._dynamic_thresholds(stop_distance_pct, net_safe_floor), f"dynamic(stop={round(stop_distance_pct, 3)}%)"
         fallback_stop = 1.5
-        return self._dynamic_thresholds(fallback_stop), "dynamic_fallback(stop=1.5%+capped)"
+        return self._dynamic_thresholds(fallback_stop, net_safe_floor), "dynamic_fallback(stop=1.5%+capped)"
 
     def before_tp1_decision(
         self,
@@ -170,9 +190,9 @@ class ExitPolicyService:
             if stop_price is not None and float(stop_price) > 0
             else None
         )
-        thr, threshold_source = self._get_thresholds(stop_distance_pct)
         drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
-        net_safe_pct, fee_source = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        thr, threshold_source = self._get_thresholds(stop_distance_pct, self._net_safe_floor_pct(fee_rate))
         min_protective_exit_pct = float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 1.20))
         min_protective_net_usdt = float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 1.50))
         protective_drawdown_share = float(settings.PROTECTIVE_DRAWDOWN_SHARE)
@@ -214,24 +234,38 @@ class ExitPolicyService:
                 )
             # ── Скальп тайм-стоп (профиль SCALP: быстро или никак) ───────────
             # Скальп — много мелких быстрых сделок. Если за N минут он так и не
-            # вооружился (mfe < arm), это «зависшая» сделка: закрываем по текущей
-            # цене, чтобы не дала ей переродиться в свинг-убыток и освободила слот.
+            # вооружился (mfe < arm), это «зависшая» сделка — закрываем.
+            #
+            # (#audit-time-stop) Cost-aware grace: рубить по ЧИСТОМУ возрасту
+            # оказалось дорого (AAVE #181: MFE +0.16% → рыночное закрытие −0.58%
+            # + 25 мин кулдауна, следом та же сторона дала +1.35). Если сделка
+            # НЕ в значимом минусе (|cur| < net_safe) И поток не против —
+            # даём дожить до жёсткого стопа (mult × базовый). Реальный минус
+            # или CVD-разворот закрывают сразу, как раньше.
             if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)):
                 ts_sec = float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0)) * 60.0
+                hard_mult = max(float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0)), 1.0)
+                hard_sec = ts_sec * hard_mult
                 if (
                     signal_age_sec is not None
                     and float(signal_age_sec) >= ts_sec
                     and mfe < scalp_arm
                 ):
-                    return ExitDecision(
-                        exit=True,
-                        reason="scalp_time_stop",
-                        exit_price=current_price,
-                        note=(
-                            f"scalp_time_stop age={float(signal_age_sec):.0f}s>={ts_sec:.0f}s "
-                            f"mfe={mfe:.4f}<arm={scalp_arm} cur={current_pct:.4f}"
-                        ),
-                    )
+                    age = float(signal_age_sec)
+                    not_losing = current_pct > -net_safe_pct
+                    showed_life = mfe >= scalp_arm * 0.5
+                    grace = age < hard_sec and not flow_against and (not_losing or showed_life)
+                    if not grace:
+                        return ExitDecision(
+                            exit=True,
+                            reason="scalp_time_stop",
+                            exit_price=current_price,
+                            note=(
+                                f"scalp_time_stop age={age:.0f}s>={ts_sec:.0f}s "
+                                f"(hard={hard_sec:.0f}s) mfe={mfe:.4f}<arm={scalp_arm} "
+                                f"cur={current_pct:.4f} flow_against={flow_against}"
+                            ),
+                        )
 
         # ── Безубыток-замок (#1/#2) ──────────────────────────────────────────
         # Как только сделка показала значимый MFE, она НЕ имеет права закрыться
@@ -308,7 +342,7 @@ class ExitPolicyService:
             ride_trail_dd = float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50))
             if mfe >= ride_min_mfe and drawdown_from_mfe >= mfe * ride_trail_dd:
                 protected_pct = max(mfe * (1.0 - ride_trail_dd), net_safe_pct, min_protective_exit_pct)
-                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
                 if est_net is not None and est_net < min_protective_net_usdt:
                     return ExitDecision(exit=False)
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
@@ -333,7 +367,7 @@ class ExitPolicyService:
                 and tp1_guard_ok
             ):
                 protected_pct = max(mfe * capture_share, net_safe_pct, min_protective_exit_pct)
-                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+                est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
                 if est_net is not None and est_net < min_protective_net_usdt:
                     return ExitDecision(exit=False)
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
@@ -351,7 +385,7 @@ class ExitPolicyService:
 
         if mfe >= float(settings.PROTECTIVE_MFE_START_PCT) and current_pct <= net_safe_pct:
             protected_pct = max(net_safe_pct, min_protective_exit_pct)
-            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
@@ -366,7 +400,7 @@ class ExitPolicyService:
 
         if mfe >= thr["protect_start"] and drawdown_from_mfe >= mfe * protective_drawdown_share:
             protected_pct = max(mfe * (1.0 - protective_drawdown_share), net_safe_pct, min_protective_exit_pct)
-            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
@@ -381,7 +415,7 @@ class ExitPolicyService:
 
         if mfe >= thr["trail_start"] and drawdown_from_mfe >= mfe * adaptive_drawdown_pct:
             protected_pct = max(mfe * (1.0 - adaptive_drawdown_pct), net_safe_pct, min_protective_exit_pct)
-            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt)
+            est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
@@ -421,7 +455,7 @@ class ExitPolicyService:
         tp2_pct = self._result_pct(side, entry_price, tp2_price)
         mfe = float(lifecycle.get("mfe_pct") or current_pct or 0.0)
         drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
-        net_safe_pct, fee_source = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
         min_post_tp1_exit_pct = float(getattr(settings, "MIN_POST_TP1_EXIT_PCT", 0.80))
 
         stop_distance_pct = (
@@ -436,51 +470,3 @@ class ExitPolicyService:
                 exit=True, reason="tp2_reached",
                 exit_price=round(float(tp2_price), 8),
                 note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f}",
-            )
-
-        if stop_distance_pct is not None and stop_distance_pct >= 3.0:
-            tp2_progress = current_pct / tp2_pct if tp2_pct > 0 else 0
-            if tp2_progress >= 0.80 and drawdown_from_mfe >= mfe * 0.20:
-                protected_pct = max(mfe * 0.70, net_safe_pct, min_post_tp1_exit_pct)
-                exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-                return ExitDecision(
-                    exit=True,
-                    reason="wide_stop_tp2_guard",
-                    exit_price=round(exit_price, 8),
-                    note=(
-                        f"mfe={mfe:.4f} cur={current_pct:.4f} tp2_prog={tp2_progress:.3f} "
-                        f"dd={drawdown_from_mfe:.4f} prot={protected_pct:.4f} src={threshold_source}"
-                    ),
-                )
-
-        if mfe >= 3.0 and drawdown_from_mfe >= mfe * 0.30:
-            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
-            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-            return ExitDecision(
-                exit=True,
-                reason="trend_trailing_stop",
-                exit_price=round(exit_price, 8),
-                note=(
-                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
-                    f"prot={protected_pct:.4f} src={threshold_source} fee={fee_source}"
-                ),
-            )
-
-        if mfe >= 2.0 and drawdown_from_mfe >= mfe * 0.35:
-            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
-            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-            return ExitDecision(
-                exit=True,
-                reason="adaptive_post_tp1_stop",
-                exit_price=round(exit_price, 8),
-                note=(
-                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
-                    f"prot={protected_pct:.4f} fee={fee_source}"
-                ),
-            )
-
-        # КРИТИЧНО: ни одно пост-TP1 условие не сработало — ДЕРЖИМ (стоп уже в
-        # безубытке после TP1, защищать нечего). Без этого return функция отдавала
-        # None → manage_loop crash 'NoneType.exit'. Баг был латентным: вылез только
-        # после #9, когда сделки реально доходят до TP1 и входят в этот путь.
-        return ExitDecision(exit=False)

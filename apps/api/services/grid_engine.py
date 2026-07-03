@@ -199,7 +199,13 @@ class GridEngine:
         cyc["flip_cooldown"] = bool(in_cooldown)
 
         # гистерезис разворота
-        if opposite and bool(getattr(settings, "GRID_FLIP_ON_REGIME", True)) and not in_cooldown:
+        # (#audit-grid) + ATR-дистанция: streak растёт только если цена реально
+        # оторвалась от EMA (|price−EMA| ≥ k×ATR). Иначе почасовая пила вокруг
+        # EMA закрывала корзины мелкими flip-минусами (BTC: 4 флипа подряд).
+        ema_now = float(ind.get("ema") or 0.0)
+        min_dist = float(getattr(settings, "GRID_FLIP_MIN_ATR_DIST", 0.5))
+        dist_ok = ema_now <= 0 or atr <= 0 or abs(price - ema_now) >= min_dist * atr
+        if opposite and dist_ok and bool(getattr(settings, "GRID_FLIP_ON_REGIME", True)) and not in_cooldown:
             cyc["flip_streak"] = int(cyc.get("flip_streak", 0)) + 1
         else:
             cyc["flip_streak"] = 0
@@ -212,8 +218,9 @@ class GridEngine:
         if cyc["flip_streak"] >= confirm:
             filled = [lv for lv in cyc["levels"] if lv.get("filled")]
             unreal = gc.unrealized_pnl(filled, price) if filled else 0.0
-            self.store.close_cycle(symbol, realized=unreal, reason="grid_regime_flip", price=price)
-            print(f"[GRID FLIP] {symbol} {side}->{regime_now} streak={cyc['flip_streak']} pnl={unreal:.4f}")
+            realized = self._net_realized(filled, unreal)
+            self.store.close_cycle(symbol, realized=realized, reason="grid_regime_flip", price=price)
+            print(f"[GRID FLIP] {symbol} {side}->{regime_now} streak={cyc['flip_streak']} pnl={realized:.4f}")
             return "flipped"
 
         # пере-раскладка пустых уровней под текущий ATR/дрейф
@@ -258,6 +265,19 @@ class GridEngine:
                     changed = True
         return changed
 
+    # ── издержки корзины ──────────────────────────────────────────────────────
+    def _net_realized(self, filled: list, gross: float) -> float:
+        """(#audit-grid) Realized за вычетом round-trip комиссий по исполненному
+        нотионалу. gross-учёт завышал результат сетки."""
+        if not bool(getattr(settings, "GRID_FEES_IN_REALIZED", True)) or not filled:
+            return float(gross)
+        fee_pct = float(getattr(settings, "GRID_FEE_ROUND_PCT", 0.1)) / 100.0
+        notional = sum(
+            float(lv.get("volume") or 0.0) * float(lv.get("fill_price") or lv.get("price") or 0.0)
+            for lv in filled
+        )
+        return float(gross) - notional * fee_pct
+
     # ── открытие нового цикла ─────────────────────────────────────────────────
     def _maybe_open(self, symbol: str, price: float, *, bid=None, ask=None):
         # карман маржи: есть ли место хотя бы под базовый ордер
@@ -293,6 +313,23 @@ class GridEngine:
         )
         if not levels:
             return
+
+        # (#audit-grid) Экономический фильтр: шаг ближайшего уровня должен
+        # превышать спред×mult + round-trip fee, иначе цикл платит спред каждым
+        # кругом (AAVE neutral при спреде 0.1–0.5% сливал на самой механике).
+        try:
+            if bid and ask and float(bid) > 0 and float(ask) > float(bid):
+                mid = (float(bid) + float(ask)) / 2.0
+                spread_pct = (float(ask) - float(bid)) / mid * 100.0
+                fee_round = float(getattr(settings, "GRID_FEE_ROUND_PCT", 0.1))
+                mult = float(getattr(settings, "GRID_OPEN_MIN_EDGE_SPREAD_MULT", 1.0))
+                min_dist = min(float(lv.get("distance_pct") or 1e9) for lv in levels)
+                if min_dist < spread_pct * mult + fee_round:
+                    print(f"[GRID ECON-SKIP] {symbol} step {min_dist:.3f}% < spread {spread_pct:.3f}%×{mult}+fee {fee_round}%")
+                    return
+        except Exception:
+            pass
+
         for lv in levels:
             lv["price"] = self._round_price(symbol, lv["price"])
             lv["volume"] = self._round_qty(symbol, lv["volume"])
@@ -315,6 +352,26 @@ class GridEngine:
     def _process_fills(self, cyc: dict, symbol: str, price: float):
         if cyc.get("frozen"):
             return  # боковик: новые уровни не добираем, ждём выхода по TP/SL
+
+        # (#audit-grid) Анти-мартингейл: не доливаем против импульса/раннего
+        # разворота. TRX-кейс: 5 доливок в шорт при растущем RSI → корзина у SL.
+        if bool(getattr(settings, "GRID_ANTI_MARTINGALE_ENABLED", True)):
+            side = str(cyc.get("regime") or "")
+            regime_now = str(cyc.get("regime_now") or side)
+            opposite = (side == "long" and regime_now == "short") or \
+                       (side == "short" and regime_now == "long")
+            rsi = float((cyc.get("ind") or {}).get("rsi") or 50.0)
+            rsi_against = (
+                (side == "short" and rsi >= float(getattr(settings, "GRID_SHORT_FILL_RSI_MAX", 65.0)))
+                or (side == "long" and rsi <= float(getattr(settings, "GRID_LONG_FILL_RSI_MIN", 35.0)))
+            )
+            if opposite or rsi_against:
+                cyc["fills_paused"] = "regime_opposite" if opposite else f"rsi_against:{rsi:.1f}"
+                self.store.put_cycle(symbol, cyc)
+                return
+            if cyc.pop("fills_paused", None) is not None:
+                self.store.put_cycle(symbol, cyc)
+
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         max_orders = int(getattr(settings, "GRID_MAX_SAFETY_ORDERS", 6))
         envelope = self._envelope()
@@ -379,8 +436,9 @@ class GridEngine:
         sl_hit = (side == "long" and price <= sl) or (side == "short" and price >= sl)
 
         if tp_hit:
-            self.store.close_cycle(symbol, realized=unreal, reason="grid_take_profit", price=price)
-            print(f"[GRID TP] {symbol} closed basket pnl={unreal:.4f} @ {price}")
+            realized = self._net_realized(filled, unreal)
+            self.store.close_cycle(symbol, realized=realized, reason="grid_take_profit", price=price)
+            print(f"[GRID TP] {symbol} closed basket pnl={realized:.4f} @ {price}")
         elif sl_hit:
             # LiquidityGuard: на спайке спреда стоп может быть «сносом» — не закрываем
             # корзину по раздутому стакану, ждём нормализации (хард-риск ATR-стопа
@@ -398,8 +456,9 @@ class GridEngine:
             except Exception:
                 pass
             cyc.pop("sl_suppressed_spread", None)
-            self.store.close_cycle(symbol, realized=unreal, reason="grid_stop_loss", price=price)
-            print(f"[GRID SL] {symbol} closed basket pnl={unreal:.4f} @ {price}")
+            realized = self._net_realized(filled, unreal)
+            self.store.close_cycle(symbol, realized=realized, reason="grid_stop_loss", price=price)
+            print(f"[GRID SL] {symbol} closed basket pnl={realized:.4f} @ {price}")
         else:
             # просто обновим текущий нереализованный для фронта
             cyc["unrealized_pnl"] = unreal
@@ -415,8 +474,9 @@ class GridEngine:
         price = self._price(symbol)
         filled = [lv for lv in cyc["levels"] if lv.get("filled")]
         unreal = gc.unrealized_pnl(filled, price) if filled else 0.0
-        self.store.close_cycle(symbol, realized=unreal, reason=reason, price=price)
-        return {"status": "closed", "symbol": symbol, "realized": round(unreal, 6), "price": price}
+        realized = self._net_realized(filled, unreal)
+        self.store.close_cycle(symbol, realized=realized, reason=reason, price=price)
+        return {"status": "closed", "symbol": symbol, "realized": round(realized, 6), "price": price}
 
     # ── снимок для фронта ─────────────────────────────────────────────────────
     def snapshot(self) -> dict:

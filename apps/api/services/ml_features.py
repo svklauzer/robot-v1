@@ -13,6 +13,11 @@ from __future__ import annotations
 
 from typing import Any
 
+# (#audit-ml-cvd) CVD из окна с горсткой сделок — шум (cvd_ratio схлопывается в ±1.0
+# при 1–2 сделках; в live так почти всегда). Ниже порога зануляем CVD-фичи —
+# ОДИНАКОВО в train и serve, иначе train/serve skew.
+CVD_MIN_TRADES: int = 10
+
 # Порядок ВАЖЕН и фиксирован — модель обучается и предсказывает по нему.
 FEATURE_NAMES: list[str] = [
     "confidence",
@@ -56,6 +61,8 @@ def row_to_features(row: dict) -> list[float]:
     regime = str(row.get("regime") or "").lower()
     side = str(row.get("side") or row.get("action") or "").lower()
     d = _depth(row)
+    cvd_trades = _f(d.get("cvd_trades"))
+    cvd_reliable = cvd_trades >= float(CVD_MIN_TRADES)
     return [
         _f(row.get("confidence"), 60.0),
         _grade_ord(row.get("grade")),
@@ -70,8 +77,8 @@ def row_to_features(row: dict) -> list[float]:
         _f(d.get("obi")),
         _f(d.get("bid_wall_share")),
         _f(d.get("ask_wall_share")),
-        _f(d.get("cvd_ratio")),
-        _f(d.get("cvd_trades")),
+        _f(d.get("cvd_ratio")) if cvd_reliable else 0.0,
+        cvd_trades,
     ]
 
 

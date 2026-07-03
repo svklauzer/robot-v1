@@ -225,8 +225,34 @@ class SignalLifecycleManager:
             await self.process_signal(db, bot, signal)
 
     async def process_signal(self, db, bot: Bot, signal: Signal):
+        """Боевой путь: цена из живого снэпшота рынка."""
         snap = self.market.snapshot(signal.symbol)
-        price = float(snap["last"])
+        await self._process_signal_core(
+            db, bot, signal,
+            price=float(snap["last"]),
+            price_source=snap.get("source"),
+            dirty_decision="dirty_price_skipped",
+            alert_dirty=True,
+        )
+
+    async def _process_signal_core(
+        self,
+        db,
+        bot: Bot,
+        signal: Signal,
+        *,
+        price: float,
+        price_source: str | None,
+        dirty_decision: str,
+        alert_dirty: bool,
+    ):
+        """(#audit-lifecycle-merge) ЕДИНЫЙ путь ведения сигнала.
+
+        Раньше process_signal и process_signal_with_price были ~450 строками
+        дублированного кода и УЖЕ разошлись: guard low_grade_capital_release
+        существовал только в тестовом пути. Теперь оба пути зовут этот core.
+        """
+        price = float(price)
 
         entry_from = float(signal.entry_zone_json["from"])
         entry_to = float(signal.entry_zone_json["to"])
@@ -249,35 +275,39 @@ class SignalLifecycleManager:
         terminal_level_hit = terminal_stop_hit or terminal_tp2_hit
 
         if not sane and not terminal_level_hit:
+            payload = {
+                "signal_id": signal.id,
+                "symbol": signal.symbol,
+                "side": signal.side,
+                "price": price,
+                "reason": guard_reason,
+                "entry_zone": signal.entry_zone_json,
+                "stop_price": signal.stop_price,
+                "tp": signal.tp_json,
+            }
+            if price_source is not None:
+                payload["source"] = price_source
+
             self.decisions.record(
                 db,
                 symbol=signal.symbol,
                 status="warning",
-                decision="dirty_price_skipped",
+                decision=dirty_decision,
                 action=signal.side,
-                payload={
-                    "signal_id": signal.id,
-                    "symbol": signal.symbol,
-                    "side": signal.side,
-                    "price": price,
-                    "reason": guard_reason,
-                    "entry_zone": signal.entry_zone_json,
-                    "stop_price": signal.stop_price,
-                    "tp": signal.tp_json,
-                    "source": snap.get("source"),
-                },
+                payload=payload,
             )
 
-            await self.router.owner_alert(
-                "DIRTY PRICE SKIPPED",
-                (
-                    f"Signal #{signal.id}\n"
-                    f"{signal.symbol} {signal.side}\n"
-                    f"Price: {price}\n"
-                    f"Reason: {guard_reason}\n"
-                    f"Source: {snap.get('source')}"
+            if alert_dirty:
+                await self.router.owner_alert(
+                    "DIRTY PRICE SKIPPED",
+                    (
+                        f"Signal #{signal.id}\n"
+                        f"{signal.symbol} {signal.side}\n"
+                        f"Price: {price}\n"
+                        f"Reason: {guard_reason}\n"
+                        f"Source: {price_source}"
+                    )
                 )
-            )
 
             db.flush()
             return
@@ -520,16 +550,41 @@ class SignalLifecycleManager:
             lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
             entry_price = self._get_signal_entry_price(db, signal) or entry_from
 
+            # Guard C-грейда: слабый сетап без MFE удерживает капитал — release.
+            # (до merge существовал только в тестовом пути — дивергенция путей)
+            current_pct_for_grade_guard = self._result_pct_precise(
+                side,
+                float(entry_price),
+                float(safe_metric_price),
+            )
+
+            mfe_for_grade_guard = lifecycle.get("mfe_pct")
+
+            if (
+                str(signal.grade or "").upper() == "C"
+                and mfe_for_grade_guard is not None
+                and float(mfe_for_grade_guard) < 0.30
+                and current_pct_for_grade_guard <= -0.05
+            ):
+                await self._close_signal(
+                    db,
+                    signal,
+                    exit_price=float(safe_metric_price),
+                    fallback_result_pct=current_pct_for_grade_guard,
+                    reason="low_grade_capital_release",
+                )
+                return
+
             exit_decision = self.exit_policy.before_tp1_decision(
                 side=side,
                 entry_price=float(entry_price),
-                current_price=float(price),
+                current_price=float(safe_metric_price),
                 stop_price=float(stop),
                 tp1_price=float(tp1),
                 mfe_pct=lifecycle.get("mfe_pct"),
                 max_profit_price=lifecycle.get("max_profit_price"),
                 symbol=signal.symbol,
-                market_type=settings.MARKET_TYPE,
+                market_type=settings.execution_market_type,
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
                 flow_against=_depth_flow_against(signal, side),
@@ -556,7 +611,10 @@ class SignalLifecycleManager:
                 # Гарантирует нулевой убыток если цена откатится после TP1.
                 _be_position = self._get_open_position_for_signal(db, signal)
                 _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
-                _be_fee = float(settings.SPOT_TAKER_FEE) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
+                # (#audit-cost-model) fee-буфер безубытка — по ставке рынка ИСПОЛНЕНИЯ
+                # (swap 0.05%, спот 0.2%), а не жёстко SPOT_TAKER_FEE.
+                _be_rate, _ = self.exit_policy._fee_rate(signal.symbol, settings.execution_market_type)
+                _be_fee = float(_be_rate) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
                 if side == "long":
                     _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
                     if _be_new_stop > float(signal.stop_price):
@@ -599,13 +657,8 @@ class SignalLifecycleManager:
             entry_price = float(position.entry_price) if position else entry_from
             lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
 
-            # ХАРД-СТОП после TP1. Раньше в этой ветке НЕ было явной проверки стопа
-            # (только в "opened"), поэтому позиция, прошедшая TP1, при развороте цены
-            # сквозь breakeven-стоп ЗАВИСАЛА open: выход зависел лишь от трейлинга
-            # after_tp1_decision, и если тот не срабатывал — mark замораживался на
-            # стопе (SOL #96: реальная цена 69.5, а позиция «висела» +1.26 по стопу
-            # 73.74). Теперь breakeven/стоп закрывает позицию явно — фиксируем
-            # защищённую прибыль (или безубыток), цена закрытия = уровень стопа.
+            # ХАРД-СТОП после TP1: breakeven/стоп закрывает позицию явно,
+            # цена закрытия = уровень стопа (SOL #96).
             if self._hit_stop(side, price, stop):
                 exit_price = self._stop_exit_price(stop)
                 await self._close_signal(
@@ -640,7 +693,7 @@ class SignalLifecycleManager:
                 tp2_price=tp2,
                 lifecycle=lifecycle,
                 symbol=signal.symbol,
-                market_type=settings.MARKET_TYPE,
+                market_type=settings.execution_market_type,
                 signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
@@ -657,6 +710,7 @@ class SignalLifecycleManager:
                     reason=exit_decision.reason,
                 )
                 return
+
 
     def _safe_float(self, value, default=None):
         try:
@@ -1014,443 +1068,20 @@ class SignalLifecycleManager:
         db.flush()
 
     async def process_signal_with_price(self, db, signal: Signal, price: float):
+        """Тест/инъекция цены (owner endpoint): тот же core, без dirty-алертов."""
         bot = db.query(Bot).filter(Bot.id == signal.bot_id).first()
 
         if not bot:
             raise RuntimeError(f"Bot not found for signal_id={signal.id}")
 
-        price = float(price)
+        await self._process_signal_core(
+            db, bot, signal,
+            price=float(price),
+            price_source=None,
+            dirty_decision="dirty_test_price_skipped",
+            alert_dirty=False,
+        )
 
-        entry_from = float(signal.entry_zone_json["from"])
-        entry_to = float(signal.entry_zone_json["to"])
-        stop = float(signal.stop_price)
-
-        tp1 = float(signal.tp_json["tp1"])
-        tp2 = float(signal.tp_json["tp2"])
-
-        side = signal.side.lower()
-
-        sane, guard_reason = self._is_price_sane_for_signal(signal, price)
-
-        terminal_stop_hit = False
-        terminal_tp2_hit = False
-
-        if signal.status in ["opened", "tp1", "breakeven"]:
-            terminal_stop_hit = self._hit_stop(side, price, stop)
-            terminal_tp2_hit = self._hit_tp(side, price, tp2)
-
-        terminal_level_hit = terminal_stop_hit or terminal_tp2_hit
-
-        if not sane and not terminal_level_hit:
-            self.decisions.record(
-                db,
-                symbol=signal.symbol,
-                status="warning",
-                decision="dirty_test_price_skipped",
-                action=signal.side,
-                payload={
-                    "signal_id": signal.id,
-                    "symbol": signal.symbol,
-                    "side": signal.side,
-                    "price": price,
-                    "reason": guard_reason,
-                    "entry_zone": signal.entry_zone_json,
-                    "stop_price": signal.stop_price,
-                    "tp": signal.tp_json,
-                },
-            )
-
-            db.flush()
-            return
-
-        safe_metric_price = price
-
-        if not sane and terminal_stop_hit:
-            safe_metric_price = self._stop_exit_price(stop)
-
-        if not sane and terminal_tp2_hit:
-            safe_metric_price = self._tp_exit_price(tp2)
-
-        self._update_open_position_mark(db, signal, safe_metric_price)
-
-        if signal.status in ["opened", "tp1", "breakeven"]:
-            self._update_lifecycle_metrics(db, signal, safe_metric_price)
-
-        if signal.status == "published":
-            if self._price_in_entry_zone(price, entry_from, entry_to):
-                execution = ExecutionEngine(db)
-
-                fresh = self.freshness.validate_signal(
-                    symbol=signal.symbol,
-                    side=side,
-                    price=price,
-                    entry_zone=signal.entry_zone_json,
-                    stop_price=signal.stop_price,
-                    tp=signal.tp_json,
-                    expires_at=signal.expires_at,
-                )
-
-                if not fresh.allowed:
-                    signal.status = "expired"
-                    signal.closed_reason = fresh.reason
-
-                    self.decisions.record(
-                        db,
-                        symbol=signal.symbol,
-                        status="expired",
-                        decision=f"signal_freshness_rejected_{fresh.reason}",
-                        action=signal.side,
-                        payload={
-                            "signal_id": signal.id,
-                            "freshness": fresh.payload,
-                            "freshness_score": fresh.score,
-                        },
-                    )
-
-                    db.flush()
-                    return
-
-                result = await execution.open_paper_position(
-                    bot=bot,
-                    signal=signal,
-                    entry_price=price,
-                    balance_usdt=float(settings.RISK_EQUITY_USDT),
-                )
-
-                plan = result.get("plan")
-
-                if result.get("status") == "already_open":
-                    signal.status = "rejected"
-                    signal.closed_reason = "duplicate_position_already_open"
-
-                    self.decisions.record(
-                        db,
-                        symbol=signal.symbol,
-                        status="rejected",
-                        decision=DECISION_POSITION_ALREADY_OPEN,
-                        action=signal.side,
-                        payload={
-                            "signal_id": signal.id,
-                            "symbol": signal.symbol,
-                            "side": signal.side,
-                            "entry_price": price,
-                            "reason": "position_already_open_duplicate_signal_rejected",
-                        },
-                    )
-
-                    await self.router.owner_alert(
-                        "DUPLICATE SIGNAL REJECTED",
-                        (
-                            f"Signal #{signal.id}\n"
-                            f"{signal.symbol} {signal.side}\n"
-                            f"Причина: позиция по этой монете/стороне уже открыта."
-                        ),
-                    )
-
-                    db.flush()
-                    return
-
-                if result.get("status") == "rejected":
-                    signal.status = "rejected"
-
-                    extra = (
-                        f"Сделка отклонена TradePlan.\n"
-                        f"Причина: {result.get('reason')}"
-                    )
-
-                    if plan:
-                        extra += (
-                            f"\nQty: {plan.qty}"
-                            f"\nRequired margin: {plan.required_margin} USDT"
-                            f"\nNet TP1: {plan.net_pnl_tp1} USDT"
-                            f"\nNet TP2: {plan.net_pnl_tp2} USDT"
-                            f"\nNet Stop: {plan.net_pnl_stop} USDT"
-                            f"\nRR TP2: {plan.net_rr_tp2}"
-                        )
-
-                    await self.router.owner_alert(
-                        "TRADE PLAN REJECTED",
-                        f"Signal #{signal.id}\n{signal.symbol}\n{extra}",
-                    )
-
-                    self.decisions.record(
-                        db,
-                        symbol=signal.symbol,
-                        status="rejected",
-                        decision=DECISION_TRADE_PLAN_REJECTED,
-                        action=signal.side,
-                        payload={
-                            "signal_id": signal.id,
-                            "symbol": signal.symbol,
-                            "side": signal.side,
-                            "entry_price": price,
-                            "reason": result.get("reason"),
-                            "plan": {
-                                "qty": getattr(plan, "qty", None),
-                                "required_margin": getattr(plan, "required_margin", None),
-                                "net_pnl_tp1": getattr(plan, "net_pnl_tp1", None),
-                                "net_pnl_tp2": getattr(plan, "net_pnl_tp2", None),
-                                "net_pnl_stop": getattr(plan, "net_pnl_stop", None),
-                                "net_rr_tp2": getattr(plan, "net_rr_tp2", None),
-                            } if plan else None,
-                        },
-                    )
-
-                    db.flush()
-                    return
-
-                signal.status = "opened"
-                signal.opened_at = datetime.now(timezone.utc)
-
-                synced_position = self._sync_open_position_with_signal_plan(
-                    db=db,
-                    signal=signal,
-                    price=price,
-                )
-
-                lifecycle = self._update_lifecycle_metrics(db, signal, price)
-
-                signal_plan = self._signal_plan_payload(signal)
-
-                self.decisions.record(
-                    db,
-                    symbol=signal.symbol,
-                    status="opened",
-                    decision=DECISION_POSITION_OPENED,
-                    action=signal.side,
-                    payload={
-                        "signal_id": signal.id,
-                        "symbol": signal.symbol,
-                        "side": signal.side,
-                        "entry_price": price,
-                        "entry_zone": signal.entry_zone_json,
-                        "stop_price": signal.stop_price,
-                        "tp": signal.tp_json,
-                        "grade": signal.grade,
-                        "confidence": signal.confidence,
-                        "plan": signal_plan,
-                        "lifecycle": lifecycle,
-                        "position": {
-                            "id": synced_position.id,
-                            "qty": synced_position.qty,
-                            "entry_price": synced_position.entry_price,
-                            "mark_price": synced_position.mark_price,
-                            "unrealized_pnl": synced_position.unrealized_pnl,
-                        } if synced_position else None,
-                    },
-                )
-
-                extra = f"Цена входа: {round(price, 4)}"
-
-                if signal_plan:
-                    extra += (
-                        f"\nQty: {signal_plan.get('qty')}"
-                        f"\nMargin: {signal_plan.get('required_margin')} USDT"
-                        f"\nNet TP1: {signal_plan.get('net_pnl_tp1')} USDT"
-                        f"\nNet TP2: {signal_plan.get('net_pnl_tp2')} USDT"
-                        f"\nNet Stop: {signal_plan.get('net_pnl_stop')} USDT"
-                        f"\nRR TP2: {signal_plan.get('net_rr_tp2')}"
-                    )
-
-                signal.plan_json = signal.plan_json or {}
-                lifecycle_state = signal.plan_json.get("lifecycle") or {}
-                entry_notified = bool(lifecycle_state.get("entry_notified"))
-
-                if not entry_notified:
-                    await self.router.publish_signal_update(
-                        symbol=signal.symbol,
-                        text_status=f"📥 Позиция активирована | Signal #{signal.id}",
-                        extra=extra,
-                        grade=signal.grade,
-                    )
-                    lifecycle_state["entry_notified"] = True
-                    signal.plan_json["lifecycle"] = lifecycle_state
-                    flag_modified(signal, "plan_json")
-
-                db.flush()
-
-        elif signal.status == "opened":
-            entry_price_for_result = self._entry_for_result(db, signal, entry_from)
-
-            if self._hit_stop(side, price, stop):
-                exit_price = self._stop_exit_price(stop)
-
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=exit_price,
-                    fallback_result_pct=self._result_pct(
-                        side,
-                        entry_price_for_result,
-                        exit_price,
-                    ),
-                    reason="stop_loss",
-                )
-                return
-
-            lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
-            entry_price = self._get_signal_entry_price(db, signal) or entry_from
-
-            current_pct_for_grade_guard = self._result_pct_precise(
-                side,
-                float(entry_price),
-                float(safe_metric_price),
-            )
-
-            mfe_for_grade_guard = lifecycle.get("mfe_pct")
-
-            if (
-                str(signal.grade or "").upper() == "C"
-                and mfe_for_grade_guard is not None
-                and float(mfe_for_grade_guard) < 0.30
-                and current_pct_for_grade_guard <= -0.05
-            ):
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=float(safe_metric_price),
-                    fallback_result_pct=current_pct_for_grade_guard,
-                    reason="low_grade_capital_release",
-                )
-                return
-
-            exit_decision = self.exit_policy.before_tp1_decision(
-                side=side,
-                entry_price=float(entry_price),
-                current_price=float(safe_metric_price),
-                stop_price=float(stop),
-                tp1_price=float(tp1),
-                mfe_pct=lifecycle.get("mfe_pct"),
-                max_profit_price=lifecycle.get("max_profit_price"),
-                symbol=signal.symbol,
-                market_type=settings.MARKET_TYPE,
-                signal_age_sec=self._signal_age_sec(lifecycle),
-                trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
-                flow_against=_depth_flow_against(signal, side),
-            )
-
-            if exit_decision.exit:
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=exit_decision.exit_price,
-                    fallback_result_pct=self._result_pct(
-                        side,
-                        float(entry_price),
-                        exit_decision.exit_price,
-                    ),
-                    reason=exit_decision.reason,
-                )
-                return
-
-            if self._hit_tp(side, price, tp1):
-                signal.status = "tp1"
-
-                # BREAKEVEN STOP: после TP1 стоп сдвигается на entry + fee buffer.
-                # Гарантирует нулевой убыток если цена откатится после TP1.
-                _be_position = self._get_open_position_for_signal(db, signal)
-                _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
-                _be_fee = float(settings.SPOT_TAKER_FEE) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
-                if side == "long":
-                    _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
-                    if _be_new_stop > float(signal.stop_price):
-                        signal.stop_price = _be_new_stop
-                else:
-                    _be_new_stop = round(_be_entry * (1 - _be_fee), 8)
-                    if _be_new_stop < float(signal.stop_price):
-                        signal.stop_price = _be_new_stop
-
-                self.decisions.record(
-                    db,
-                    symbol=signal.symbol,
-                    status="tp1",
-                    decision=DECISION_TP1_REACHED,
-                    action=signal.side,
-                    payload={
-                        "signal_id": signal.id,
-                        "symbol": signal.symbol,
-                        "side": signal.side,
-                        "price": price,
-                        "tp1": tp1,
-                        "entry_zone": signal.entry_zone_json,
-                        "stop_moved_to": "breakeven_after_tp1",
-                        "breakeven_stop": float(signal.stop_price),
-                        "lifecycle": signal.plan_json.get("lifecycle") if signal.plan_json else None,
-                    },
-                )
-
-                await self.router.publish_signal_update(
-                    symbol=signal.symbol,
-                    text_status=f"✅ TP1 достигнут | Signal #{signal.id}",
-                    extra=f"TP1 достигнут. Стоп перенесён на breakeven {round(float(signal.stop_price), 6)}. Позиция защищена.",
-                    grade=signal.grade,
-                )
-
-                db.flush()
-
-        elif signal.status in ["tp1", "breakeven"]:
-            position = self._get_open_position_for_signal(db, signal)
-            entry_price = float(position.entry_price) if position else entry_from
-            lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
-
-            # ХАРД-СТОП после TP1. Раньше в этой ветке НЕ было явной проверки стопа
-            # (только в "opened"), поэтому позиция, прошедшая TP1, при развороте цены
-            # сквозь breakeven-стоп ЗАВИСАЛА open: выход зависел лишь от трейлинга
-            # after_tp1_decision, и если тот не срабатывал — mark замораживался на
-            # стопе (SOL #96: реальная цена 69.5, а позиция «висела» +1.26 по стопу
-            # 73.74). Теперь breakeven/стоп закрывает позицию явно — фиксируем
-            # защищённую прибыль (или безубыток), цена закрытия = уровень стопа.
-            if self._hit_stop(side, price, stop):
-                exit_price = self._stop_exit_price(stop)
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=exit_price,
-                    fallback_result_pct=self._result_pct(side, entry_price, exit_price),
-                    reason="breakeven_stop",
-                )
-                return
-
-            if self._hit_tp(side, price, tp2):
-                exit_price = self._tp_exit_price(tp2)
-
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=exit_price,
-                    fallback_result_pct=self._result_pct(
-                        side,
-                        entry_price,
-                        exit_price,
-                    ),
-                    reason="tp2_reached",
-                )
-                return
-
-            exit_decision = self.exit_policy.after_tp1_decision(
-                side=side,
-                entry_price=entry_price,
-                current_price=price,
-                tp2_price=tp2,
-                lifecycle=lifecycle,
-                symbol=signal.symbol,
-                market_type=settings.MARKET_TYPE,
-                signal_age_sec=self._signal_age_sec(lifecycle),
-            )
-
-            if exit_decision.exit:
-                await self._close_signal(
-                    db,
-                    signal,
-                    exit_price=exit_decision.exit_price,
-                    fallback_result_pct=self._result_pct(
-                        side,
-                        entry_price,
-                        exit_decision.exit_price,
-                    ),
-                    reason=exit_decision.reason,
-                )
-                return
 
     async def expire_stale_signals(self, db, bot):
         now = datetime.now(timezone.utc)

@@ -326,41 +326,71 @@ class HTXClient:
         """
         Нормализованные maker/taker комиссии.
 
-        Приоритет:
+        Приоритет (spot):
         1. Биржа через fetch_trading_fee(symbol)
         2. market metadata из load_markets()
         3. fallback из settings
+
+        Приоритет (swap/futures/perp):
+        1. metadata КОНТРАКТНОГО рынка (BTC/USDT:USDT)
+        2. fallback из settings (FUTURES_*)
+
+        КРИТИЧНО (#audit-cost-model): инстанс ccxt работает с defaultType из
+        HTX_MARKET_TYPE (обычно spot). fetch_trading_fee/spot-metadata для
+        swap-запроса возвращали СПОТ-ставку 0.2%, завышая издержки деривативной
+        сделки в ~4 раза (факт аудита: total_cost 0.45% round-trip при swap
+        taker 0.05%). Для деривативов спот-источники запрещены.
         """
         market_type_value = market_type or settings.MARKET_TYPE
+        is_derivative = market_type_value in ["swap", "futures", "perp"]
 
         maker = None
         taker = None
         source = "fallback_settings"
 
-        fee = self.fetch_trading_fee(symbol)
+        if is_derivative:
+            # Только метаданные контрактного рынка; спот-ставки не подходят.
+            try:
+                self.load_markets()
+                markets = self.exchange.markets or {}
+                contract = None
+                for candidate in (f"{symbol}:USDT", symbol):
+                    m = markets.get(candidate)
+                    if m and (m.get("swap") or m.get("future") or m.get("contract")):
+                        contract = m
+                        break
+                if contract:
+                    maker = contract.get("maker")
+                    taker = contract.get("taker")
+                    if maker is not None or taker is not None:
+                        source = "contract_market_metadata"
+            except Exception as e:
+                log_event(logger, logging.WARNING, "htx_contract_fee_meta_error", symbol=symbol, error=str(e))
+        else:
+            fee = self.fetch_trading_fee(symbol)
 
-        if fee:
-            maker = fee.get("maker")
-            taker = fee.get("taker")
+            if fee:
+                maker = fee.get("maker")
+                taker = fee.get("taker")
 
-            if maker is not None or taker is not None:
-                source = "exchange_api"
+                if maker is not None or taker is not None:
+                    source = "exchange_api"
 
-        try:
-            self.exchange.load_markets()
-            market = self.exchange.market(symbol)
+            try:
+                self.exchange.load_markets()
+                market = self.exchange.market(symbol)
 
-            if maker is None:
-                maker = market.get("maker")
+                if maker is None:
+                    maker = market.get("maker")
 
-            if taker is None:
-                taker = market.get("taker")
+                if taker is None:
+                    taker = market.get("taker")
 
-            if source == "fallback_settings" and (maker is not None or taker is not None):
-                source = "market_metadata"
+                if source == "fallback_settings" and (maker is not None or taker is not None):
+                    source = "market_metadata"
 
-        except Exception as e:
-            log_event(logger, logging.WARNING, "htx_market_fee_meta_error", symbol=symbol, error=str(e))
+            except Exception as e:
+                log_event(logger, logging.WARNING, "htx_market_fee_meta_error", symbol=symbol, error=str(e))
 
         if maker is None:
             maker = (

@@ -290,7 +290,10 @@ class ExecutionEngine:
 
         position.status = "closed"
         position.mark_price = exit_price
-        position.unrealized_pnl = preview.net_pnl
+        # (#audit-positions) Закрытая позиция не имеет НЕреализованного PnL —
+        # раньше поле держало net_pnl закрытия и путало фронт/аналитику.
+        # Реализованный результат живёт в Signal.closed_net_pnl.
+        position.unrealized_pnl = 0.0
         position.closed_at = datetime.now(timezone.utc)
 
         self.db.add(close_order)
