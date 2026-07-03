@@ -190,6 +190,11 @@ class GridEngine:
         side = cyc.get("regime")  # исходное направление сетки
         opposite = (side == "long" and regime_now == "short") or \
                    (side == "short" and regime_now == "long")
+        # (#audit-grid-neutral) Neutral-корзина в направленном рынке тоже должна
+        # переворачиваться: раньше streak рос только на long<->short, и neutral-цикл
+        # зависал навсегда (фронт обещал «разворот зреет 0/N», бэкенд не умел).
+        if side == "neutral" and regime_now in ("long", "short"):
+            opposite = True
 
         # (#grid-flip-cooldown) тихое окно после открытия/флипа: не переворачиваемся,
         # пока не прошло GRID_FLIP_COOLDOWN_SEC. Лечит почасовую пилу на монетах у EMA
@@ -369,8 +374,19 @@ class GridEngine:
                 cyc["fills_paused"] = "regime_opposite" if opposite else f"rsi_against:{rsi:.1f}"
                 self.store.put_cycle(symbol, cyc)
                 return
-            if cyc.pop("fills_paused", None) is not None:
+            # (#audit-grid-neutral) Neutral-корзина в направленном рынке: не доливаем
+            # сторону ПРОТИВ живого регайма (sell в long-рынке / buy в short-рынке),
+            # пока зреет флип. Попутная сторона продолжает работать.
+            if side == "neutral" and regime_now in ("long", "short"):
+                blocked_side = "sell" if regime_now == "long" else "buy"
+                cyc["fills_paused"] = f"neutral_counter_side_{blocked_side}"
                 self.store.put_cycle(symbol, cyc)
+            else:
+                blocked_side = None
+                if cyc.pop("fills_paused", None) is not None:
+                    self.store.put_cycle(symbol, cyc)
+        else:
+            blocked_side = None
 
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         max_orders = int(getattr(settings, "GRID_MAX_SAFETY_ORDERS", 6))
@@ -381,6 +397,8 @@ class GridEngine:
         for lv_ in cyc["levels"]:
             if lv_.get("filled"):
                 continue
+            if blocked_side and lv_["side"] == blocked_side:
+                continue  # (#audit-grid-neutral) контр-тренд сторона neutral-корзины
             if filled_now >= max_orders:
                 break  # лимит страховочных ордеров достигнут
             crossed = (lv_["side"] == "buy" and price <= lv_["price"]) or \
@@ -497,6 +515,7 @@ class GridEngine:
                 "flip_streak": cyc.get("flip_streak", 0),
                 "frozen": bool(cyc.get("frozen")),
                 "flip_cooldown": bool(cyc.get("flip_cooldown")),
+                "fills_paused": cyc.get("fills_paused"),
                 "adapted_at": cyc.get("adapted_at"),
                 "levels": cyc.get("levels", []),
             })
