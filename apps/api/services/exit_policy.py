@@ -470,3 +470,51 @@ class ExitPolicyService:
                 exit=True, reason="tp2_reached",
                 exit_price=round(float(tp2_price), 8),
                 note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f}",
+            )
+
+        if stop_distance_pct is not None and stop_distance_pct >= 3.0:
+            tp2_progress = current_pct / tp2_pct if tp2_pct > 0 else 0
+            if tp2_progress >= 0.80 and drawdown_from_mfe >= mfe * 0.20:
+                protected_pct = max(mfe * 0.70, net_safe_pct, min_post_tp1_exit_pct)
+                exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+                return ExitDecision(
+                    exit=True,
+                    reason="wide_stop_tp2_guard",
+                    exit_price=round(exit_price, 8),
+                    note=(
+                        f"mfe={mfe:.4f} cur={current_pct:.4f} tp2_prog={tp2_progress:.3f} "
+                        f"dd={drawdown_from_mfe:.4f} prot={protected_pct:.4f} src={threshold_source}"
+                    ),
+                )
+
+        if mfe >= 3.0 and drawdown_from_mfe >= mfe * 0.30:
+            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
+            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+            return ExitDecision(
+                exit=True,
+                reason="trend_trailing_stop",
+                exit_price=round(exit_price, 8),
+                note=(
+                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
+                    f"prot={protected_pct:.4f} src={threshold_source} fee={fee_source}"
+                ),
+            )
+
+        if mfe >= 2.0 and drawdown_from_mfe >= mfe * 0.35:
+            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
+            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+            return ExitDecision(
+                exit=True,
+                reason="adaptive_post_tp1_stop",
+                exit_price=round(exit_price, 8),
+                note=(
+                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
+                    f"prot={protected_pct:.4f} fee={fee_source}"
+                ),
+            )
+
+        # КРИТИЧНО: ни одно пост-TP1 условие не сработало — ДЕРЖИМ (стоп уже в
+        # безубытке после TP1, защищать нечего). Без этого return функция отдавала
+        # None → manage_loop crash 'NoneType.exit'. Баг был латентным: вылез только
+        # после #9, когда сделки реально доходят до TP1 и входят в этот путь.
+        return ExitDecision(exit=False)
