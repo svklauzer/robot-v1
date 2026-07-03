@@ -875,6 +875,30 @@ class SignalLifecycleManager:
             lifecycle["mae_pct"] = current_pct
             lifecycle["max_drawdown_price"] = round(float(price), 6)
 
+        # (#audit-traj) Компактная траектория для offline exit-replay: точки
+        # [age_sec, pct] с даунсемплингом по шагу и адаптивным прореживанием.
+        if bool(getattr(settings, "TRAJ_RECORD_ENABLED", True)):
+            try:
+                traj = list(lifecycle.get("traj") or [])
+                step = float(lifecycle.get("traj_step") or getattr(settings, "TRAJ_MIN_STEP_PCT", 0.05))
+                first_seen = lifecycle.get("first_seen_at")
+                if first_seen:
+                    _t0 = datetime.fromisoformat(str(first_seen).replace("Z", "+00:00"))
+                    age = int(max((datetime.now(timezone.utc) - _t0).total_seconds(), 0))
+                else:
+                    age = 0
+                last_pct = float(traj[-1][1]) if traj else None
+                if last_pct is None or abs(current_pct - last_pct) >= step:
+                    traj.append([age, round(current_pct, 4)])
+                    max_pts = int(getattr(settings, "TRAJ_MAX_POINTS", 400))
+                    if len(traj) > max_pts:
+                        traj = traj[::2]
+                        step = step * 2.0
+                    lifecycle["traj"] = traj
+                    lifecycle["traj_step"] = round(step, 4)
+            except Exception:
+                pass  # телеметрия не должна ломать ведение сделки
+
         lifecycle["entry_price"] = round(float(entry_price), 6)
         lifecycle["last_price"] = round(float(price), 6)
         lifecycle["current_pct"] = current_pct

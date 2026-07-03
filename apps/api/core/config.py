@@ -423,6 +423,13 @@ class Settings(BaseSettings):
     # одно и то же (symbol, decision) не пишем чаще, чем раз в N минут.
     INTEL_EVENT_DEDUP_MINUTES: float = 10.0
 
+    # (#audit-traj) Компактная траектория сделки [age_sec, current_pct] в
+    # lifecycle — сырьё для offline A/B exit-параметров (/ml/exit-replay).
+    # Только запись данных, на торговые решения не влияет.
+    TRAJ_RECORD_ENABLED: bool = True
+    TRAJ_MIN_STEP_PCT: float = 0.05     # новая точка при изменении result_pct на этот шаг
+    TRAJ_MAX_POINTS: int = 400          # при переполнении прореживаем ×2 и удваиваем шаг
+
     # --- Post-loss cooldown (только range-скальп) ---
     # После убыточного закрытия по паре символ+сторона не лезем повторно N минут
     # — режет churn (DOT шортился 6× в аптренд, пока guard не заблокировал).

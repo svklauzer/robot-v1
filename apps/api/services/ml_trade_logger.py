@@ -162,6 +162,9 @@ class MLTradeLogger:
                 "max_drawdown_price": lifecycle.get("max_drawdown_price"),
                 "updates": lifecycle.get("updates"),
                 "close_reason": lifecycle.get("close_reason"),
+                # (#audit-traj) Траектория для offline exit-replay.
+                "traj": lifecycle.get("traj"),
+                "traj_step": lifecycle.get("traj_step"),
             },
 
             "labels": {
