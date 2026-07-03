@@ -164,7 +164,7 @@ export default function GridPage() {
                     <span className="rounded-lg bg-amber-900/70 px-2 py-1 text-xs font-bold text-amber-200" title="тиков подряд против цикла; при достижении порога — разворот">↻ {c.flip_streak}</span>
                   )}
                   {c.fills_paused && (
-                    <span className="rounded-lg bg-orange-900/70 px-2 py-1 text-xs font-bold text-orange-200" title={`добор уровней приостановлен: ${c.fills_paused}`}>⏸ добор</span>
+                    <span className="rounded-lg bg-orange-900/70 px-2 py-1 text-xs font-bold text-orange-200" title={`причина: ${c.fills_paused}`}>⏸ добор на паузе</span>
                   )}
                   {!(cfg.symbols || []).includes(c.symbol) && (
                     <span className="rounded-lg bg-zinc-800 px-2 py-1 text-xs font-bold text-zinc-300" title="символ убран из GRID_SYMBOLS: цикл обслуживается до выхода, новые не откроются">де-листнут</span>
