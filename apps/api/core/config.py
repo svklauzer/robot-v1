@@ -615,6 +615,17 @@ class Settings(BaseSettings):
     PROD_GATE_B_MIN_RR_TP2_PAPER: float = 0.85    # spot 0.2% paper
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
 
+    # (#grade-fix-2026-07-06) Пороги грейда (по composite score = effective_confidence
+    # + setup-бонус + regime). Были захардкожены 88/78/62 → ладдер не разлипался,
+    # ~все сигналы B, grade_ord как ML-фича = константа. Рекалибровано под реальное
+    # распределение: сильный сетап → A, исключительный → A+, средний → B, слабый → C.
+    # БЕЗОПАСНО: размер позиции больше НЕ зависит от грейда (перенесён на ml_score, §9),
+    # поэтому релейбл не раздаёт эквити. Тюнится без релиза. NB: после накопления
+    # сигналов на новой шкале — переобучить мета-лейблер (grade_ord меняет распределение).
+    GRADE_A_PLUS_MIN_SCORE: float = 82.0
+    GRADE_A_MIN_SCORE: float = 73.0
+    GRADE_B_MIN_SCORE: float = 62.0
+
     # =========================
     # RISK MANAGEMENT
     # =========================
@@ -648,6 +659,14 @@ class Settings(BaseSettings):
     # не должен получать весь free (TRX #101 B → 430 маржи → -5.7). Для B бюджет
     # капается этой долей свободной маржи. A/A+ — без этого капа.
     DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE: float = 0.5
+    # (#grade-ml-2026-07-06) Размер по ml_score, а не по грейду. Грейд по факту
+    # всегда B (пороги A/A+ недостижимы), поэтому «всё эквити A/A+» не срабатывало,
+    # а размер разделял неверную ось. Исходы разделяет ml_score (калибровка live:
+    # score>=0.45 → WR 66%/+PnL; <0.45 → WR ~12%/−PnL). Высокому ml_score — полный
+    # бюджет, низкому — доля (как прежний B-cap). ML off/нет score → откат на grade.
+    ML_SIZE_ALLOC_ENABLED: bool = True
+    ML_SIZE_FULL_MIN_SCORE: float = 0.45   # >= → полный бюджет free
+    ML_SIZE_LOW_MULT: float = 0.5          # < → доля бюджета (downward-only)
 
     # =========================
     # УМНАЯ СЕТКА (GRID) — отдельный движок на swap, работает ПАРАЛЛЕЛЬНО тренду

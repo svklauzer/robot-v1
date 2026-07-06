@@ -369,13 +369,11 @@ class RobotLoop:
             # у них свой малый scalp-сайзинг). Кандидат один → весь free; несколько →
             # поровну. None → старый %-сайзинг.
             _pos_margin_cap = dyn_budget if (dyn_alloc and dyn_budget and not is_range) else None
-            # (б) Грейд-кап на одинокого кандидата: «берёт всю свободную маржу» — только
-            # A/A+. Слабый B не должен получать весь free (TRX #101 B → 430 маржи → -5.7).
-            # B капаем долей free (DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE).
-            if _pos_margin_cap and str(grade).upper() not in ("A", "A+"):
-                _b_cap = float(_dyn_free) * float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
-                if _b_cap > 0:
-                    _pos_margin_cap = min(_pos_margin_cap, _b_cap)
+            # (#grade-ml-2026-07-06) Кэп «одинокого кандидата» больше НЕ по грейду
+            # (грейд по факту всегда B — пороги A/A+ недостижимы). Базовый план строим
+            # на полный бюджет (dyn_budget), а conviction-сайзинг по ml_score применяем
+            # ПОСЛЕ ML-оценки (там ml_score уже известен). ML off → откат на grade.
+            # См. блок «Conviction sizing» ниже.
             plan = self.trade_plan_builder.build_plan(
                 symbol=symbol,
                 side=result.action,
@@ -821,11 +819,29 @@ class RobotLoop:
                 ))
                 db.flush()
                 continue
+            # ── Conviction sizing по ml_score (fallback — grade) (#grade-ml-2026-07-06)
+            # Грейд по факту всегда B → «всё эквити A/A+» не срабатывало, размер делил
+            # неверную ось. Исходы делит ml_score (калибровка: >=0.45 → WR 66%/+PnL).
+            # Высокий ml_score → полный бюджет, низкий → доля (как прежний B-cap). ML
+            # off/нет score → откат на grade. Только тренд (range/scalp — свой сайзинг).
+            # Downward-only (min ≤1.0): план построен на полный бюджет, не раздуваем.
+            _conv = 1.0
+            if not is_range:
+                _ml_score = ml_eval.get("ml_score")
+                if bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
+                    _conv = 1.0 if float(_ml_score) >= float(getattr(settings, "ML_SIZE_FULL_MIN_SCORE", 0.45)) \
+                        else float(getattr(settings, "ML_SIZE_LOW_MULT", 0.5))
+                elif str(grade).upper() not in ("A", "A+"):
+                    _conv = float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
+            # full_auto guardrails могут дополнительно масштабировать (только вниз здесь)
             if ml_eval.get("action") == "size":
                 _m = float(ml_eval.get("size_multiplier", 1.0) or 1.0)
-                if _m > 0 and abs(_m - 1.0) > 1e-9:
-                    plan.qty = round(float(plan.qty) * _m, 6)
-                    plan.required_margin = round(float(plan.required_margin) * _m, 6)
+                if _m > 0:
+                    _conv *= _m
+            _conv = max(0.0, min(_conv, 1.0))
+            if abs(_conv - 1.0) > 1e-9:
+                plan.qty = round(float(plan.qty) * _conv, 6)
+                plan.required_margin = round(float(plan.required_margin) * _conv, 6)
 
             sig = Signal(
                 bot_id=bot.id,

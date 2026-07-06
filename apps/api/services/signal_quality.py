@@ -44,13 +44,14 @@ class SignalQualityService:
         if "approved_weak_volume" in rationale or "weak_volume" in rationale:
             score -= 1
 
-        if score >= 88:
+        # (#grade-fix-2026-07-06) Пороги — из settings (были захардкожены 88/78/62).
+        if score >= float(getattr(settings, "GRADE_A_PLUS_MIN_SCORE", 82.0)):
             return "A+"
 
-        if score >= 78:
+        if score >= float(getattr(settings, "GRADE_A_MIN_SCORE", 73.0)):
             return "A"
 
-        if score >= 62:
+        if score >= float(getattr(settings, "GRADE_B_MIN_SCORE", 62.0)):
             return "B"
 
         return "C"
