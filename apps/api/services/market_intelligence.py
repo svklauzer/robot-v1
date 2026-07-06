@@ -184,9 +184,15 @@ class MarketIntelligenceEngine:
                     if c is None:
                         return ""
                     return str(c.get("trend", "") if isinstance(c, dict) else getattr(c, "trend", ""))
+                def _tf_momentum(tf):
+                    c = contexts.get(tf) if isinstance(contexts, dict) else None
+                    if c is None:
+                        return ""
+                    return str(c.get("momentum", "") if isinstance(c, dict) else getattr(c, "momentum", ""))
                 crt_sig = CRTStrategyService().evaluate(
                     htf_c, ltf_c, symbol=symbol, current_price=cur_px,
                     htf_trend=_tf_trend("4h"), mtf_trend=_tf_trend("1h"),
+                    htf_momentum=_tf_momentum("4h"), mtf_momentum=_tf_momentum("1h"),
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"[CRT STRATEGY ERROR] {symbol}: {exc}")

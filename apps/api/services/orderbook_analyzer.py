@@ -105,7 +105,10 @@ class OrderBookAnalyzer:
                    wall_confirm: float,
                    cvd_block_ratio: float = 0.0,
                    cvd_min_trades: int = 0,
-                   obi_hard_veto: float = 0.0) -> tuple[bool, str]:
+                   obi_hard_veto: float = 0.0,
+                   wall_rescue_max_adverse_obi: float = 0.0,
+                   cvd_thin_ratio: float = 0.0,
+                   cvd_thin_min_trades: int = 1) -> tuple[bool, str]:
         """Возвращает (allowed, reason). Если данных нет (not fresh) — пропускаем
         (allowed=True, reason="no_depth_data"): движок не должен блокировать
         торговлю при отсутствии WS-потока.
@@ -128,6 +131,20 @@ class OrderBookAnalyzer:
             if s in ("short", "sell") and sig.cvd_ratio >= abs(cvd_block_ratio):
                 return False, f"depth_cvd_against_short:cvd_ratio={sig.cvd_ratio:.3f}>={abs(cvd_block_ratio)}"
 
+        # (#leak-A) CVD на ТОНКОЙ выборке: на неликвиде окно даёт 1–5 сделок, и
+        # обычный CVD-фильтр (>= cvd_min_trades=25) не включается именно там, где
+        # опаснее всего. Если поток ~100% против входа (|cvd_ratio| >= cvd_thin_ratio)
+        # при >= cvd_thin_min_trades сделках — это не шум, а полное отсутствие опоры.
+        # (#198 XRP: cvd_ratio -1.0 при 1 сделке прошёл в long → стоп.)
+        if (
+            cvd_thin_ratio and cvd_thin_ratio > 0
+            and int(cvd_thin_min_trades) <= sig.cvd_trades < int(cvd_min_trades)
+        ):
+            if s in ("long", "buy") and sig.cvd_ratio <= -abs(cvd_thin_ratio):
+                return False, f"depth_cvd_thin_against_long:cvd_ratio={sig.cvd_ratio:.3f}<=-{abs(cvd_thin_ratio)}(n={sig.cvd_trades})"
+            if s in ("short", "sell") and sig.cvd_ratio >= abs(cvd_thin_ratio):
+                return False, f"depth_cvd_thin_against_short:cvd_ratio={sig.cvd_ratio:.3f}>={abs(cvd_thin_ratio)}(n={sig.cvd_trades})"
+
         # Жёсткое OBI-вето: подавляющий перекос стакана ПРОТИВ входа нельзя
         # «спасать» встречной стенкой. #94 ETH вошёл в long при OBI -0.97
         # (97% аск-перекос), т.к. bid_wall прошёл порог → -2.95. При сильном
@@ -139,13 +156,21 @@ class OrderBookAnalyzer:
             if s in ("short", "sell") and sig.obi >= hv:
                 return False, f"depth_obi_against_short:obi={sig.obi:.3f}>={hv}"
 
+        # (#leak-A) Стенка НЕ спасает вход при заметно встречном OBI. Раньше блок
+        # требовал И слабый OBI, И слабую стенку — стоячая бид-стенка >= wall_confirm
+        # пропускала long при OBI -0.5…-0.68 (агрессивные продажи), стенку «съедали».
+        # Теперь встречная стенка засчитывается как опора только пока OBI не глубже
+        # порога wall_rescue_max_adverse_obi. 0 → старое поведение (стенка спасает всегда).
+        rescue = abs(float(wall_rescue_max_adverse_obi))
         if s in ("long", "buy"):
-            if sig.obi < obi_confirm and sig.bid_wall_share < wall_confirm:
-                return False, f"depth_no_bid_support:obi={sig.obi:.3f}"
+            wall_ok = sig.bid_wall_share >= wall_confirm and (rescue == 0 or sig.obi > -rescue)
+            if sig.obi < obi_confirm and not wall_ok:
+                return False, f"depth_no_bid_support:obi={sig.obi:.3f}(wall={sig.bid_wall_share:.2f})"
             return True, f"depth_long_ok:obi={sig.obi:.3f}"
         if s in ("short", "sell"):
-            if sig.obi > -obi_confirm and sig.ask_wall_share < wall_confirm:
-                return False, f"depth_no_ask_pressure:obi={sig.obi:.3f}"
+            wall_ok = sig.ask_wall_share >= wall_confirm and (rescue == 0 or sig.obi < rescue)
+            if sig.obi > -obi_confirm and not wall_ok:
+                return False, f"depth_no_ask_pressure:obi={sig.obi:.3f}(wall={sig.ask_wall_share:.2f})"
             return True, f"depth_short_ok:obi={sig.obi:.3f}"
         return True, "depth_side_unknown"
 

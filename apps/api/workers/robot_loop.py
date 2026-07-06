@@ -344,6 +344,11 @@ class RobotLoop:
                     cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
                     # Жёсткое вето при подавляющем OBI против входа (стенка не спасает).
                     obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
+                    # (#leak-A) стенка не спасает при встречном OBI глубже порога;
+                    # CVD режет и на тонкой выборке при ~100% потоке против.
+                    wall_rescue_max_adverse_obi=float(getattr(settings, "OB_WALL_RESCUE_MAX_ADVERSE_OBI", 0.35)),
+                    cvd_thin_ratio=float(getattr(settings, "OB_CVD_THIN_RATIO", 0.9)),
+                    cvd_thin_min_trades=int(getattr(settings, "OB_CVD_THIN_MIN_TRADES", 1)),
                 )
                 if not ob_ok or _liq_block:
                     _block_reason = ob_reason if not ob_ok else f"liq_spread:{_liq_reason}"
@@ -1008,6 +1013,9 @@ class RobotLoop:
                     cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
                     cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
                     obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
+                    wall_rescue_max_adverse_obi=float(getattr(settings, "OB_WALL_RESCUE_MAX_ADVERSE_OBI", 0.35)),
+                    cvd_thin_ratio=float(getattr(settings, "OB_CVD_THIN_RATIO", 0.9)),
+                    cvd_thin_min_trades=int(getattr(settings, "OB_CVD_THIN_MIN_TRADES", 1)),
                 )
                 if not ob_ok:
                     return False

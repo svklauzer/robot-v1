@@ -71,7 +71,8 @@ def detect_mss(candles, direction: str, swing: int = 3, lookback: int = 12) -> b
 class CRTStrategyService:
     def evaluate(self, htf_candles, ltf_candles, *, symbol: str | None = None,
                  current_price: float | None = None,
-                 htf_trend: str | None = None, mtf_trend: str | None = None) -> CRTSignal | None:
+                 htf_trend: str | None = None, mtf_trend: str | None = None,
+                 htf_momentum: str | None = None, mtf_momentum: str | None = None) -> CRTSignal | None:
         if not bool(getattr(settings, "ENABLE_CRT_STRATEGY", False)):
             return None
         if not htf_candles or len(htf_candles) < 2 or not ltf_candles or len(ltf_candles) < 5:
@@ -115,6 +116,19 @@ class CRTStrategyService:
                 return None
             if direction == "long" and ("trend_down" in (htf, mtf)):
                 return None
+
+            # (#leak-B) Ярлык тренда часто "mixed"/"flat", даже когда моментум
+            # явно против свипа. В live движок публиковал crt_bull_sweep_CRL лонги
+            # в медвежьей ленте (RSI/MACD bearish, скан watch_short) → стоп.
+            # Фейдим вход по ЯВНОМУ моментуму против: long не берём при bearish на
+            # HTF/MTF, short — при bullish. Экстремумы (oversold/overheated) НЕ
+            # блокируем — их CRT как раз фейдит из discount/premium. Флагом (вкл).
+            if bool(getattr(settings, "CRT_REQUIRE_MOMENTUM_ALIGN", True)):
+                mom = {str(htf_momentum or "").lower(), str(mtf_momentum or "").lower()}
+                if direction == "long" and "bearish" in mom:
+                    return None
+                if direction == "short" and "bullish" in mom:
+                    return None
 
         pos = (price - crl) / rng   # 0 = CRL, 1 = CRH
         if bool(getattr(settings, "CRT_REQUIRE_PREMIUM_DISCOUNT", True)):

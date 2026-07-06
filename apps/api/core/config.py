@@ -374,6 +374,11 @@ class Settings(BaseSettings):
     CRT_ALLOW_LONG: bool = True
     CRT_ALLOW_SHORT: bool = True
     CRT_MIN_SETUP_SCORE: float = 55.0
+    # (#leak-B) Фейдить вход не только по ярлыку тренда (часто "mixed"/"flat"),
+    # но и по моментуму HTF/MTF: long не берём при bearish/oversold, short — при
+    # bullish/overheated. Лечит контртрендовые crt_bull_sweep лонги в медвежьей
+    # ленте. False → старое поведение (только trend-align).
+    CRT_REQUIRE_MOMENTUM_ALIGN: bool = True
 
     # --- Scalp ENGINE (micro-flow вход: 5m микроструктура + стакан OBI/CVD) ---
     # ВОССТАНОВЛЕНО: движок (services/micro_scalp.py) и весь downstream (anti-drain/
@@ -479,9 +484,19 @@ class Settings(BaseSettings):
     # Жёсткое OBI-вето: при подавляющем перекосе стакана ПРОТИВ входа блокируем
     # независимо от встречной стенки. Раньше long при OBI -0.97 проходил, т.к.
     # bid_wall_share бил порог стенки (#94 ETH → -2.95, #89 XRP → -4.67). Порог
-    # высокий (только вопиющие случаи), чтобы не резать пограничные ±0.5 входы.
-    # 0 → выкл.
-    OB_OBI_HARD_VETO: float = 0.75
+    # (#leak-A) Порог снижен 0.75→0.45: зона OBI -0.5…-0.68 — уже сильное
+    # давление против входа (в live #198 XRP obi -0.68 / #194 ADA -0.67 / #197
+    # AVAX -0.50 — все лонги в стоп), её больше не пропускаем. 0 → выкл.
+    OB_OBI_HARD_VETO: float = 0.45
+    # (#leak-A) Встречная стенка засчитывается как опора входа, только пока OBI
+    # не глубже этого порога. Раньше стоячая бид-стенка >= wall_confirm пропускала
+    # long при любом отрицательном OBI (её «съедали»). 0 → стенка спасает всегда.
+    OB_WALL_RESCUE_MAX_ADVERSE_OBI: float = 0.35
+    # (#leak-A) CVD на ТОНКОЙ выборке (cvd_trades < OB_CVD_MIN_TRADES): если поток
+    # ~полностью против входа (|cvd_ratio| >= OB_CVD_THIN_RATIO) — блок. На неликвиде
+    # окно даёт 1–5 сделок и обычный CVD-фильтр не включался. 0 → выкл.
+    OB_CVD_THIN_RATIO: float = 0.9
+    OB_CVD_THIN_MIN_TRADES: int = 1
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
     OB_CVD_EXIT_RATIO: float = 0.8        # поток против позиции на эту долю → ускоряем выход
