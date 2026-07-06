@@ -36,6 +36,12 @@ class AffiliateTrialService:
         if not telegram_user_id:
             return None, False, "telegram_user_id_missing"
 
+        # Партнёрская ссылка не сконфигурирована — НЕ выдаём VIP (иначе триал
+        # раздаётся без реальной регистрации по реф-ссылке). Кнопка claim при
+        # этом скрыта в меню, но guard закрывает и stale/подделанный callback.
+        if not settings.HTX_AFFILIATE_LINK:
+            return None, False, "affiliate_link_not_configured"
+
         days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)
         now = datetime.now(timezone.utc)
         subscriber = db.query(Subscriber).filter(Subscriber.telegram_user_id == str(telegram_user_id)).first()
