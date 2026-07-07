@@ -321,8 +321,16 @@ _cache: Profiles | None = None
 
 
 def get_profiles(refresh: bool = False) -> Profiles:
-    """Кэшированный доступ к профилям. refresh=True перечитать из settings."""
-    global _cache
-    if _cache is None or refresh:
-        _cache = Profiles.load()
-    return _cache
+    """Доступ к профилям. (#profiles-cache 2026-07-07) Раньше значения залипали
+    на ПЕРВОМ вызове: правки settings в рантайме (в т.ч. через env-reload/тюнинг
+    порогов) не долетали до потребителей get_profiles() до перезапуска процесса —
+    тихий рассинхрон движков входа с конфигом. Профили — это дешёвые frozen-
+    dataclass'ы поверх getattr(settings), поэтому строим их заново на каждый вызов
+    и всегда отражаем ЖИВОЙ settings. Кэш можно вернуть точечно, если профилирование
+    покажет горячую точку (пока не показывало)."""
+    if bool(getattr(settings, "PROFILES_CACHE_ENABLED", False)) and not refresh:
+        global _cache
+        if _cache is None:
+            _cache = Profiles.load()
+        return _cache
+    return Profiles.load()

@@ -73,6 +73,13 @@ class MLController:
                 return {"mode": "full_auto", "ml_score": round(ml_score, 4), "action": "block",
                         "allow": False, "size_multiplier": 0.0,
                         "reason": f"ml_score_below_min:{ml_score:.3f}<{min_score}"}
+            # (#ml-flat-size) Пока калибровка не доказана — размер НЕ скейлим по
+            # score: гейт пропустил (score>=min) → множитель 1.0. Скейлинг вернётся
+            # флагом ML_SIZE_SCALING_ENABLED после набора статистики.
+            if not bool(getattr(settings, "ML_SIZE_SCALING_ENABLED", False)):
+                return {"mode": "full_auto", "ml_score": round(ml_score, 4), "action": "size",
+                        "allow": True, "size_multiplier": 1.0,
+                        "reason": f"ml_score_ok_flat:{ml_score:.3f}"}
             # размер в guardrails: линейно от ml_score, кэп [min,max]
             s_min = float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7))
             s_max = float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))
