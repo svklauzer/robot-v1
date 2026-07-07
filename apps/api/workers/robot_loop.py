@@ -814,13 +814,23 @@ class RobotLoop:
             except Exception:
                 pass
 
-            if ml_eval.get("action") == "block" and not ml_eval.get("allow", True):
+            # full_auto → block; advisory → раньше "skip" терялся (allow=True).
+            # Теперь skip тоже блокирует вход (флаг ML_ENFORCE_ADVISORY_SKIP), т.к.
+            # мета-лейблер корректно ставит низкий score убыточным входам.
+            _ml_block = ml_eval.get("action") == "block" and not ml_eval.get("allow", True)
+            _ml_advisory_skip = (
+                ml_eval.get("recommend") == "skip"
+                and ml_eval.get("ml_score") is not None
+                and bool(getattr(settings, "ML_ENFORCE_ADVISORY_SKIP", True))
+            )
+            if _ml_block or _ml_advisory_skip:
+                _ml_decision = "blocked_by_ml" if _ml_block else "blocked_by_ml_advisory_skip"
                 db.add(IntelligenceEvent(
-                    symbol=symbol, status="blocked", decision="blocked_by_ml",
+                    symbol=symbol, status="blocked", decision=_ml_decision,
                     action=result.action, regime=result.regime, radar_state=result.radar_state,
                     confidence_hint=result.confidence_hint,
                     setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                    payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_by_ml", "ml": ml_eval},
+                    payload_json={"symbol": symbol, "status": "blocked", "decision": _ml_decision, "ml": ml_eval},
                 ))
                 db.flush()
                 continue

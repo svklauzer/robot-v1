@@ -368,6 +368,28 @@ class ExitPolicyService:
         if ride:
             ride_min_mfe = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 1.2))
             ride_trail_dd = float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50))
+            # (#roundtrip 2026-07-07) Ранний замок пика ПО ТЕКУЩЕЙ цене. В полосе
+            # MFE [arm, ride_min_mfe) до сих пор не было трейла: пик ~0.6–1.2%
+            # утекал в breakeven_lock (~0). Здесь фиксируем остаток у реальной
+            # текущей цены, как только значимый пик отдал долю giveback и мы ещё
+            # в плюсе. Реальный филл (не синтетический protected_pct) и current>0 →
+            # не фабрикует прибыль и не режет живых раннеров (они выше giveback).
+            lock_arm = float(getattr(settings, "TREND_PEAK_LOCK_ARM_PCT", 0.6))
+            lock_give = float(getattr(settings, "TREND_PEAK_LOCK_GIVEBACK_SHARE", 0.4))
+            if (
+                bool(getattr(settings, "TREND_PEAK_LOCK_ENABLED", True))
+                and mfe >= max(lock_arm, net_safe_pct)
+                and mfe < ride_min_mfe
+                and current_pct > 0
+                and drawdown_from_mfe >= mfe * lock_give
+            ):
+                return ExitDecision(
+                    exit=True, reason="trend_peak_lock", exit_price=current_price,
+                    note=(
+                        f"trend_peak_lock mfe={mfe:.4f} cur={current_pct:.4f} "
+                        f"dd={drawdown_from_mfe:.4f} arm={lock_arm} give={lock_give}"
+                    ),
+                )
             if mfe >= ride_min_mfe and drawdown_from_mfe >= mfe * ride_trail_dd:
                 protected_pct = max(mfe * (1.0 - ride_trail_dd), net_safe_pct, min_protective_exit_pct)
                 est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)

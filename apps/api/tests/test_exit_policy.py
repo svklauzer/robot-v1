@@ -73,8 +73,12 @@ def test_before_tp1_protective_breakeven_uses_v4_profit_floor():
     assert decision.exit is True
     assert decision.reason == "protective_breakeven_profit_guard"
     assert decision.exit_price is not None
-    # MIN_PROTECTIVE_EXIT_PCT raised to 1.80 — exit price must reflect the new floor
-    assert decision.exit_price >= 101.8
+    # (#roundtrip 2026-07-07) MIN_PROTECTIVE_EXIT_PCT lowered 1.80→0.50: the old
+    # 1.80 floor fabricated a synthetic exit price above the market when real MFE
+    # was ~1%. Protective floor is still respected (>= entry * (1 + net_safe/floor)),
+    # just at a realistic level rather than an unreachable one.
+    assert decision.exit_price > 100.0
+    assert decision.exit_price >= 100.5
     assert "protected" in (decision.note or "")
 
 
