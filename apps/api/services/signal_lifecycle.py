@@ -1012,8 +1012,6 @@ class SignalLifecycleManager:
             "adaptive_trailing_stop": "adaptive_trailing_stop",
             "trend_trailing_stop": "trend_trailing_stop",
             "adaptive_post_tp1_stop": "adaptive_post_tp1_stop",
-            "trend_ride_trailing_stop": "trend_ride_trailing_stop",
-            "trend_peak_lock": "trend_peak_lock",
             "failed_setup_exit": "failed_setup_exit",
             "low_grade_capital_release": "low_grade_capital_release",
         }

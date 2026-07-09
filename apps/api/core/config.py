@@ -298,7 +298,7 @@ class Settings(BaseSettings):
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.70   # 1.30→0.70 (#roundtrip 2026-07-07): реальный MFE ~1.0–1.2%; capture не вооружался и весь пик утекал в breakeven_lock (positive_then_negative ≈95%)
+    MFE_CAPTURE_START_PCT: float = 1.30   # 0.90→1.30 (#expectancy-cleanup): дать раннерам дойти до TP2
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
@@ -320,13 +320,6 @@ class Settings(BaseSettings):
     ML_LABEL_KIND: str = "is_win"          # is_win | hit_tp2
     ML_MIN_TRAIN_SAMPLES: int = 150        # меньше — модель не обучается (честно)
     ML_MIN_SCORE_TO_TRADE: float = 0.45    # full_auto/advisory: ниже — skip/block
-    # (#ml-gate 2026-07-07) В advisory рекомендация "skip" раньше игнорировалась
-    # (allow всегда True) → худшие входы (ml_score 0.03–0.29, recommend=skip)
-    # публиковались и теряли. Мета-лейблер обучен на исходах этих же сделок
-    # (val AUC 0.69 / live 0.61); его калибровка: score<0.45 → WR 13% и −PnL,
-    # гейт даёт +14.16 USDT на выборке. Флаг заставляет "skip" реально
-    # блокировать вход и в advisory (не только в full_auto). off/no-score → без изменений.
-    ML_ENFORCE_ADVISORY_SKIP: bool = True
     ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
     ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
     # Ежесуточный авто-retrain (держит модель свежей; при данных < min — honest skip).
@@ -429,8 +422,8 @@ class Settings(BaseSettings):
     # зелёная сделка переворачивается в убыток (кейс LINK: +0.72% → −1.18%).
     # Замок трейлит от пика и фиксирует остаток в плюсе.
     SCALP_BREAKEVEN_ENABLED: bool = True
-    SCALP_BREAKEVEN_ARM_PCT: float = 0.3         # 0.5→0.3 (#roundtrip): вооружаемся раньше — скальп-пик мал
-    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.4  # 0.6→0.4 (exit-replay best): отдаём меньше пика
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.5         # MFE %, с которого включается замок
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.6  # выходим, отдав эту долю пика MFE
     # Скальп тайм-стоп (профиль ведения SCALP): сделка должна разрешиться быстро.
     # Если за N минут скальп не вооружился (mfe < arm) — закрываем по текущей цене,
     # чтобы «мёртвая» сделка не дрейфовала в свинг-убыток и освободила слот.
@@ -502,18 +495,18 @@ class Settings(BaseSettings):
     # (#leak-A) CVD на ТОНКОЙ выборке (cvd_trades < OB_CVD_MIN_TRADES): если поток
     # ~полностью против входа (|cvd_ratio| >= OB_CVD_THIN_RATIO) — блок. На неликвиде
     # окно даёт 1–5 сделок и обычный CVD-фильтр не включался. 0 → выкл.
-    OB_CVD_THIN_RATIO: float = 0.75      # 0.9→0.75 (#flow-gate 2026-07-07): тонкая выборка против входа блокируется раньше
+    OB_CVD_THIN_RATIO: float = 0.9
     OB_CVD_THIN_MIN_TRADES: int = 1
     OB_DATA_MAX_AGE_SEC: float = 15.0     # старше — данные не свежие, не гейтим
     OB_CVD_WINDOW_SEC: int = 60           # окно ленты сделок для CVD
     OB_CVD_EXIT_RATIO: float = 0.8        # поток против позиции на эту долю → ускоряем выход
-    OB_CVD_MIN_TRADES: int = 12           # 25→12 (#flow-gate): надёжный CVD-блок входа включается на большем числе сетапов
+    OB_CVD_MIN_TRADES: int = 25           # меньше сделок в окне → CVD это шум, не сигнал
     # CVD НА ВХОДЕ: не входим против агрессивного исполненного потока. Раньше CVD
     # работал только на выходе — четвёртый (сильнейший) сигнал стакана на входе
     # простаивал. Блокируем шорт при cvd_ratio ≥ +ratio (доминируют покупки),
     # лонг при cvd_ratio ≤ −ratio (доминируют продажи), но только при достаточной
     # выборке (≥ OB_CVD_MIN_TRADES) — иначе CVD это шум.
-    OB_CVD_ENTRY_BLOCK_RATIO: float = 0.5   # 0.6→0.5 (#flow-gate): #201 вошёл при cvd_ratio −0.58 (под старым порогом) → стоп
+    OB_CVD_ENTRY_BLOCK_RATIO: float = 0.6
     OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
     OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
 
@@ -876,21 +869,9 @@ class Settings(BaseSettings):
     TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 1.2
     # В тренде выходим, отдав эту долю от MFE (шире, чем обычный ~0.35 → едем дольше).
     TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
-    # (#roundtrip 2026-07-07) Ранний трейл-замок ПО ТЕКУЩЕЙ цене для тренда.
-    # Проблема: единственным активным выходом в тренде для MFE 0.6–1.2% был
-    # breakeven_lock (фиксирует ~0 после того, как весь пик утёк). Здесь: как
-    # только значимый пик (>=arm) отдал долю giveback — фиксируем остаток у
-    # ТЕКУЩЕЙ цены (реальный филл, не синтетический protected_pct), пока в плюсе.
-    TREND_PEAK_LOCK_ENABLED: bool = True
-    TREND_PEAK_LOCK_ARM_PCT: float = 0.6        # мин. MFE % для вооружения замка
-    TREND_PEAK_LOCK_GIVEBACK_SHARE: float = 0.4 # отдал эту долю пика → выходим у текущей
 
     # Минимальная защищаемая прибыль для exit-политики, чтобы не фиксировать микро-движения.
-    # (#roundtrip 2026-07-07) 1.80→0.50: как ПОЛ для protected_pct 1.80% фабриковал
-    # синтетическую цену выхода ВЫШЕ рынка, когда реальный MFE был ~1% (exit_price=
-    # entry*(1+1.8%) при цене на откате ~0.6%). 0.50 держит защиту у реального
-    # уровня отката и всё ещё выше net_safe.
-    MIN_PROTECTIVE_EXIT_PCT: float = 0.50
+    MIN_PROTECTIVE_EXIT_PCT: float = 1.80
     MIN_POST_TP1_EXIT_PCT: float = 0.80
     MIN_PROTECTIVE_NET_USDT: float = 2.50
     MIN_PROTECTIVE_R_MULT: float = 0.30
