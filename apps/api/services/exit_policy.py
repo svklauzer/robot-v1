@@ -219,6 +219,13 @@ class ExitPolicyService:
         if scalp:
             scalp_arm = float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5))
             scalp_give = float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.5))
+            # (#geometry-arm-2026-07-09) Порог замка масштабируется геометрией
+            # сделки: не режем сделку с целью 2% на движении 0.2% (издержки
+            # ~0.15% съедали такие фиксации в ноль — #216/#217). Эффективный
+            # arm = max(абсолютный, доля дистанции до TP1).
+            _arm_share = float(getattr(settings, "SCALP_BE_ARM_TP1_SHARE", 0.30))
+            if tp1_dist_pct is not None and _arm_share > 0:
+                scalp_arm = max(scalp_arm, tp1_dist_pct * _arm_share)
             gave_back = drawdown_from_mfe >= mfe * scalp_give
             # Поток сделок развернулся против позиции (CVD) → не ждём полного
             # отката, фиксируем у пика. Иначе — обычный трейл-замок.
