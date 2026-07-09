@@ -841,17 +841,12 @@ class RobotLoop:
             # off/нет score → откат на grade. Только тренд (range/scalp — свой сайзинг).
             # Downward-only (min ≤1.0): план построен на полный бюджет, не раздуваем.
             _conv = 1.0
-            # (#ml-flat-size) Conviction по ml_score только при включённом скейлинге.
-            # Сейчас скейлинг выключен (калибровка не доказана) → размер по score НЕ
-            # режем: гейт уже отсёк <0.45, прошедшие идут полным бюджетом. Grade-
-            # fallback (ML off / нет score) сохраняется.
-            _ml_scaling = bool(getattr(settings, "ML_SIZE_SCALING_ENABLED", False))
             if not is_range:
                 _ml_score = ml_eval.get("ml_score")
-                if _ml_scaling and bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
+                if bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
                     _conv = 1.0 if float(_ml_score) >= float(getattr(settings, "ML_SIZE_FULL_MIN_SCORE", 0.45)) \
                         else float(getattr(settings, "ML_SIZE_LOW_MULT", 0.5))
-                elif _ml_score is None and str(grade).upper() not in ("A", "A+"):
+                elif str(grade).upper() not in ("A", "A+"):
                     _conv = float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
             # full_auto guardrails могут дополнительно масштабировать (только вниз здесь)
             if ml_eval.get("action") == "size":

@@ -327,15 +327,8 @@ class Settings(BaseSettings):
     # гейт даёт +14.16 USDT на выборке. Флаг заставляет "skip" реально
     # блокировать вход и в advisory (не только в full_auto). off/no-score → без изменений.
     ML_ENFORCE_ADVISORY_SKIP: bool = True
-    # (#ml-flat-size 2026-07-07) Калибровка score НЕмонотонна (0.45–0.60→WR50%,
-    # но 0.75–1.00→WR25%), выборка ~39 закрытых со score. «Высокий score» пока НЕ
-    # значит «выше винрейт» → масштабировать размер по score рано. Гейт (руби <0.45)
-    # оставляем, а множитель ФИКСИРУЕМ на 1.0: full_auto перестаёт скейлить размер,
-    # conviction-alloc по ml_score тоже не режет. Вернуть скейлинг → True (после
-    # ≥300–500 сделок и стабильного live AUC ~0.65+ с монотонной калибровкой).
-    ML_SIZE_SCALING_ENABLED: bool = False
-    ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу (только при ML_SIZE_SCALING_ENABLED)
-    ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху (только при ML_SIZE_SCALING_ENABLED)
+    ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
+    ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
     # Ежесуточный авто-retrain (держит модель свежей; при данных < min — honest skip).
     ML_AUTO_RETRAIN: bool = True
     ML_RETRAIN_INTERVAL_SEC: int = 86400   # раз в сутки
@@ -651,14 +644,9 @@ class Settings(BaseSettings):
     # БЕЗОПАСНО: размер позиции больше НЕ зависит от грейда (перенесён на ml_score, §9),
     # поэтому релейбл не раздаёт эквити. Тюнится без релиза. NB: после накопления
     # сигналов на новой шкале — переобучить мета-лейблер (grade_ord меняет распределение).
-    # (#grade-rescale 2026-07-07) Скор кучковался в 62–76 → почти всё B, A+ (≥82)
-    # не выдавался никогда → грейд не различал сигналы. Сжимаем шкалу к реальному
-    # распределению: ≥78 A+, 70–78 A, 60–70 B, <60 C. Размер НЕ зависит от грейда
-    # (он на ml_score), поэтому это не раздаёт эквити — только UX + publish-гейты.
-    # NB: после накопления сигналов на новой шкале — переобучить мета-лейблер.
-    GRADE_A_PLUS_MIN_SCORE: float = 78.0
-    GRADE_A_MIN_SCORE: float = 70.0
-    GRADE_B_MIN_SCORE: float = 60.0
+    GRADE_A_PLUS_MIN_SCORE: float = 82.0
+    GRADE_A_MIN_SCORE: float = 73.0
+    GRADE_B_MIN_SCORE: float = 62.0
 
     # =========================
     # RISK MANAGEMENT
