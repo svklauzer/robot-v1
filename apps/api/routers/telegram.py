@@ -219,7 +219,6 @@ async def _handle_htx_verify(data: dict) -> None:
         note = {
             "paid_subscription_already_active": "✅ У вас уже активна платная VIP-подписка. /status",
             "affiliate_trial_already_claimed": "ℹ️ Бесплатный триал уже был активирован ранее. /status",
-            "affiliate_link_not_configured": "⚠️ Партнёрская программа временно недоступна. Напишите /support.",
         }.get(areason, f"ℹ️ Триал не выдан: {areason}. /support")
         if chat_id:
             await SignalBroadcaster().send_message(chat_id, note, message_type="htx_trial_not_granted")

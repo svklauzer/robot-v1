@@ -310,15 +310,7 @@ class TelegramBotMenuService:
 
     def _htx_affiliate_text(self) -> str:
         days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)
-        if not settings.HTX_AFFILIATE_LINK:
-            # Ссылка не настроена — не предлагаем активацию (кнопка claim скрыта
-            # в _htx_affiliate_keyboard, а activate_htx_trial вернёт guard-причину).
-            return (
-                "🎁 Бесплатный VIP через HTX\n\n"
-                "⚠️ Партнёрская программа временно недоступна — ссылка ещё не настроена. "
-                "Загляните позже или напишите в поддержку."
-            )
-        link = settings.HTX_AFFILIATE_LINK
+        link = settings.HTX_AFFILIATE_LINK or "HTX_AFFILIATE_LINK не настроен"
         return (
             "🎁 Бесплатный VIP через HTX\n\n"
             f"1) Зарегистрируйтесь в HTX по партнёрской ссылке:\n{link}\n\n"
@@ -372,9 +364,7 @@ class TelegramBotMenuService:
         rows = []
         if settings.HTX_AFFILIATE_LINK:
             rows.append([{"text": "🔗 Открыть HTX", "url": settings.HTX_AFFILIATE_LINK}])
-            # Claim показываем ТОЛЬКО когда ссылка настроена: иначе VIP выдавался
-            # бы без реальной регистрации по реф-ссылке.
-            rows.append([{"text": "✅ Я зарегистрировался", "callback_data": "affiliate_registered"}])
+        rows.append([{"text": "✅ Я зарегистрировался", "callback_data": "affiliate_registered"}])
         rows.append([{"text": "⬅️ Меню", "callback_data": "menu"}, {"text": "🛟 Поддержка", "callback_data": "support"}])
         return {"inline_keyboard": rows}
 

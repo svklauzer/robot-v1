@@ -48,11 +48,6 @@ services:
         value: /app/storage/ml/grid_state.json
       - key: NEWS_ENABLED
         value: "true"
-      # Партнёрская ссылка HTX для /htx (бесплатный VIP). Значение задаётся в
-      # Render Dashboard → Environment (source of truth), тут только объявление.
-      # Без неё бот показывает "временно недоступно" и НЕ даёт claim (guard в коде).
-      - key: HTX_AFFILIATE_LINK
-        sync: false
 
       # ── Secrets (заполнить в Render Dashboard → Environment) ──────────────
       - key: JWT_SECRET
