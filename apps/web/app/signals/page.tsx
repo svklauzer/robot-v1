@@ -12,6 +12,9 @@ const CLOSE_REASON_LABELS: Record<string, string> = {
   tp2_reached: "TP2 достигнут",
   tp1_reached: "TP1 достигнут",
   stop_loss: "Стоп",
+  breakeven_stop: "Безубыток-стоп (после TP1)",
+  scalp_time_stop: "Скальп: тайм-стоп",
+  low_grade_capital_release: "Слабый грейд: высвобождение капитала",
   failed_setup_exit: "Сетап не подтвердился",
   breakeven_lock: "Безубыток-замок",
   scalp_breakeven_lock: "Скальп: безубыток-замок",
@@ -317,6 +320,22 @@ function SignalCard({
             <span className="text-red-300">{fmt(s.net_pnl_stop ?? plan.net_pnl_stop, 4)} USDT</span>
           </div>
         </div>
+
+        {/* (#tp1-partial-2026-07-09) Реализованная частичная фиксация на TP1 */}
+        {plan.tp1_partial && (
+          <div className="mt-2 rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-2 text-xs">
+            <span className="font-semibold text-emerald-300">TP1 частично зафиксирован: </span>
+            <span className="text-emerald-100/80">
+              {fmt(plan.tp1_partial.closed_qty, 6)} @ {fmt(plan.tp1_partial.exit_price, 6)}
+            </span>
+            <span className={(plan.tp1_partial.net_pnl ?? 0) < 0 ? "ml-2 text-red-300" : "ml-2 text-emerald-300"}>
+              net {fmt(plan.tp1_partial.net_pnl, 4)} USDT
+            </span>
+            <span className="ml-2 text-emerald-100/50">
+              остаток {fmt(plan.tp1_partial.remaining_qty, 6)}
+            </span>
+          </div>
+        )}
       </div>
 
       {isClosed && (

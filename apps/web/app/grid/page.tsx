@@ -136,6 +136,10 @@ export default function GridPage() {
           <Chip>max орд. {cfg.max_safety_orders}</Chip>
           <Chip>карман {cfg.max_used_margin_pct}%</Chip>
           <Chip>рынок {cfg.market}</Chip>
+          {/* (#grid-flip-2026-07-09) Анти-пила: видно, с какими порогами живёт флип */}
+          <Chip>NEUTRAL-зона ±{cfg.regime_band_pct}%</Chip>
+          <Chip>flip confirm {cfg.flip_confirm_ticks} тик.</Chip>
+          <Chip>flip cooldown {cfg.flip_cooldown_sec != null ? Math.round(cfg.flip_cooldown_sec / 60) : "—"} мин</Chip>
         </div>
       </section>
 
