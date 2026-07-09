@@ -815,15 +815,37 @@ class RobotLoop:
                 pass
 
             if ml_eval.get("action") == "block" and not ml_eval.get("allow", True):
-                db.add(IntelligenceEvent(
-                    symbol=symbol, status="blocked", decision="blocked_by_ml",
-                    action=result.action, regime=result.regime, radar_state=result.radar_state,
-                    confidence_hint=result.confidence_hint,
-                    setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                    payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_by_ml", "ml": ml_eval},
-                ))
-                db.flush()
-                continue
+                # (#ml-explore-2026-07-09) Exploration-квота НА PAPER: каждый N-й
+                # заблокированный кандидат открывается микро-пробой ради разметки —
+                # иначе датасет пополняется только score>=порога (селекционное
+                # смещение) и retrain деградирует. На live — гейт без исключений.
+                _explore = False
+                if (
+                    bool(getattr(settings, "ML_EXPLORE_ENABLED", True))
+                    and not settings.is_live_enabled
+                ):
+                    self._ml_block_seq = int(getattr(self, "_ml_block_seq", 0)) + 1
+                    _every_n = max(int(getattr(settings, "ML_EXPLORE_EVERY_N", 3)), 1)
+                    _explore = (self._ml_block_seq % _every_n) == 0
+                if not _explore:
+                    db.add(IntelligenceEvent(
+                        symbol=symbol, status="blocked", decision="blocked_by_ml",
+                        action=result.action, regime=result.regime, radar_state=result.radar_state,
+                        confidence_hint=result.confidence_hint,
+                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                        payload_json={"symbol": symbol, "status": "blocked", "decision": "blocked_by_ml", "ml": ml_eval},
+                    ))
+                    db.flush()
+                    continue
+                # Проба: пропускаем с микро-размером и явной пометкой в plan_json.ml
+                ml_eval = {
+                    **ml_eval,
+                    "action": "size",
+                    "allow": True,
+                    "size_multiplier": float(getattr(settings, "ML_EXPLORE_SIZE_MULT", 0.5)),
+                    "explore": True,
+                    "reason": f"ml_explore_probe:{ml_eval.get('reason')}",
+                }
             # ── Conviction sizing: ГРЕЙД × ML (#grade-ml-sync-2026-07-09)
             # Грейд — ПУБЛИЧНАЯ ось уверенности (виден подписчикам в Telegram),
             # поэтому эквити обязано следовать ему, как и было задумано: одинокий
