@@ -315,7 +315,7 @@ class SignalLifecycleManager:
         safe_metric_price = price
 
         if not sane and terminal_stop_hit:
-            safe_metric_price = self._stop_exit_price(stop)
+            safe_metric_price = self._stop_exit_price(stop, side)
 
         if not sane and terminal_tp2_hit:
             safe_metric_price = self._tp_exit_price(tp2)
@@ -532,7 +532,7 @@ class SignalLifecycleManager:
             entry_price_for_result = self._entry_for_result(db, signal, entry_from)
 
             if self._hit_stop(side, price, stop):
-                exit_price = self._stop_exit_price(stop)
+                exit_price = self._stop_exit_price(stop, side)
 
                 await self._close_signal(
                     db,
@@ -588,6 +588,8 @@ class SignalLifecycleManager:
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
                 flow_against=_depth_flow_against(signal, side),
+                # (#range-time-stop-2026-07-09) range-режим получает свой таймер.
+                regime=(signal.plan_json or {}).get("regime"),
             )
 
             if exit_decision.exit:
@@ -698,7 +700,7 @@ class SignalLifecycleManager:
             # ХАРД-СТОП после TP1: breakeven/стоп закрывает позицию явно,
             # цена закрытия = уровень стопа (SOL #96).
             if self._hit_stop(side, price, stop):
-                exit_price = self._stop_exit_price(stop)
+                exit_price = self._stop_exit_price(stop, side)
                 await self._close_signal(
                     db,
                     signal,
@@ -832,12 +834,22 @@ class SignalLifecycleManager:
             return round(((exit_price - entry) / entry) * 100, 2)
         return round(((entry - exit_price) / entry) * 100, 2)
 
-    def _stop_exit_price(self, stop: float) -> float:
+    def _stop_exit_price(self, stop: float, side: str | None = None) -> float:
         """
         В paper/backtest режиме стоп исполняется по уровню стопа,
         а не по последней цене, которая могла сильно перелететь стоп.
+
+        (#paper-slippage-2026-07-09) Плюс адверс-слиппедж: стоп — маркет-ордер,
+        на live филл ХУЖЕ уровня. long → ниже стопа, short → выше. Без side —
+        прежнее поведение (точный уровень).
         """
-        return float(stop)
+        stop = float(stop)
+        slip_pct = float(getattr(settings, "PAPER_STOP_ADVERSE_SLIPPAGE_PCT", 0.0)) / 100.0
+        if slip_pct <= 0 or not side:
+            return stop
+        if str(side).lower() == "long":
+            return stop * (1.0 - slip_pct)
+        return stop * (1.0 + slip_pct)
 
     def _tp_exit_price(self, tp: float) -> float:
         """
@@ -995,7 +1007,10 @@ class SignalLifecycleManager:
 
     async def _close_signal(self, db, signal: Signal, exit_price: float, fallback_result_pct: float, reason: str):
         if reason == "stop_loss" and signal.stop_price is not None:
-            exit_price = float(signal.stop_price)
+            # (#paper-slippage-2026-07-09) Стоп закрывается по уровню С адверс-
+            # слиппеджем (маркет-филл на live хуже уровня), а не по last price,
+            # который мог перелететь стоп ещё дальше.
+            exit_price = self._stop_exit_price(float(signal.stop_price), signal.side)
 
         execution = ExecutionEngine(db)
 

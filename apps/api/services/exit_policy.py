@@ -165,6 +165,7 @@ class ExitPolicyService:
         signal_age_sec: float | None = None,
         trade_mode: str = "default",
         flow_against: bool = False,
+        regime: str | None = None,
     ) -> ExitDecision:
         side = str(side).lower()
         entry_price = float(entry_price)
@@ -243,7 +244,12 @@ class ExitPolicyService:
             # даём дожить до жёсткого стопа (mult × базовый). Реальный минус
             # или CVD-разворот закрывают сразу, как раньше.
             if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)):
-                ts_sec = float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0)) * 60.0
+                # (#range-time-stop-2026-07-09) Range-геометрия (стоп ~2.4%, TP1 ~2%)
+                # не разрешается за 45 минут микро-скальпа — даём диапазону 90.
+                if str(regime or "").lower() == "range":
+                    ts_sec = float(getattr(settings, "RANGE_TIME_STOP_MIN", 90.0)) * 60.0
+                else:
+                    ts_sec = float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0)) * 60.0
                 hard_mult = max(float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0)), 1.0)
                 hard_sec = ts_sec * hard_mult
                 if (
