@@ -254,7 +254,11 @@ class ExitPolicyService:
                     age = float(signal_age_sec)
                     not_losing = current_pct > -net_safe_pct
                     showed_life = mfe >= scalp_arm * 0.5
-                    grace = age < hard_sec and not flow_against and (not_losing or showed_life)
+                    # (#exit-replay-2026-07-09) OR→AND: grace только сделкам, которые
+                    # И не в минусе, И показали жизнь (MFE ≥ arm/2). Прежний OR
+                    # продлевал болтающиеся у нуля сделки до hard-стопа, где они
+                    # закрывались в минус (SOL #213/#214).
+                    grace = age < hard_sec and not flow_against and (not_losing and showed_life)
                     if not grace:
                         return ExitDecision(
                             exit=True,

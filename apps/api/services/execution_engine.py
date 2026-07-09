@@ -232,6 +232,94 @@ class ExecutionEngine:
             "live": live,
         }
 
+    async def partial_close_paper_position(
+        self,
+        signal: Signal,
+        exit_price: float,
+        share: float,
+        reason: str = "tp1_partial",
+    ) -> dict | None:
+        """(#tp1-partial-2026-07-09) Частично закрывает paper-position (доля share
+        по exit_price). Реализует «TP1 = частичная фиксация» ФАКТИЧЕСКИ: раньше на
+        TP1 двигался только стоп, прибыль не реализовывалась. Возвращает realized
+        net_pnl закрытой доли; позиция остаётся open с уменьшенным qty.
+        """
+        if self.db is None:
+            raise RuntimeError("ExecutionEngine requires db session for paper execution")
+
+        share = max(0.0, min(float(share), 1.0))
+        if share <= 0:
+            return None
+
+        position = (
+            self.db.query(Position)
+            .filter(
+                Position.signal_id == signal.id,
+                Position.status == "open",
+            )
+            .first()
+        )
+        if not position:
+            return None
+
+        close_qty = float(self.client.amount_to_precision(position.symbol, float(position.qty) * share))
+        remaining_qty = round(float(position.qty) - close_qty, 10)
+        if close_qty <= 0 or remaining_qty <= 0:
+            # Слишком мелкая позиция для частичного закрытия (precision/min lot) —
+            # ведём как раньше (только breakeven-стоп), без частичной фиксации.
+            return None
+
+        preview = self.cost_engine.estimate(
+            symbol=position.symbol,
+            market_type=settings.execution_market_type,
+            side=position.side,
+            entry_price=float(position.entry_price),
+            exit_price=float(exit_price),
+            qty=close_qty,
+            liquidity="taker",
+            holding_funding_periods=1,
+            leverage=settings.execution_leverage,
+        )
+
+        close_side = self._close_order_side(position.side)
+        close_order = Order(
+            bot_id=position.bot_id,
+            signal_id=signal.id,
+            symbol=position.symbol,
+            side=close_side,
+            order_type="market",
+            status="filled",
+            qty=close_qty,
+            price=exit_price,
+            filled_qty=close_qty,
+            avg_fill_price=exit_price,
+            client_order_id=f"PAPER-PARTIAL-{uuid.uuid4()}",
+            exchange_order_id=None,
+        )
+
+        position.qty = remaining_qty
+        position.mark_price = exit_price
+
+        self.db.add(close_order)
+        self.db.flush()
+
+        live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
+                                 reduce_only=True, purpose="tp1_partial_close")
+        if live is not None:
+            close_order.exchange_order_id = live.get("exchange_order_id")
+            self.db.flush()
+
+        return {
+            "status": "partial_closed",
+            "position": position,
+            "close_order": close_order,
+            "closed_qty": close_qty,
+            "remaining_qty": remaining_qty,
+            "net_pnl": preview.net_pnl,
+            "total_cost": preview.total_cost,
+            "reason": reason,
+        }
+
     async def close_paper_position(
         self,
         signal: Signal,

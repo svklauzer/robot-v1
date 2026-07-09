@@ -607,6 +607,33 @@ class SignalLifecycleManager:
             if self._hit_tp(side, price, tp1):
                 signal.status = "tp1"
 
+                # (#tp1-partial-2026-07-09) РЕАЛЬНАЯ частичная фиксация: закрываем
+                # долю позиции по цене TP1. Раньше здесь двигался только стоп —
+                # «частичная фиксация» была фикцией, и откат TP1→BE приносил ~0.
+                partial_result = None
+                if bool(getattr(settings, "TP1_PARTIAL_ENABLED", True)):
+                    try:
+                        partial_result = await ExecutionEngine(db).partial_close_paper_position(
+                            signal=signal,
+                            exit_price=self._tp_exit_price(tp1),
+                            share=float(getattr(settings, "TP1_PARTIAL_CLOSE_SHARE", 0.5)),
+                            reason="tp1_partial",
+                        )
+                    except Exception as exc:  # noqa: BLE001 — фиксация не должна ронять ведение
+                        partial_result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+                    if partial_result and partial_result.get("status") == "partial_closed":
+                        plan = dict(signal.plan_json or {})
+                        plan["tp1_partial"] = {
+                            "closed_qty": partial_result.get("closed_qty"),
+                            "remaining_qty": partial_result.get("remaining_qty"),
+                            "exit_price": self._tp_exit_price(tp1),
+                            "net_pnl": partial_result.get("net_pnl"),
+                            "total_cost": partial_result.get("total_cost"),
+                            "at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        signal.plan_json = plan
+                        flag_modified(signal, "plan_json")
+
                 # BREAKEVEN STOP: после TP1 стоп сдвигается на entry + fee buffer.
                 # Гарантирует нулевой убыток если цена откатится после TP1.
                 _be_position = self._get_open_position_for_signal(db, signal)
@@ -639,14 +666,25 @@ class SignalLifecycleManager:
                         "entry_zone": signal.entry_zone_json,
                         "stop_moved_to": "breakeven_after_tp1",
                         "breakeven_stop": float(signal.stop_price),
+                        "tp1_partial": (signal.plan_json or {}).get("tp1_partial"),
                         "lifecycle": signal.plan_json.get("lifecycle") if signal.plan_json else None,
                     },
                 )
 
+                _partial_note = ""
+                _pp = (signal.plan_json or {}).get("tp1_partial")
+                if _pp and _pp.get("net_pnl") is not None:
+                    _partial_note = (
+                        f" Зафиксировано {_pp.get('closed_qty')} @ {_pp.get('exit_price')} "
+                        f"(net {_pp.get('net_pnl')} USDT)."
+                    )
                 await self.router.publish_signal_update(
                     symbol=signal.symbol,
                     text_status=f"✅ TP1 достигнут | Signal #{signal.id}",
-                    extra=f"TP1 достигнут. Стоп перенесён на breakeven {round(float(signal.stop_price), 6)}. Позиция защищена.",
+                    extra=(
+                        f"TP1 достигнут.{_partial_note} Стоп перенесён на breakeven "
+                        f"{round(float(signal.stop_price), 6)}. Позиция защищена."
+                    ),
                     grade=signal.grade,
                 )
 
@@ -986,6 +1024,16 @@ class SignalLifecycleManager:
                 net_pnl = None
 
             total_cost = None
+
+        # (#tp1-partial-2026-07-09) Итог сделки = закрытие остатка + реализованная
+        # на TP1 часть. Без этого частичная фиксация терялась в отчётности.
+        tp1_partial = (signal.plan_json or {}).get("tp1_partial") or {}
+        partial_net = tp1_partial.get("net_pnl")
+        if partial_net is not None:
+            net_pnl = round(float(net_pnl or 0.0) + float(partial_net), 6)
+            partial_cost = tp1_partial.get("total_cost")
+            if partial_cost is not None:
+                total_cost = round(float(total_cost or 0.0) + float(partial_cost), 6)
 
         signal.status = "closed"
         signal.result_pct = result_pct
