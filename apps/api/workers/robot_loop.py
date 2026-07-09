@@ -824,26 +824,44 @@ class RobotLoop:
                 ))
                 db.flush()
                 continue
-            # ── Conviction sizing по ml_score (fallback — grade) (#grade-ml-2026-07-06)
-            # Грейд по факту всегда B → «всё эквити A/A+» не срабатывало, размер делил
-            # неверную ось. Исходы делит ml_score (калибровка: >=0.45 → WR 66%/+PnL).
-            # Высокий ml_score → полный бюджет, низкий → доля (как прежний B-cap). ML
-            # off/нет score → откат на grade. Только тренд (range/scalp — свой сайзинг).
-            # Downward-only (min ≤1.0): план построен на полный бюджет, не раздуваем.
-            _conv = 1.0
-            if not is_range:
-                _ml_score = ml_eval.get("ml_score")
-                if bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
-                    _conv = 1.0 if float(_ml_score) >= float(getattr(settings, "ML_SIZE_FULL_MIN_SCORE", 0.45)) \
-                        else float(getattr(settings, "ML_SIZE_LOW_MULT", 0.5))
-                elif str(grade).upper() not in ("A", "A+"):
-                    _conv = float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
+            # ── Conviction sizing: ГРЕЙД × ML (#grade-ml-sync-2026-07-09)
+            # Грейд — ПУБЛИЧНАЯ ось уверенности (виден подписчикам в Telegram),
+            # поэтому эквити обязано следовать ему, как и было задумано: одинокий
+            # A/A+ забирает весь free (dyn_budget уже = free при одном кандидате),
+            # несколько кандидатов — поровну; B капается долей free
+            # (DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE). Прежний код (#grade-ml-2026-07-06)
+            # полностью игнорировал грейд при живом ml_score — B со score 0.46
+            # получал столько же эквити, сколько A, и канал врал о размере ставки.
+            # После рекалибровки грейдов (#grade-fix-2026-07-06) ладдер A/A+/B
+            # реально разлипся — ось снова информативна.
+            # ML остаётся ПРИВАТНЫМ модулятором риска: слабый score ужимает размер
+            # (в full_auto score<min вообще блокируется выше). Итог =
+            # min(grade_mult, ml_mult) — размер задаёт слабейшая ось: A не несёт
+            # полный размер против мнения ML, B не получает полный бюджет только
+            # за высокий score. ML off/нет score → чистый грейд (fail-open).
+            # Только тренд (range/scalp — свой сайзинг). Downward-only (≤1.0).
+            _grade_mult = 1.0 if str(grade or "").upper() in ("A", "A+") \
+                else float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
+            _ml_mult = 1.0
+            _ml_score = ml_eval.get("ml_score")
+            if bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
+                _ml_mult = 1.0 if float(_ml_score) >= float(getattr(settings, "ML_SIZE_FULL_MIN_SCORE", 0.45)) \
+                    else float(getattr(settings, "ML_SIZE_LOW_MULT", 0.5))
+            _conv = min(_grade_mult, _ml_mult) if not is_range else 1.0
             # full_auto guardrails могут дополнительно масштабировать (только вниз здесь)
             if ml_eval.get("action") == "size":
                 _m = float(ml_eval.get("size_multiplier", 1.0) or 1.0)
                 if _m > 0:
                     _conv *= _m
             _conv = max(0.0, min(_conv, 1.0))
+            _sizing_debug = {
+                "grade": str(grade or ""),
+                "grade_mult": _grade_mult,
+                "ml_score": _ml_score,
+                "ml_mult": _ml_mult,
+                "conviction": round(_conv, 4),
+                "dyn_budget_usdt": dyn_budget,
+            }
             if abs(_conv - 1.0) > 1e-9:
                 plan.qty = round(float(plan.qty) * _conv, 6)
                 plan.required_margin = round(float(plan.required_margin) * _conv, 6)
@@ -882,6 +900,9 @@ class RobotLoop:
                     "performance_guard": performance_adjustment,
                     # ML-слой: ml_score и решение контроллера (shadow/advisory/full_auto).
                     "ml": ml_eval,
+                    # (#grade-ml-sync-2026-07-09) Прозрачность сайзинга: грейд-ось ×
+                    # ML-ось × бюджет цикла → почему у сделки такой размер.
+                    "sizing": _sizing_debug,
                     # Режим сделки для exit-политики: trend → ride (едем движение),
                     # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
                     "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
