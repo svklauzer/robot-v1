@@ -219,20 +219,6 @@ class Settings(BaseSettings):
     # Глубина минуса, при которой breakeven_lock выходит БЕЗ подтверждения потоком
     # (реальный неблагоприятный ход, а не вик).
     BREAKEVEN_LOCK_HARD_FLOOR_PCT: float = -0.35
-    # =========================
-    # (#leak-2026-07-06) breakeven-lock без подтверждения потоком (flow-independent).
-    # Течь свежих тестов: breakeven_lock вооружался (mfe>=arm), но выход у floor
-    # требовал flow_against; в live cvd_trades=1 -> поток не подтверждается, замок
-    # ждал hard_floor -0.35% и отдавал весь пик (AVAX#196 +0.59->-0.52, missed 1.11%;
-    # ADA#194 +0.54->-0.54). Здесь: после хорошего MFE, если цена ВЕРНУЛАСЬ в узкую
-    # безубыток-полосу [min..floor] — фиксируем тут, БЕЗ ожидания потока. Полоса
-    # узкая (у безубытка), поэтому НЕ конфликтует с failed_setup/hard_floor (это
-    # реальные минусы <=-0.4/-0.35) и НЕ режет раннеров: ARB#176 (+4.43) держал
-    # current >> floor до выноса. Действует только НИЖЕ capture_start.
-    BREAKEVEN_GIVEBACK_LOCK_ENABLED: bool = True
-    BREAKEVEN_GIVEBACK_ARM_PCT: float = 0.45      # min MFE (%) для вооружения
-    BREAKEVEN_GIVEBACK_FLOOR_PCT: float = 0.10    # верх безубыток-полосы (выход при current<=floor)
-    BREAKEVEN_GIVEBACK_MIN_PCT: float = -0.15     # низ полосы; ниже — это уже минус (hard_floor/failed_setup)
     # (#churn) Re-entry cooldown в авто-цикле: не открывать ту же сторону символа
     # сразу после закрытия (особенно стопа). Машинка ReEntryCooldownGuard уже
     # есть, флаг включает её проверку в robot_loop.

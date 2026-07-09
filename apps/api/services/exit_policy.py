@@ -303,34 +303,6 @@ class ExitPolicyService:
                 ),
             )
 
-        # ── breakeven-lock без подтверждения потоком (#leak-2026-07-06) ────────
-        # Полоса MFE между breakeven-arm и protective-порогами(>=1.8%) не имела
-        # трейла: в live поток (cvd_trades=1) не подтверждает разворот, breakeven_lock
-        # выше ждал hard_floor -0.35% и отдавал весь пик. Здесь: после хорошего MFE,
-        # если цена вернулась в УЗКУЮ безубыток-полосу [min..floor] — фиксируем тут,
-        # БЕЗ flow_against. Полоса узкая (у безубытка): не пересекается с failed_setup
-        # /hard_floor (реальные минусы) и не режет раннеров (держатся выше floor).
-        gl_enabled = bool(getattr(settings, "BREAKEVEN_GIVEBACK_LOCK_ENABLED", True))
-        gl_arm = float(getattr(settings, "BREAKEVEN_GIVEBACK_ARM_PCT", 0.45))
-        gl_floor = float(getattr(settings, "BREAKEVEN_GIVEBACK_FLOOR_PCT", 0.10))
-        gl_min = float(getattr(settings, "BREAKEVEN_GIVEBACK_MIN_PCT", -0.15))
-        if (
-            gl_enabled
-            and mfe >= max(gl_arm, net_safe_pct)
-            and mfe < thr["capture_start"]
-            and gl_min <= current_pct <= gl_floor
-        ):
-            return ExitDecision(
-                exit=True,
-                reason="breakeven_giveback_lock",
-                exit_price=current_price,
-                note=(
-                    f"be_giveback mfe={mfe:.4f}>=arm={gl_arm} "
-                    f"cur={current_pct:.4f} in[{gl_min},{gl_floor}] "
-                    f"cap_start={thr['capture_start']:.4f} flow_independent"
-                ),
-            )
-
         if failed_setup_enabled and mfe_pct is not None and age_ok and mfe >= thr["mfe_absolute_min"]:
             # soft/mid failed_setup — под вик-фильтром (мелкий минус без подтверждения
             # потоком = вик). deep — глубокий неблагоприятный ход. Весь блок отключён
