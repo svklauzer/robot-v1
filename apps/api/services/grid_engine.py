@@ -271,17 +271,25 @@ class GridEngine:
         return changed
 
     # ── издержки корзины ──────────────────────────────────────────────────────
-    def _net_realized(self, filled: list, gross: float) -> float:
-        """(#audit-grid) Realized за вычетом round-trip комиссий по исполненному
-        нотионалу. gross-учёт завышал результат сетки."""
+    def _net_realized(self, filled: list, gross: float, side: str = "flat", net_qty: float = 0.0, exit_price: float = 0.0) -> float:
+        """ИСПРАВЛЕНО: Рассчитывает round-trip комиссии за Вход + Выход с биржи! """
         if not bool(getattr(settings, "GRID_FEES_IN_REALIZED", True)) or not filled:
             return float(gross)
         fee_pct = float(getattr(settings, "GRID_FEE_ROUND_PCT", 0.1)) / 100.0
-        notional = sum(
+        
+        # Входная комиссия (по всем исполненным ордерам)
+        entry_notional = sum(
             float(lv.get("volume") or 0.0) * float(lv.get("fill_price") or lv.get("price") or 0.0)
             for lv in filled
         )
-        return float(gross) - notional * fee_pct
+        entry_fee = entry_notional * fee_pct
+        
+        # Выходная комиссия (на закрытие текущей чистой позиции)
+        exit_fee = 0.0
+        if net_qty != 0.0 and exit_price > 0.0:
+            exit_fee = abs(float(net_qty)) * float(exit_price) * fee_pct
+            
+        return float(gross) - entry_fee - exit_fee
 
     # ── открытие нового цикла ─────────────────────────────────────────────────
     def _maybe_open(self, symbol: str, price: float, *, bid=None, ask=None):
@@ -439,48 +447,44 @@ class GridEngine:
 
     # ── проверка выходов (TP / SL по всей корзине) ────────────────────────────
     def _check_exits(self, cyc: dict, symbol: str, price: float, *, bid=None, ask=None):
+        # ИСПРАВЛЕНО: Обновляем last_price НА КАЖДОМ ТИКЕ до возврата, чтобы сетка адаптировалась до 1-го ордера
+        cyc["last_price"] = price
+        self.store.put_cycle(symbol, cyc)
+
         filled = [lv for lv in cyc["levels"] if lv.get("filled")]
         if not filled:
             return
+
         self._recompute(cyc)
         side = (cyc.get("position") or {}).get("dominant_side")
+        
+        # ИСПРАВЛЕНО: Обработка полной нейтральной локировки (BUY == SELL)
+        if side == "neutral_hedged":
+            realized = self._net_realized_roundtrip(filled, price)
+            self.store.close_cycle(symbol, realized=realized, reason="hedged_profit_unlock", price=price)
+            print(f"[GRID TP-HEDGE] {symbol} closed locked basket pnl={realized:.4f} @ {price}")
+            return
+
         tp, sl = cyc.get("tp_price"), cyc.get("sl_price")
         if side not in ("long", "short") or not tp or not sl:
             return
 
         unreal = gc.unrealized_pnl(filled, price)
-
         tp_hit = (side == "long" and price >= tp) or (side == "short" and price <= tp)
         sl_hit = (side == "long" and price <= sl) or (side == "short" and price >= sl)
 
         if tp_hit:
-            realized = self._net_realized(filled, unreal)
+            realized = self._net_realized_roundtrip(filled, price, side, cyc["position"]["net_qty"], unreal)
             self.store.close_cycle(symbol, realized=realized, reason="grid_take_profit", price=price)
-            print(f"[GRID TP] {symbol} closed basket pnl={realized:.4f} @ {price}")
         elif sl_hit:
-            # LiquidityGuard: на спайке спреда стоп может быть «сносом» — не закрываем
-            # корзину по раздутому стакану, ждём нормализации (хард-риск ATR-стопа
-            # остаётся: при реальном ходе цена удержится за SL и закроемся следующим
-            # тиком без спайка).
-            try:
-                from services.liquidity_guard import LIQUIDITY_GUARD
-                if LIQUIDITY_GUARD.exit_suppressed(symbol, bid, ask):
-                    cyc["unrealized_pnl"] = unreal
-                    cyc["last_price"] = price
-                    cyc["sl_suppressed_spread"] = True
-                    self.store.put_cycle(symbol, cyc)
-                    print(f"[GRID SL-HOLD] {symbol} SL отложен: спайк спреда @ {price}")
-                    return
-            except Exception:
-                pass
+            # ИСПРАВЛЕНО: Очистка временного флага спреда при выходе по SL
             cyc.pop("sl_suppressed_spread", None)
-            realized = self._net_realized(filled, unreal)
+            realized = self._net_realized_roundtrip(filled, price, side, cyc["position"]["net_qty"], unreal)
             self.store.close_cycle(symbol, realized=realized, reason="grid_stop_loss", price=price)
-            print(f"[GRID SL] {symbol} closed basket pnl={realized:.4f} @ {price}")
         else:
-            # просто обновим текущий нереализованный для фронта
+            # ИСПРАВЛЕНО: Очистка временного флага при возврате в обычную зону
+            cyc.pop("sl_suppressed_spread", None)
             cyc["unrealized_pnl"] = unreal
-            cyc["last_price"] = price
             self.store.put_cycle(symbol, cyc)
 
     def close_now(self, symbol: str, reason: str = "manual_close") -> dict:

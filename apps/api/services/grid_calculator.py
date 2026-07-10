@@ -113,16 +113,15 @@ def compute_grid(anchor: float, atr: float, regime: str, *, lines: int,
 
 def respace_levels(unfilled: list[dict], base_price: float, atr: float, side: str,
                    k_vol: float, m_step: float) -> list[dict]:
-    """Пере-разложить НЕисполненные уровни одной стороны под текущий ATR/якорь.
-
-    Объёмы (мартингейл) и номера n сохраняются — двигаются только цены/дистанции.
-    base_price: якорь (самый глубокий исполненный уровень стороны или текущая цена).
-    Лестница: cum += ATR·k_vol·m_step^(i-1), price = base ∓ cum (buy вниз / sell вверх).
+    """Пере-разложить НЕисполненные уровни одной стороны под текущий ATR.
+    ИСПРАВЛЕНО: Шаг геометрической прогрессии рассчитывается строго по номеру уровня lv["n"]!
     """
     out: list[dict] = []
     cum = 0.0
-    for i, lv in enumerate(unfilled, start=1):
-        cum += atr * k_vol * (m_step ** (i - 1))
+    for lv in unfilled:
+        # ИСПРАВЛЕНО: Вместо enumerate(start=1) используем оригинальный номер ордера lv["n"]
+        step = atr * k_vol * (m_step ** (lv["n"] - 1))
+        cum += step
         price = base_price - cum if side == "buy" else base_price + cum
         nlv = dict(lv)
         nlv["price"] = round(price, 10)
@@ -165,14 +164,20 @@ def take_profit_price(breakeven: float, side: str, tp_pct: float) -> float:
     return breakeven * (1 + p) if side == "long" else breakeven * (1 - p)
 
 
-def stop_loss_price(filled: list[dict], atr: float, side: str, atr_mult: float) -> float:
-    """SL = крайний уровень сетки ± atr_mult·ATR (выход за ATR-границу)."""
-    if not filled:
+def stop_loss_price(all_levels: list[dict], atr: float, side: str, atr_mult: float, anchor: float) -> float:
+    """ИСПРАВЛЕНО: Стоп-Лосс жестко привязывается к крайнему пределу сетки
+    и больше не уползает бесконечно глубже при накоплении рисков.
+    """
+    if not all_levels:
         return 0.0
-    prices = [float(f["price"]) for f in filled]
     if side == "long":
-        return min(prices) - atr_mult * atr          # ниже нижнего уровня
-    return max(prices) + atr_mult * atr              # выше верхнего уровня
+        buy_levels = [l for l in all_levels if l["side"] == "buy"]
+        lowest_grid_price = min([l["price"] for l in buy_levels]) if buy_levels else anchor
+        return lowest_grid_price - atr_mult * atr
+    else:
+        sell_levels = [l for l in all_levels if l["side"] == "sell"]
+        highest_grid_price = max([l["price"] for l in sell_levels]) if sell_levels else anchor
+        return highest_grid_price + atr_mult * atr
 
 
 def unrealized_pnl(filled: list[dict], price: float) -> float:
