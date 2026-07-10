@@ -176,6 +176,131 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
         db.close()
 
 
+@router.get("/mfe-mae", dependencies=[Depends(require_owner_action)])
+def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
+    """(#mfe-mae-2026-07-10) MFE/MAE-профиль по символам в разрезе regime +
+    дневная динамика. Заменяет ручной мониторинг по Telegram-отчётам.
+
+    capture_rate: доля пикового хода, реально забранная закрытием
+    (result_pct / mfe_pct по сделкам с MFE ≥ 0.2%) — главный индикатор
+    качества exit-политики. edge_ratio = avg_mfe / |avg_mae| — качество входов.
+    """
+    from datetime import timedelta as _td
+
+    db = SessionLocal()
+    try:
+        limit = min(max(int(limit or 500), 20), 5000)
+        signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.desc())
+            .limit(limit)
+            .all()
+        )
+        if window_hours is not None and float(window_hours) > 0:
+            cutoff = datetime.now(timezone.utc) - _td(hours=float(window_hours))
+            signals = [
+                s for s in signals
+                if s.closed_at is not None
+                and (s.closed_at if s.closed_at.tzinfo else s.closed_at.replace(tzinfo=timezone.utc)) >= cutoff
+            ]
+
+        def _f(value):
+            try:
+                return float(value)
+            except Exception:
+                return None
+
+        rows = []
+        for s in signals:
+            plan = s.plan_json or {}
+            lifecycle = plan.get("lifecycle") or {}
+            mfe = _f(lifecycle.get("mfe_pct"))
+            mae = _f(lifecycle.get("mae_pct"))
+            if mfe is None and mae is None:
+                continue
+            rows.append({
+                "symbol": s.symbol,
+                "regime": str(plan.get("regime") or plan.get("trade_mode") or "unknown"),
+                "side": s.side,
+                "mfe": mfe if mfe is not None else 0.0,
+                "mae": mae if mae is not None else 0.0,
+                "missed": _f(lifecycle.get("missed_profit_pct")),
+                "result_pct": _f(s.result_pct) or 0.0,
+                "net_pnl": _f(s.closed_net_pnl) or 0.0,
+                "ptn": bool(lifecycle.get("positive_then_negative")),
+                "closed_at": s.closed_at,
+            })
+
+        def _agg(bucket_rows):
+            n = len(bucket_rows)
+            if n == 0:
+                return None
+            mfes = [r["mfe"] for r in bucket_rows]
+            maes = [r["mae"] for r in bucket_rows]
+            missed = [r["missed"] for r in bucket_rows if r["missed"] is not None]
+            avg_mfe = sum(mfes) / n
+            avg_mae = sum(maes) / n
+            captured = [r["result_pct"] / r["mfe"] for r in bucket_rows if r["mfe"] >= 0.2]
+            return {
+                "count": n,
+                "avg_mfe_pct": round(avg_mfe, 4),
+                "avg_mae_pct": round(avg_mae, 4),
+                "max_mfe_pct": round(max(mfes), 4),
+                "worst_mae_pct": round(min(maes), 4),
+                "avg_missed_pct": round(sum(missed) / len(missed), 4) if missed else None,
+                "edge_ratio": round(avg_mfe / abs(avg_mae), 3) if avg_mae < 0 else None,
+                "capture_rate_pct": round(sum(captured) / len(captured) * 100, 2) if captured else None,
+                "net_pnl_usdt": round(sum(r["net_pnl"] for r in bucket_rows), 6),
+                "ptn_rate_pct": round(sum(1 for r in bucket_rows if r["ptn"]) / n * 100, 2),
+            }
+
+        by_symbol_regime: dict = {}
+        by_regime: dict = {}
+        for r in rows:
+            by_symbol_regime.setdefault(f"{r['symbol']}|{r['regime']}", []).append(r)
+            by_regime.setdefault(r["regime"], []).append(r)
+
+        symbol_regime_items = []
+        for key, bucket in by_symbol_regime.items():
+            symbol, regime = key.split("|", 1)
+            agg = _agg(bucket)
+            if agg:
+                symbol_regime_items.append({"symbol": symbol, "regime": regime, **agg})
+        symbol_regime_items.sort(key=lambda x: x["net_pnl_usdt"])
+
+        regime_items = []
+        for regime, bucket in by_regime.items():
+            agg = _agg(bucket)
+            if agg:
+                regime_items.append({"regime": regime, **agg})
+        regime_items.sort(key=lambda x: x["net_pnl_usdt"])
+
+        # Дневная динамика (по дате закрытия, UTC) — сырьё для тренд-графика.
+        daily_buckets: dict = {}
+        for r in rows:
+            if r["closed_at"] is None:
+                continue
+            day = str(r["closed_at"].date())
+            daily_buckets.setdefault(day, []).append(r)
+        daily = []
+        for day in sorted(daily_buckets.keys()):
+            agg = _agg(daily_buckets[day])
+            if agg:
+                daily.append({"date": day, **agg})
+
+        return {
+            "status": "ok",
+            "sample_count": len(rows),
+            "window_hours": window_hours,
+            "by_regime": regime_items,
+            "by_symbol_regime": symbol_regime_items,
+            "daily": daily[-30:],
+        }
+    finally:
+        db.close()
+
+
 @router.get("/symbol-performance", dependencies=[Depends(require_owner_action)])
 def analytics_symbol_performance(lookback: int = 12, window_hours: float | None = None):
     db = SessionLocal()
