@@ -15,6 +15,10 @@ const CLOSE_REASON_LABELS: Record<string, string> = {
   breakeven_stop: "Безубыток-стоп (после TP1)",
   scalp_time_stop: "Скальп: тайм-стоп",
   low_grade_capital_release: "Слабый грейд: высвобождение капитала",
+  manual_close: "Закрыто вручную (по рынку)",
+  manual_cancel: "Отменено вручную",
+  manual_profit_close: "Закрыто вручную (+)",
+  manual_loss_close: "Закрыто вручную (−)",
   failed_setup_exit: "Сетап не подтвердился",
   breakeven_lock: "Безубыток-замок",
   scalp_breakeven_lock: "Скальп: безубыток-замок",
@@ -66,6 +70,27 @@ export default function SignalsPage() {
     return window.confirm(`⚠️ ${message}\n\nПродолжить?`);
   }
 
+  // (#ux-errors-2026-07-09) Ошибки API больше не глотаются молча: 403 debug-гейта
+  // в production раньше выглядел как «кнопка не работает».
+  function reportActionError(e: any) {
+    const msg = String(e?.message || e);
+    if (msg.includes("debug_endpoints_disabled_in_production")) {
+      alert(
+        "Это debug-кнопка (инъекция тестовой цены) — в production она отключена.\n" +
+        "Для реального закрытия используй «Закрыть по рынку»."
+      );
+      return;
+    }
+    alert(`Действие не выполнено: ${msg}`);
+  }
+
+  function assertOk(resp: any) {
+    if (resp && resp.status === "error") {
+      throw new Error(String(resp.error || "unknown_error"));
+    }
+    return resp;
+  }
+
   async function testLifecyclePrice(id: number, price?: number | null) {
     if (price === undefined || price === null || Number.isNaN(Number(price))) {
       alert("Нет цены для lifecycle-теста");
@@ -74,23 +99,42 @@ export default function SignalsPage() {
 
     if (!confirmDanger(`Lifecycle-test изменит состояние сигнала #${id} по цене ${price}.`)) return;
 
-    await apiPost("/robot/test-lifecycle-price", {
-      signal_id: id,
-      price: Number(price),
-    });
-
-    await loadSignals();
+    try {
+      assertOk(await apiPost("/robot/test-lifecycle-price", {
+        signal_id: id,
+        price: Number(price),
+      }));
+      await loadSignals();
+    } catch (e) {
+      reportActionError(e);
+    }
   }
 
   async function closeSignal(id: number, result: number) {
     if (!confirmDanger(`Сигнал #${id} будет вручную закрыт с результатом ${result}%.`)) return;
 
-    await apiPost(`/signals/${id}/close`, {
-      result_pct: result,
-      reason: result > 0 ? "manual_profit_close" : "manual_loss_close",
-    });
+    try {
+      assertOk(await apiPost(`/signals/${id}/close`, {
+        result_pct: result,
+        reason: result > 0 ? "manual_profit_close" : "manual_loss_close",
+      }));
+      await loadSignals();
+    } catch (e) {
+      reportActionError(e);
+    }
+  }
 
-    await loadSignals();
+  // (#manual-close-2026-07-09) Реальное ручное закрытие по живой рыночной цене —
+  // полный lifecycle-путь (позиция, PnL с издержками, ML-метка). Работает в prod.
+  async function closeSignalMarket(id: number) {
+    if (!confirmDanger(`Сигнал #${id} будет закрыт ПО РЫНКУ (текущая цена, полный расчёт PnL).`)) return;
+
+    try {
+      assertOk(await apiPost(`/signals/${id}/close-market`));
+      await loadSignals();
+    } catch (e) {
+      reportActionError(e);
+    }
   }
 
   useEffect(() => {
@@ -232,6 +276,7 @@ export default function SignalsPage() {
                 signal={s}
                 onTestPrice={testLifecyclePrice}
                 onCloseSignal={closeSignal}
+                onCloseMarket={closeSignalMarket}
               />
             ))}
 
@@ -250,10 +295,12 @@ function SignalCard({
   signal: s,
   onTestPrice,
   onCloseSignal,
+  onCloseMarket,
 }: {
   signal: SignalItem;
   onTestPrice: (id: number, price?: number | null) => void;
   onCloseSignal: (id: number, result: number) => void;
+  onCloseMarket: (id: number) => void;
 }) {
   const isActive = ["published", "opened", "tp1", "breakeven"].includes(s.status);
   const isClosed = s.status === "closed";
@@ -423,6 +470,19 @@ function SignalCard({
                     BE
                   </button>
                 </>
+              )}
+
+              {/* (#manual-close-2026-07-09) Боевая кнопка: реальное закрытие по
+                  живой цене через полный lifecycle (работает и в production).
+                  Кнопки уровней (Entry/TP1/Stop/TP2/BE) — debug-инъекция цены,
+                  в production отключены гейтом и теперь честно об этом скажут. */}
+              {s.status !== "published" && (
+                <button
+                  onClick={() => onCloseMarket(s.id)}
+                  className="rounded-lg bg-orange-600 px-3 py-1 text-xs font-bold text-slate-950 hover:bg-orange-500"
+                >
+                  Закрыть по рынку
+                </button>
               )}
 
               <button

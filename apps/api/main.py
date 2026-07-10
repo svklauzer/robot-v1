@@ -1360,41 +1360,97 @@ async def force_paper_signal():
 
 
 
+ACTIVE_CLOSE_STATUSES = ["opened", "tp1", "breakeven"]
+
+
+async def _manual_close_via_lifecycle(db, sig: Signal, exit_price: float, reason: str) -> dict:
+    """(#manual-close-2026-07-09) ПОЛНОЕ ручное закрытие через lifecycle:
+    закрывает Position (раньше легаси-эндпоинт лишь ставил status=closed, и
+    позиция с маржой оставались висеть), считает net PnL через CostEngine,
+    учитывает TP1-partial, пишет ML-метку и шлёт Telegram-уведомление."""
+    manager = SignalLifecycleManager()
+    entry_price = manager._get_signal_entry_price(db, sig) or float(
+        (sig.entry_zone_json or {}).get("from") or 0.0
+    )
+    await manager._close_signal(
+        db,
+        sig,
+        exit_price=float(exit_price),
+        fallback_result_pct=manager._result_pct(sig.side.lower(), float(entry_price), float(exit_price)),
+        reason=reason,
+    )
+    db.commit()
+    return {
+        "status": "closed",
+        "signal_id": sig.id,
+        "exit_price": float(exit_price),
+        "result_pct": sig.result_pct,
+        "net_pnl": sig.closed_net_pnl,
+        "reason": sig.closed_reason,
+    }
+
+
 @app.post("/signals/{signal_id}/close", dependencies=[Depends(require_owner_action)])
 async def close_signal(signal_id: int, payload: CloseSignalRequest):
+    """(#manual-close-2026-07-09) Ручное закрытие с заданным result_pct.
+    Раньше — заглушка: ставила status=closed, НЕ закрывая позицию (осиротевшая
+    маржа) и не считая PnL. Теперь цена выводится из result_pct и закрытие идёт
+    полным lifecycle-путём."""
     db = SessionLocal()
-
     try:
         sig = db.query(Signal).filter(Signal.id == signal_id).first()
-
         if not sig:
             return {"status": "error", "error": "signal_not_found"}
+        if sig.status == "published":
+            sig.status = "expired"
+            sig.closed_reason = payload.reason or "manual_cancel"
+            db.commit()
+            return {"status": "expired", "signal_id": sig.id}
+        if sig.status not in ACTIVE_CLOSE_STATUSES:
+            return {"status": "error", "error": f"signal_not_active:{sig.status}"}
 
-        sig.status = "closed"
-        sig.result_pct = payload.result_pct
-
-        db.commit()
-
-        broadcaster = SignalBroadcaster()
-
-        emoji = "✅" if payload.result_pct > 0 else "🛑"
-
-        await broadcaster.send_signal_update(
-            symbol=sig.symbol,
-            text_status=f"{emoji} Позиция закрыта",
-            extra=f"Результат: {payload.result_pct}%\nПричина: {payload.reason}"
+        manager = SignalLifecycleManager()
+        entry_price = manager._get_signal_entry_price(db, sig) or float(
+            (sig.entry_zone_json or {}).get("from") or 0.0
         )
-
-        return {
-            "status": "closed",
-            "signal_id": sig.id,
-            "result_pct": sig.result_pct,
-        }
-
+        if entry_price <= 0:
+            return {"status": "error", "error": "entry_price_unknown"}
+        pct = float(payload.result_pct) / 100.0
+        exit_price = entry_price * (1 + pct) if sig.side.lower() == "long" else entry_price * (1 - pct)
+        return await _manual_close_via_lifecycle(db, sig, exit_price, payload.reason or "manual_close")
     except Exception as e:
         db.rollback()
         return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
 
+
+@app.post("/signals/{signal_id}/close-market", dependencies=[Depends(require_owner_action)])
+async def close_signal_market(signal_id: int):
+    """(#manual-close-2026-07-09) Ручное закрытие ПО РЫНКУ: живая цена символа,
+    полный lifecycle-путь (позиция, PnL с издержками, TP1-partial, ML-метка,
+    Telegram). Работает в production — в отличие от debug-кнопок test-lifecycle."""
+    db = SessionLocal()
+    try:
+        sig = db.query(Signal).filter(Signal.id == signal_id).first()
+        if not sig:
+            return {"status": "error", "error": "signal_not_found"}
+        if sig.status == "published":
+            sig.status = "expired"
+            sig.closed_reason = "manual_cancel"
+            db.commit()
+            return {"status": "expired", "signal_id": sig.id}
+        if sig.status not in ACTIVE_CLOSE_STATUSES:
+            return {"status": "error", "error": f"signal_not_active:{sig.status}"}
+
+        snap = MarketDataService().snapshot(sig.symbol)
+        price = float(snap.get("last") or 0.0)
+        if price <= 0:
+            return {"status": "error", "error": "market_price_unavailable"}
+        return await _manual_close_via_lifecycle(db, sig, price, "manual_close")
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
     finally:
         db.close()
 
