@@ -164,19 +164,23 @@ def take_profit_price(breakeven: float, side: str, tp_pct: float) -> float:
     return breakeven * (1 + p) if side == "long" else breakeven * (1 - p)
 
 
-def stop_loss_price(all_levels: list[dict], atr: float, side: str, atr_mult: float, anchor: float) -> float:
-    """ИСПРАВЛЕНО: Стоп-Лосс жестко привязывается к крайнему пределу сетки
-    и больше не уползает бесконечно глубже при накоплении рисков.
+def stop_loss_price(all_levels: list[dict], atr: float, side: str, atr_mult: float, anchor: float | None = None) -> float:
+    """ИСПРАВЛЕНО: Стоп-Лосс привязывается к крайнему пределу сетки.
+    Сделано полностью совместимым со старыми 4-аргументными вызовами!
     """
     if not all_levels:
         return 0.0
+    
+    # Резервный якорь, если anchor не передан
+    fallback_anchor = anchor if anchor is not None else float(all_levels[0]["price"])
+    
     if side == "long":
         buy_levels = [l for l in all_levels if l["side"] == "buy"]
-        lowest_grid_price = min([l["price"] for l in buy_levels]) if buy_levels else anchor
+        lowest_grid_price = min([l["price"] for l in buy_levels]) if buy_levels else fallback_anchor
         return lowest_grid_price - atr_mult * atr
     else:
         sell_levels = [l for l in all_levels if l["side"] == "sell"]
-        highest_grid_price = max([l["price"] for l in sell_levels]) if sell_levels else anchor
+        highest_grid_price = max([l["price"] for l in sell_levels]) if sell_levels else fallback_anchor
         return highest_grid_price + atr_mult * atr
 
 
