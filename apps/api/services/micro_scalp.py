@@ -96,6 +96,19 @@ class MicroScalpService:
         if direction is None:
             return None
 
+        # (#scalp-htf-veto-2026-07-10) Не фейдим экстремальный старший моментум:
+        # шорт при 1h RSI ≥ overheat / лонг при 1h RSI ≤ oversold — это ставка
+        # против паровоза (все убытки 10.07: шорты при 1h RSI 76–78). Обычные
+        # условия 1h движок по-прежнему НЕ читает — вето только на экстремумы.
+        if bool(getattr(settings, "SCALP_HTF_EXTREME_VETO", True)):
+            _h1 = _ctx(contexts, "1h")
+            if _h1 is not None:
+                _h1_rsi = float(_v(_h1, "rsi14", 50.0) or 50.0)
+                if direction == "short" and _h1_rsi >= float(getattr(settings, "SCALP_HTF_RSI_OVERHEAT", 70.0)):
+                    return None
+                if direction == "long" and _h1_rsi <= float(getattr(settings, "SCALP_HTF_RSI_OVERSOLD", 30.0)):
+                    return None
+
         if direction == "long":
             entry = price
             stop = low - buf

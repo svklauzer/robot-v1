@@ -1592,7 +1592,7 @@ async def force_scalp_signal():
 
         entry_from = round(price * 0.9995, 2)
         entry_to = round(price * 1.0005, 2)
-        entry_price = round((entry_from + entry_to) / 2, 2)
+        entry_price = round((entry_from + entry_to) / 2, 8)  # (#scan-round-bug-2026-07-10) было round(...,2): ADA 0.1675→0.17 > стопа → ложный invalid_short_directional_levels
 
         stop = round(price * 0.992, 2)
         tp1 = round(price * 1.006, 2)
@@ -1892,7 +1892,7 @@ async def force_valid_trade_signal():
 
         entry_from = round(price * 0.999, 2)
         entry_to = round(price * 1.001, 2)
-        entry_price = round((entry_from + entry_to) / 2, 2)
+        entry_price = round((entry_from + entry_to) / 2, 8)  # (#scan-round-bug-2026-07-10) было round(...,2): ADA 0.1675→0.17 > стопа → ложный invalid_short_directional_levels
 
         stop = round(price * 0.985, 2)
         tp1 = round(price * 1.025, 2)
@@ -2188,7 +2188,7 @@ async def force_intelligence_signal(symbol: str = "BTC/USDT"):
 
         entry_from = float(result.entry_zone[0])
         entry_to = float(result.entry_zone[1])
-        entry_price = round((entry_from + entry_to) / 2, 2)
+        entry_price = round((entry_from + entry_to) / 2, 8)  # (#scan-round-bug-2026-07-10) было round(...,2): ADA 0.1675→0.17 > стопа → ложный invalid_short_directional_levels
 
         stop = float(result.stop_price)
         tp1 = float(result.tp["tp1"])
@@ -2656,7 +2656,7 @@ def intelligence_scan_readonly():
 
                 entry_from = float(result.entry_zone[0])
                 entry_to = float(result.entry_zone[1])
-                entry_price = round((entry_from + entry_to) / 2, 2)
+                entry_price = round((entry_from + entry_to) / 2, 8)  # (#scan-round-bug-2026-07-10) было round(...,2): ADA 0.1675→0.17 > стопа → ложный invalid_short_directional_levels
 
                 stop = float(result.stop_price)
                 tp1 = float(result.tp["tp1"])
@@ -3009,7 +3009,7 @@ async def intelligence_scan_run():
 
                 entry_from = float(result.entry_zone[0])
                 entry_to = float(result.entry_zone[1])
-                entry_price = round((entry_from + entry_to) / 2, 2)
+                entry_price = round((entry_from + entry_to) / 2, 8)  # (#scan-round-bug-2026-07-10) было round(...,2): ADA 0.1675→0.17 > стопа → ложный invalid_short_directional_levels
 
                 stop = float(result.stop_price)
                 tp1 = float(result.tp["tp1"])

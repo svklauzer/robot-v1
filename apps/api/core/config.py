@@ -390,6 +390,15 @@ class Settings(BaseSettings):
     SCALP_MIN_SETUP_SCORE: float = 50.0
     SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
     SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
+    # (#scalp-htf-veto-2026-07-10) Микро-скальп по принципу живёт на 5m и HTF не
+    # читает — но телеметрия 10 июля: ВСЕ убытки дня (−0.86: ETH #224, BTC #221,
+    # ETH #220) — шорты «от сопротивления» против 1h RSI 76–78, т.е. фейд
+    # разогнавшегося паровоза. Вето ТОЛЬКО на экстремумы старшего моментума:
+    # не шортим при 1h RSI ≥ overheat, не лонгуем при 1h RSI ≤ oversold.
+    # Обычные микро-края в нормальном 1h движок торгует как раньше.
+    SCALP_HTF_EXTREME_VETO: bool = True
+    SCALP_HTF_RSI_OVERHEAT: float = 70.0
+    SCALP_HTF_RSI_OVERSOLD: float = 30.0
 
     # --- Scalp risk profile (trade_mode="scalp" / regime="range") ---
     # Скальп — маленькая позиция, мелкое движение, мелкие абсолютные суммы.
