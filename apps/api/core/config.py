@@ -351,9 +351,24 @@ class Settings(BaseSettings):
     # ликвидность, TP2=R:R. Приоритетнее грубого range. Под флагом, OFF.
     ENABLE_CRT_STRATEGY: bool = False
     CRT_HTF_TF: str = "4h"                 # старший ТФ для C1/C2
-    CRT_LTF_TF: str = "5m"                 # младший ТФ для входа/MSS/FVG
+    # (#crt-part13-2026-07-10) 5m→15m: по канонической таблице HTF↔LTF пара для
+    # 4h — это 15m (5m — пара для HTF 1h). Вызов в market_intelligence и так
+    # ожидал 15m (fallback), config переопределял на 5m. MSS/FVG на 15m чище.
+    CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
     CRT_LTF_CONFIRM: str = "either"        # "either" | "both" | "off" (MSS/FVG)
+    # (#crt-part13-2026-07-10) CISD-чек из LTF Sequence (CRT→CISD→OTE→MSS→IDM):
+    # манипуляционная свеча C2 должна ЗАКРЫТЬСЯ против свипа (свип CRH →
+    # медвежье закрытие ниже открытия; свип CRL → бычье выше открытия) — это и
+    # есть «close below OHP / above OLP» из инструкции. False → прежнее поведение.
+    CRT_REQUIRE_CISD: bool = True
+    # (#crt-part13-2026-07-10) Цели по инструкции: Target1 = 50% диапазона
+    # (частичная фиксация — теперь РЕАЛЬНО исполняется TP1-partial'ом),
+    # Target2 = 100% (противоположный край CRH/CRL). Прежние цели агрессивнее
+    # (TP1 = сразу край, TP2 — за диапазоном): телеметрия CRT — missed_profit
+    # avg 1.12%, capture −76% — до целей доезжали редко, пик отдавали.
+    # "range" = инструкция (с RR-полом CRT_MIN_RR_TP1), "extended" = старое.
+    CRT_TARGETS_MODE: str = "range"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)

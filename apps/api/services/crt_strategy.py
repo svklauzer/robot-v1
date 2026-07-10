@@ -105,6 +105,17 @@ class CRTStrategyService:
         if direction is None:
             return None
 
+        # (#crt-part13-2026-07-10) CISD: манипуляционная свеча C2 закрылась
+        # ПРОТИВ свипа («close below OHP / above OLP»): свип CRH → закрытие ниже
+        # открытия C2 (медвежья), свип CRL → выше открытия (бычья). Свип с
+        # закрытием по направлению свипа — не отказ, а пробой; такие не торгуем.
+        if bool(getattr(settings, "CRT_REQUIRE_CISD", True)):
+            c2_open = _f(c2, "open")
+            if direction == "short" and not (c2_close < c2_open):
+                return None
+            if direction == "long" and not (c2_close > c2_open):
+                return None
+
         # ── Trend-alignment (не дерёмся с шерстью) ───────────────────────────
         # ICT-корректный CRT свипует ликвидность В СТОРОНУ HTF-биаса: лонг-свип
         # (CRL) в аптренде, шорт-свип (CRH) в даунтренде. Контртрендовый вход
@@ -154,15 +165,28 @@ class CRTStrategyService:
         # цикл. Тянем TP1 минимум на min_rr1 * risk от входа.
         min_rr1 = float(getattr(settings, "CRT_MIN_RR_TP1", 1.0))
 
+        # (#crt-part13-2026-07-10) Режим целей. "range" (инструкция):
+        # Target1 = 50% диапазона (mid, с RR-полом min_rr1 — иначе после комиссий
+        # TP1 нежизнеспособен), Target2 = 100% (противоположный край).
+        # "extended" (прежнее): TP1 = сразу край, TP2 — за диапазоном (RR 2.0).
+        targets_mode = str(getattr(settings, "CRT_TARGETS_MODE", "range")).lower()
+        mid = crl + rng * 0.5
+
         if direction == "short":
             entry = price
             stop = _f(c2, "high") + buf
             risk = stop - entry
             if risk <= 0:
                 return None
-            # для шорта дальше = ниже: берём более дальний из (CRL, 1R)
-            tp1 = min(crl, entry - risk * min_rr1)
-            tp2 = min(tp1 - rng * 0.1, entry - risk * rr)   # дальше TP1
+            if targets_mode == "range":
+                # дальше = ниже: T1 = mid, но не ближе 1R; T2 = CRL (100%)
+                tp1 = min(mid, entry - risk * min_rr1)
+                tp2 = crl
+                if tp2 >= tp1:            # RR-пол утащил T1 за край → структуры нет
+                    return None
+            else:
+                tp1 = min(crl, entry - risk * min_rr1)
+                tp2 = min(tp1 - rng * 0.1, entry - risk * rr)   # дальше TP1
             net_tp1 = (entry - tp1) / entry * 100.0 - fee_round_pct
         else:
             entry = price
@@ -170,9 +194,14 @@ class CRTStrategyService:
             risk = entry - stop
             if risk <= 0:
                 return None
-            # для лонга дальше = выше: берём более дальний из (CRH, 1R)
-            tp1 = max(crh, entry + risk * min_rr1)
-            tp2 = max(tp1 + rng * 0.1, entry + risk * rr)   # дальше TP1
+            if targets_mode == "range":
+                tp1 = max(mid, entry + risk * min_rr1)
+                tp2 = crh
+                if tp2 <= tp1:
+                    return None
+            else:
+                tp1 = max(crh, entry + risk * min_rr1)
+                tp2 = max(tp1 + rng * 0.1, entry + risk * rr)   # дальше TP1
             net_tp1 = (tp1 - entry) / entry * 100.0 - fee_round_pct
 
         if net_tp1 < min_tp1:
@@ -204,6 +233,8 @@ class CRTStrategyService:
             "confirm_score": confirm_score, "width_score": round(width_score, 2),
             "final_score": final_score, "decision": decision,
             "rr_tp2": rr,
+            "targets_mode": targets_mode,
+            "cisd_checked": bool(getattr(settings, "CRT_REQUIRE_CISD", True)),
         }
         return CRTSignal(
             action=direction, regime="crt",
