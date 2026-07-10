@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -31,6 +32,26 @@ class OutcomeDiagnosticsService:
 
         lifecycle_values = self._lifecycle_metrics(target)
 
+        # (#root-cause-recency-2026-07-10) Виджет считает по ВСЕЙ выборке (limit
+        # закрытых), и без признака свежести показывал древнюю, уже вылеченную
+        # проблему как актуальную (failed_setup_exit не случается с июня, в топе
+        # висел DOT, удалённый из вселенной). Отдаём дату последнего случая и
+        # счётчик за 7 дней — фронт и рекомендации различают «активна» / «хвост».
+        last_occurrence_at = None
+        recent_count_7d = 0
+        try:
+            closed_ats = [s.closed_at for s in target if s.closed_at is not None]
+            if closed_ats:
+                last_dt = max(closed_ats)
+                last_occurrence_at = last_dt.isoformat()
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                recent_count_7d = sum(
+                    1 for dt in closed_ats
+                    if (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)) >= cutoff
+                )
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "reason": reason,
@@ -47,11 +68,17 @@ class OutcomeDiagnosticsService:
             "by_grade": self._group(target, lambda s: s.grade or "unknown"),
             "by_symbol_side": self._group(target, lambda s: f"{s.symbol}:{s.side}"),
             "worst_symbols": self._group(target, lambda s: s.symbol)[:8],
+            "last_occurrence_at": last_occurrence_at,
+            "recent_count_7d": recent_count_7d,
+            # None = свежесть неизвестна (нет closed_at) — фронт не рисует бейдж.
+            "is_active": (recent_count_7d > 0) if last_occurrence_at else None,
             "recommendations": self._recommendations(
                 reason=reason,
                 target_share_pct=round((len(target) / total_closed * 100), 2) if total_closed else 0.0,
                 target_net=target_net,
                 metrics=lifecycle_values,
+                recent_count_7d=recent_count_7d,
+                last_occurrence_at=last_occurrence_at,
             ),
         }
 
@@ -122,7 +149,25 @@ class OutcomeDiagnosticsService:
             "avg_missed_profit_pct": self._avg(missed_values),
         }
 
-    def _recommendations(self, *, reason: str, target_share_pct: float, target_net: float, metrics: dict[str, Any]) -> list[str]:
+    def _recommendations(
+        self,
+        *,
+        reason: str,
+        target_share_pct: float,
+        target_net: float,
+        metrics: dict[str, Any],
+        recent_count_7d: int = 0,
+        last_occurrence_at: str | None = None,
+    ) -> list[str]:
+        # (#root-cause-recency-2026-07-10) Причина не встречается 7+ дней →
+        # это исторический хвост: не советуем чинить уже вылеченное. Только при
+        # ИЗВЕСТНОЙ дате последнего случая — без closed_at свежесть неизвестна,
+        # и подавлять рекомендации нельзя (fail-open к обычному поведению).
+        if recent_count_7d == 0 and last_occurrence_at:
+            return [
+                f"Причина не встречается за последние 7 дней (последний случай: {str(last_occurrence_at)[:10]}) — "
+                "исторический хвост, действий не требуется."
+            ]
         items = []
         if reason == "failed_setup_exit" and target_share_pct > 35:
             items.append("Снизить поток публикаций по символам с failed_setup_exit > 35% до watch_only/cooldown.")

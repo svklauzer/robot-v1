@@ -64,12 +64,15 @@ export default function AnalyticsPage() {
           </button>
         </header>
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard title="Net PnL" value={`${summary?.total_net_pnl_usdt ?? 0} USDT`} danger={(summary?.total_net_pnl_usdt ?? 0) < 0} good={(summary?.total_net_pnl_usdt ?? 0) > 0} />
-          <StatCard title="Winrate" value={`${summary?.winrate ?? 0}%`} warn={(summary?.winrate ?? 0) < 45} good={(summary?.winrate ?? 0) >= 50} />
-          <StatCard title="Failed setup" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0} />
-          <StatCard title="Positive→Negative" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
-          <StatCard title="MFE capture" value={`${quality?.mfe_capture_rate ?? 0}%`} good={(quality?.mfe_capture_count ?? 0) > 0} />
+        {/* (#analytics-window-2026-07-10) Явные окна выборки: Net PnL/Winrate —
+            ВСЯ история (единый источник истины), quality-метрики — последние 200
+            закрытых. Failed setup красный только если причина ЖИВАЯ (7д). */}
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <StatCard title="Net PnL (вся история)" value={`${summary?.total_net_pnl_usdt ?? 0} USDT`} danger={(summary?.total_net_pnl_usdt ?? 0) < 0} good={(summary?.total_net_pnl_usdt ?? 0) > 0} />
+          <StatCard title="Winrate (вся история)" value={`${summary?.winrate ?? 0}%`} warn={(summary?.winrate ?? 0) < 45} good={(summary?.winrate ?? 0) >= 50} />
+          <StatCard title="Failed setup (посл. 200)" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active !== false} good={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active === false} />
+          <StatCard title="Positive→Negative (посл. 200)" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
+          <StatCard title="MFE capture (посл. 200)" value={`${quality?.mfe_capture_rate ?? 0}%`} good={(quality?.mfe_capture_count ?? 0) > 0} />
         </section>
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -100,7 +103,10 @@ export default function AnalyticsPage() {
 
           <Panel title="Profit gates" icon={<AlertTriangle size={18} />}>
             <Metric label="Closed validation signals" value={`${validationGates?.closed_count ?? 0} / ${validationGates?.min_closed ?? readiness?.required_gates?.closed_validation_signals ?? 200}`} warn={!validationGates?.gates?.min_closed_outcomes} />
-            <Metric label="Rolling net PnL" value={`${validationGates?.net_pnl_usdt ?? summary?.total_net_pnl_usdt ?? 0} USDT`} good={validationGates?.gates?.rolling_net_pnl_positive} warn={!validationGates?.gates?.rolling_net_pnl_positive} />
+            {/* (#analytics-window-2026-07-10) Без фолбэка на total: rolling-окно
+                (последние 50) и вся история — разные числа, подмена вводила бы
+                в заблуждение при недоступном validation-эндпоинте. */}
+            <Metric label="Rolling net PnL" value={validationGates?.net_pnl_usdt != null ? `${validationGates.net_pnl_usdt} USDT` : "—"} good={validationGates?.gates?.rolling_net_pnl_positive} warn={validationGates != null && !validationGates?.gates?.rolling_net_pnl_positive} />
             <Metric label="Failed setup" value={`${validationGates?.failed_setup_share_pct ?? 0}% / max ${validationGates?.failed_setup_max_pct ?? 35}%`} warn={!validationGates?.gates?.failed_setup_below_threshold} />
             <Metric label="Positive→Negative" value={`${validationGates?.positive_then_negative_rate_pct ?? 0}% / max ${validationGates?.positive_then_negative_max_pct ?? 25}%`} warn={!validationGates?.gates?.positive_then_negative_below_threshold} />
             <Metric label="MFE capture enabled" value={readiness?.required_gates?.adaptive_mfe_capture_enabled ? "yes" : "no"} />
@@ -159,9 +165,25 @@ export default function AnalyticsPage() {
         <section className="rounded-2xl border border-red-900/70 bg-red-950/20 p-5">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-red-200">Failed setup root cause</h2>
+              <h2 className="flex items-center gap-2 text-xl font-semibold text-red-200">
+                Failed setup root cause
+                {/* (#root-cause-recency-2026-07-10) Причина не живая → это архив, не алерт */}
+                {rootCause?.is_active === false && (
+                  <span className="rounded-lg bg-slate-700 px-2 py-0.5 text-xs font-semibold text-slate-200">
+                    исторический хвост
+                  </span>
+                )}
+                {rootCause?.is_active === true && (
+                  <span className="rounded-lg bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
+                    активна (7д: {rootCause?.recent_count_7d})
+                  </span>
+                )}
+              </h2>
               <p className="text-sm text-red-100/60">
-                Roadmap Phase 1: где именно утек PnL по failed_setup_exit.
+                Где именно утёк PnL по failed_setup_exit. Выборка: последние {rootCause?.sample_closed_signals ?? "—"} закрытых (вся история).
+                {rootCause?.last_occurrence_at && (
+                  <> Последний случай: {String(rootCause.last_occurrence_at).slice(0, 10)}.</>
+                )}
               </p>
             </div>
             <div className="text-right text-sm text-red-100/70">
@@ -183,7 +205,7 @@ export default function AnalyticsPage() {
               <Metric label="Positive→Negative" value={`${rootCause?.metrics?.positive_then_negative_rate ?? 0}%`} />
               <Metric label="Avg MFE" value={`${rootCause?.metrics?.avg_mfe_pct ?? "-"}%`} />
               <Metric label="Avg missed" value={`${rootCause?.metrics?.avg_missed_profit_pct ?? "-"}%`} />
-              <Metric label="Target net" value={`${rootCause?.target_net_pnl_usdt ?? 0} USDT`} />
+              <Metric label="Net по причине (вся выборка)" value={`${rootCause?.target_net_pnl_usdt ?? 0} USDT`} />
             </div>
 
             <div className="rounded-xl border border-red-900/60 bg-black/20 p-4">
