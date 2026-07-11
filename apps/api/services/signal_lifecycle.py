@@ -1141,6 +1141,11 @@ class SignalLifecycleManager:
 
         if net_pnl is not None:
             extra += f"\nNet PnL: {net_pnl} USDT"
+            # (#conv-pnl-rescale-2026-07-11) Разбивка: сколько дал TP1, сколько остаток —
+            # иначе «TP1 дал 0.69, а закрылись на 0.61» выглядит противоречием.
+            if partial_net is not None:
+                _rest = round(float(net_pnl) - float(partial_net), 6)
+                extra += f"\n· фиксация на TP1: {partial_net} USDT · остаток: {_rest} USDT"
 
         if total_cost is not None:
             extra += f"\nCosts: {total_cost} USDT"

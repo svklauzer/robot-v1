@@ -887,6 +887,16 @@ class RobotLoop:
             if abs(_conv - 1.0) > 1e-9:
                 plan.qty = round(float(plan.qty) * _conv, 6)
                 plan.required_margin = round(float(plan.required_margin) * _conv, 6)
+                # (#conv-pnl-rescale-2026-07-11) Долларовая экономика ЛИНЕЙНА по qty
+                # (gross и комиссии ∝ нотионалу) — масштабируем вместе с размером.
+                # Раньше net_pnl_tp1/tp2/stop оставались от ПОЛНОЙ позиции: #230
+                # показывал «TP1: 3.07$» при реальной позиции 0.469× (честно 1.44$),
+                # а fallback-пути закрытия могли завысить PnL. RR-поля не трогаем —
+                # отношения от масштаба не зависят.
+                for _pf in ("net_pnl_tp1", "net_pnl_tp2", "net_pnl_stop"):
+                    _pv = getattr(plan, _pf, None)
+                    if _pv is not None:
+                        setattr(plan, _pf, round(float(_pv) * _conv, 6))
 
             sig = Signal(
                 bot_id=bot.id,

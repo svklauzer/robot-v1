@@ -347,8 +347,11 @@ function SignalCard({
       </div>
 
       <div className="mt-3 rounded-xl border border-emerald-950 bg-black/30 p-3">
-        <div className="mb-2 text-xs font-semibold text-emerald-300">
-          Trade Plan
+        <div className="mb-2 flex items-center justify-between text-xs">
+          <span className="font-semibold text-emerald-300">Trade Plan</span>
+          {/* (#conv-pnl-rescale-2026-07-11) Числа плана = ВСЯ позиция при закрытии
+              на уровне; на TP1 реально фиксируется 50% (строка ниже). */}
+          <span className="text-emerald-100/40">$ = вся позиция · на TP1 фиксируется 50%</span>
         </div>
 
         <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
