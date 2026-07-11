@@ -147,13 +147,23 @@ class ReportService:
         )
 
     def _free_report_text(self, stats: dict) -> str:
+        # (#free-cta-2026-07-11) CTA как в тизере: deep-link в бота (воронка),
+        # а не захардкоженный @finmt_vip (приватный канал, для не-участников
+        # обращение по юзернейму не работает).
+        from core.config import settings as _settings
+        bot_username = (getattr(_settings, "TELEGRAM_BOT_USERNAME", "") or "").lstrip("@")
+        cta = (
+            f"👉 Полные сигналы и VIP-доступ: https://t.me/{bot_username}?start=vip"
+            if bot_username
+            else "👉 Полные сигналы и VIP-доступ — напишите боту команду /plans"
+        )
         return (
             f"📊 Итоги Finmt за {stats['hours']}ч\n\n"
             f"Сигналов: {stats['total_signals']}\n"
             f"Закрыто: {stats['closed_signals']}\n"
             f"Winrate: {stats['winrate']}%\n"
             f"Итог: {stats['total_result_pct']}%\n\n"
-            f"Полные сигналы и сопровождение доступны в VIP: @finmt_vip"
+            f"{cta}"
         )
 
     def _vip_report_text(self, stats: dict) -> str:

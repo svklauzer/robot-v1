@@ -181,6 +181,16 @@ class TelegramRouter:
             f"⚠️ Не финансовая рекомендация. Соблюдайте риск-менеджмент."
         )
 
+    def _vip_cta(self, prefix: str) -> str:
+        """(#free-cta-2026-07-11) Единый CTA для FREE-канала: deep-link в бота
+        (start=vip), как в тизере. Раньше апдейты слали захардкоженный @finmt_vip
+        (приватный канал — обращение по юзернейму не работает для не-участников,
+        и это не воронка бота). Фолбэк без юзернейма — команда /plans."""
+        bot_username = (settings.TELEGRAM_BOT_USERNAME or "").lstrip("@")
+        if bot_username:
+            return f"{prefix}: https://t.me/{bot_username}?start=vip"
+        return f"{prefix} — напишите боту команду /plans"
+
     def _format_free_teaser(
         self,
         signal: dict,
@@ -192,11 +202,7 @@ class TelegramRouter:
         emoji = "🟢" if side == "LONG" else "🔴"
         signal_ref = f"#{signal_id}" if signal_id else ""
 
-        bot_username = (settings.TELEGRAM_BOT_USERNAME or "").lstrip("@")
-        if bot_username:
-            cta = f"👉 Полный сигнал и VIP-доступ: https://t.me/{bot_username}?start=vip"
-        else:
-            cta = "👉 Полный сигнал и VIP-доступ — напишите боту команду /plans"
+        cta = self._vip_cta("👉 Полный сигнал и VIP-доступ")
 
         return (
             f"{emoji} FREE SIGNAL TEASER {signal_ref}\n"
@@ -252,5 +258,5 @@ class TelegramRouter:
             f"📌 FREE UPDATE\n"
             f"{symbol}\n"
             f"{text_status}\n\n"
-            f"Полное сопровождение доступно в VIP: @finmt_vip"
+            f"{self._vip_cta('👉 Полное сопровождение и VIP-доступ')}"
         )
