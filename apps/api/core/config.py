@@ -183,13 +183,13 @@ class Settings(BaseSettings):
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
     FAILED_SETUP_LOSS_SOFT_PCT: float = -0.40
-    FAILED_SETUP_LOSS_MID_PCT: float = -0.65
-    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.8 # было -0.65 (изм 17.07.2026 )
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -1.2 # было -0.90 (изм 17.07.2026 )
     FAILED_SETUP_MIN_AGE_SEC: int = 600
     # (#2 консолидация) failed_setup_exit в ТРЕНДЕ выключен — он рубил в шумовой
     # полосе до структурного smart-стопа, часто на вике. В тренде бэкстоп =
     # smart-stop + breakeven_lock + ride-трейл. True вернёт прежнее поведение.
-    FAILED_SETUP_EXIT_TREND_ENABLED: bool = False
+    FAILED_SETUP_EXIT_TREND_ENABLED: bool = True # (изм 17.07.2026)
 
     # =========================
     # БЕЗУБЫТОК-ЗАМОК (#1/#2)
@@ -205,19 +205,19 @@ class Settings(BaseSettings):
     # MFE≥1.2) → сделка держалась до полного хард-стопа −4.5 вместо ~безубытка.
     # 0.45 ловит откатчиков в диапазоне 0.45–1.2%. Над-килла нет: выход всё равно
     # требует flow_against ИЛИ ухода за hard_floor (−0.35%), т.е. не по вику.
-    BREAKEVEN_LOCK_ARM_PCT: float = 0.45
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.35 # было 0.45 (изм 17.06.2026)
     # Уровень результата (%), на котором фиксируемся после вооружения:
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
     # (#leak-be-lock-2026-07-09) 0.10→0.15: пол должен покрывать round-trip издержки
     # swap (~0.12%) — фиксация на +0.10% давала около-нулевой/минусовой нетто.
-    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.15
+    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.10 # было 0.15 (изм 17.06.2026)
     # (#wick) Вик-фильтр для мягких выходов. В тренде откат вверх — обычно тонкий
     # вик-пулбэк, а не разворот: выходить по нему = выбиться перед продолжением.
     # Мягкие выходы (breakeven_lock, failed_setup soft/mid) срабатывают ТОЛЬКО
     # если поток подтвердил разворот (flow_against по CVD) ИЛИ цена ушла за
     # hard_floor. Иначе держим — бэкстопом остаётся smart-stop и deep-порог.
-    EXIT_REQUIRE_FLOW_CONFIRM: bool = True
+    EXIT_REQUIRE_FLOW_CONFIRM: bool = False # (изм 17.07.2026)
     # Глубина минуса, при которой breakeven_lock выходит БЕЗ подтверждения потоком
     # (реальный неблагоприятный ход, а не вик).
     # (#leak-be-lock-2026-07-09) −0.35→−0.05: «безубыток-замок» закрывал вооружённые
@@ -283,13 +283,13 @@ class Settings(BaseSettings):
     # но дали ВСЮ прибыль (+20). Победителей резали на ~60% MFE (capture ~40%).
     # Старт трейла/фиксации позже → раннеры доезжают к TP2; мелкие плюсы (0.45–1.3)
     # держит безубыток-замок, не давая откатиться в минус.
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 1.30
+    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.9 # было 1.3 (изм 17.07.2026)
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 1.30   # 0.90→1.30 (#expectancy-cleanup): дать раннерам дойти до TP2
+    MFE_CAPTURE_START_PCT: float = 0.9   # 1.30→0.90 (изм. 17.07.2026)
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
@@ -795,9 +795,9 @@ class Settings(BaseSettings):
     # ДОЛЬШЕ двусторонний грид (родная среда сетки), направленная лестница
     # только при реальном уходе цены. Это усиливает mean-reversion, не тренд.
     GRID_REGIME_EMA_BAND_PCT: float = 0.60
-    GRID_TP_PCT: float = 0.5                    # тейк = безубыток + этот % (вся сетка)
-    GRID_SL_ATR_MULT: float = 1.5              # стоп = крайний уровень ± k·ATR
-    GRID_MAX_SAFETY_ORDERS: int = 6            # макс. исполненных уровней; дальше стоп выставлять
+    GRID_TP_PCT: float = 0.8 # было 0.5 (изм 17.06.2026) тейк = безубыток + этот % (вся сетка)
+    GRID_SL_ATR_MULT: float = 2 # было 1.5 (изм 17.06.2026) стоп = крайний уровень ± k·ATR
+    GRID_MAX_SAFETY_ORDERS: int = 4 # было 6 (изм 17.06.2026) макс. исполненных уровней; дальше стоп выставлять
     GRID_MAX_USED_MARGIN_PCT: float = 20.0     # СВОЙ карман маржи (% экв), отдельно от тренда (70%)
     GRID_LEVERAGE: float = 1.0                 # плечо для нотионала/маржи (swap)
     GRID_FEE_ROUND_PCT: float = 0.1            # round-trip комиссия для безубытка, %
@@ -950,8 +950,8 @@ class Settings(BaseSettings):
     # capture — даём поездке развиться и трейлим шире, чтобы забирать движение
     # до слома/разворота. В scalp/range-режиме поведение прежнее (быстрый выход).
     TREND_RIDE_ENABLED: bool = True
-    # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога (%).
-    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 1.2
+    # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога (%) было 1.2 (изм 17.07.2026).
+    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 0.8
     # В тренде выходим, отдав эту долю от MFE (шире, чем обычный ~0.35 → едем дольше).
     TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
 
