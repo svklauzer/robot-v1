@@ -547,7 +547,7 @@ class Settings(BaseSettings):
     # простаивал. Блокируем шорт при cvd_ratio ≥ +ratio (доминируют покупки),
     # лонг при cvd_ratio ≤ −ratio (доминируют продажи), но только при достаточной
     # выборке (≥ OB_CVD_MIN_TRADES) — иначе CVD это шум.
-    OB_CVD_ENTRY_BLOCK_RATIO: float = 0.6
+    OB_CVD_ENTRY_BLOCK_RATIO: float = 0.35 # было 0.60 (изм 17.07.2026)
     OB_GATE_ENTRIES: bool = True          # применять ли depth-гейт ко входам
     OB_ACCELERATE_EXITS: bool = True      # применять ли CVD к выходам
 
