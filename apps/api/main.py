@@ -92,6 +92,7 @@ from routers.subscribers import router as subscribers_router
 from routers.system import router as system_router
 from routers.telegram import router as telegram_router
 from routers.trade import router as trade_router
+from routers.venues import router as venues_router
 
 INTELLIGENCE_SCAN_LOCK = Lock()
 INTELLIGENCE_PUBLISH_LOCK = Lock()
@@ -584,6 +585,7 @@ app.include_router(subscribers_router)
 app.include_router(system_router)
 app.include_router(telegram_router)
 app.include_router(trade_router)
+app.include_router(venues_router)
 
 
 

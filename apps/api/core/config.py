@@ -1152,6 +1152,22 @@ class Settings(BaseSettings):
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
+    # =========================
+    # KRAKEN — P1 read-only (#kraken-p1-2026-07-18)
+    # Вторая биржа: публичные данные (тикеры/фандинг) для телеметрии
+    # funding-спреда HTX↔Kraken и задела под data-failover. Ключей и ордеров
+    # НЕТ — торговый контур не затронут. Kraken Futures: фандинг ПОЧАСОВОЙ
+    # (HTX — раз в 8ч), перпы котируются в USD (базис USDT/USD в price_diff).
+    # =========================
+    KRAKEN_ENABLED: bool = True                 # выключатель эндпоинтов /venues/*
+    KRAKEN_TIMEOUT_MS: int = 20000
+    KRAKEN_PROXY_URL: str = ""                  # http:// или socks5://, пусто = без прокси
+    KRAKEN_QUOTE: str = "USD"                   # квота линейных перпов Kraken
+    KRAKEN_FUNDING_INTERVAL_HOURS: float = 1.0  # не-US клиенты; US было бы 8.0
+    HTX_FUNDING_INTERVAL_HOURS: float = 8.0
+    KRAKEN_TAKER_FEE: float = 0.0005            # базовый тейкер Kraken Futures (0.05%)
+    KRAKEN_COMPARE_CACHE_SEC: int = 60          # кэш /venues/compare
+
     @property
     def cors_origins(self) -> List[str]:
         defaults = ["http://localhost:3000", "http://127.0.0.1:3000"]
