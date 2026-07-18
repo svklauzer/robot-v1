@@ -125,6 +125,9 @@ digest_task = None
 digest_loop_enabled = True
 ml_retrain_task = None
 ml_retrain_loop_enabled = True
+
+venues_spread_task = None
+venues_spread_loop_enabled = True
 # Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
 # чтобы одну позицию не обрабатывали два цикла одновременно.
 position_manage_lock = asyncio.Lock()
@@ -289,6 +292,41 @@ async def background_ml_retrain_loop():
                       error_type=type(e).__name__, error=str(e))
 
         await asyncio.sleep(int(getattr(settings, "ML_RETRAIN_INTERVAL_SEC", 86400)))
+
+
+async def background_venues_spread_loop():
+    """Почасовой снапшот funding-спредов HTX↔Kraken (#kraken-p1-2026-07-18, P1.5).
+
+    Read-only: свежий /venues/compare пишется в jsonl на persistent-диск —
+    копим историю для решения по P2 (cross-venue funding-arb). Спреды
+    mean-revert, поэтому решаем по устойчивости за дни, не по снимку.
+    Fail-open: сбой снапшота не валит цикл и ничего не трогает в торговле.
+    """
+    global venues_spread_loop_enabled
+
+    await asyncio.sleep(30)
+
+    while venues_spread_loop_enabled:
+        try:
+            if bool(getattr(settings, "KRAKEN_ENABLED", True)) and bool(
+                getattr(settings, "KRAKEN_SPREAD_LOG_ENABLED", True)
+            ):
+                from services.venue_compare import VenueCompareService
+
+                result = VenueCompareService().log_snapshot()
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "venues_spread_snapshot",
+                    logged=result.get("logged"),
+                    errors=result.get("errors"),
+                    best_symbol=result.get("best_symbol"),
+                    best_spread_ann_pct=result.get("best_spread_ann_pct"),
+                )
+        except Exception as e:  # noqa: BLE001
+            log_event(logger, logging.ERROR, "venues_spread_loop_error", error_type=type(e).__name__, error=str(e))
+
+        await asyncio.sleep(int(getattr(settings, "KRAKEN_SPREAD_LOG_INTERVAL_SEC", 3600)))
 
 
 async def background_subscription_loop():
@@ -472,7 +510,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, grid_task, grid_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, grid_task, grid_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled, venues_spread_task, venues_spread_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -524,6 +562,9 @@ async def lifespan(app: FastAPI):
     grid_loop_enabled = True
     grid_task = asyncio.create_task(background_grid_loop())
 
+    venues_spread_loop_enabled = True
+    venues_spread_task = asyncio.create_task(background_venues_spread_loop())
+
     yield
 
     robot_loop_enabled = False
@@ -561,6 +602,10 @@ async def lifespan(app: FastAPI):
     grid_loop_enabled = False
     if grid_task:
         grid_task.cancel()
+
+    venues_spread_loop_enabled = False
+    if venues_spread_task:
+        venues_spread_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)

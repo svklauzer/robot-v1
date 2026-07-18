@@ -8,6 +8,8 @@ import pytest
 from services.kraken_client import map_to_kraken_symbol
 from services.venue_compare import (
     VenueCompareService,
+    VenueSpreadHistory,
+    _prediction_pct,
     funding_spread,
     kraken_rate_from_entry,
     normalize_funding,
@@ -113,3 +115,81 @@ def test_compare_fail_open_per_symbol():
     assert "error" in result["items"][0]
     assert result["status"] == "error"  # все символы упали
     assert result["best_spread"] is None
+
+
+def test_prediction_pct_fallback_to_absolute():
+    # bulk /tickers: предикт абсолютный (USD на контракт) → делим на mark.
+    entry = {"info": {"fundingRatePrediction": "0.06395"}}
+    assert _prediction_pct(entry, mark=63950.0) == pytest.approx(0.0001, abs=1e-6)
+    # Относительный ключ приоритетнее абсолютного.
+    both = {"info": {"relativeFundingRatePrediction": "0.000045", "fundingRatePrediction": "999"}}
+    assert _prediction_pct(both, mark=100.0) == pytest.approx(0.0045)
+    # Нет mark → абсолютный не интерпретируем.
+    assert _prediction_pct(entry, mark=None) is None
+
+
+def _fake_payload(spread_ann: float, direction: str = "short_htx_long_kraken", break_even: float = 5.0):
+    return {
+        "status": "ok",
+        "items": [
+            {
+                "symbol": "ARB/USDT",
+                "price_diff_pct": 0.01,
+                "spread": {
+                    "spread_annualized_pct": spread_ann,
+                    "direction": direction,
+                    "break_even_days": break_even,
+                    "htx": {"annualized_pct": 10.95},
+                    "kraken": {"annualized_pct": 10.95 - spread_ann},
+                },
+            }
+        ],
+    }
+
+
+def test_spread_history_append_and_aggregate(tmp_path):
+    import time as _time
+
+    path = str(tmp_path / "spread.jsonl")
+    history = VenueSpreadHistory(path=path)
+    now = _time.time()
+    # Старый снапшот (за окном 7д) + три свежих с доминирующим направлением 2/3.
+    assert history.append(_fake_payload(30.0), ts=now - 10 * 86400)
+    assert history.append(_fake_payload(18.0), ts=now - 3600 * 3)
+    assert history.append(_fake_payload(12.0), ts=now - 3600 * 2)
+    assert history.append(_fake_payload(-4.0, direction="short_kraken_long_htx"), ts=now - 3600)
+
+    result = history.history(days=7)
+    assert result["snapshots"] == 3  # старый отфильтрован
+    row = result["by_symbol"][0]
+    assert row["symbol"] == "ARB/USDT"
+    assert row["snapshots"] == 3
+    assert row["avg_spread_ann_pct"] == pytest.approx((18.0 + 12.0 - 4.0) / 3, abs=0.01)
+    assert row["dominant_direction"] == "short_htx_long_kraken"
+    assert row["direction_stability_pct"] == pytest.approx(66.7, abs=0.1)
+    assert row["last_direction"] == "short_kraken_long_htx"
+    assert result["daily"], "должна быть дневная серия"
+
+
+def test_spread_history_empty_and_broken_lines(tmp_path):
+    path = str(tmp_path / "spread.jsonl")
+    history = VenueSpreadHistory(path=path)
+    # Пустой файл/нет файла → пустая история без ошибок.
+    empty = history.history(days=7)
+    assert empty["snapshots"] == 0 and empty["by_symbol"] == []
+    # Битая строка не валит чтение.
+    history.append(_fake_payload(10.0))
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("{broken json\n")
+    ok = history.history(days=7)
+    assert ok["snapshots"] == 1
+    # Payload без items → append честно возвращает False.
+    assert history.append({"status": "ok", "items": []}) is False
+
+
+def test_log_snapshot_uses_history(tmp_path):
+    path = str(tmp_path / "spread.jsonl")
+    service = VenueCompareService(htx_client=_FakeHTX(), kraken_client=_FakeKraken())
+    result = service.log_snapshot(history=VenueSpreadHistory(path=path))
+    assert result["logged"] is True
+    assert VenueSpreadHistory(path=path).history(days=1)["snapshots"] == 1

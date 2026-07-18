@@ -15,7 +15,10 @@ Kraken-ставка: ccxt для krakenfutures может отдавать в fu
 info.relativeFundingRate (относительная ставка к mark) с фолбэком на unified.
 """
 
+import json
+import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from core.config import settings
@@ -169,7 +172,7 @@ class VenueCompareService:
                     round((htx_mark - k_mark) / k_mark * 100, 4) if k_mark else None
                 )
                 item["spread"] = funding_spread(htx_rate, k_rate)
-                item["kraken_next_funding_prediction_pct"] = _prediction_pct(k_entry)
+                item["kraken_next_funding_prediction_pct"] = _prediction_pct(k_entry, k_mark)
             except Exception as e:  # noqa: BLE001
                 item["error"] = str(e)
             items.append(item)
@@ -203,6 +206,20 @@ class VenueCompareService:
         _CACHE[cache_key] = (now, payload)
         return {**payload, "cached": False}
 
+    def log_snapshot(self, history: "VenueSpreadHistory | None" = None) -> dict:
+        """Свежий compare (мимо кэша) → строка в jsonl-историю. Для почасового воркера."""
+        payload = self.compare(use_cache=False)
+        logged = False
+        if payload.get("status") == "ok":
+            logged = (history or VenueSpreadHistory()).append(payload)
+        best = payload.get("best_spread") or {}
+        return {
+            "logged": logged,
+            "errors": payload.get("errors"),
+            "best_symbol": best.get("symbol"),
+            "best_spread_ann_pct": best.get("spread_annualized_pct"),
+        }
+
     def health(self) -> dict:
         """Латентность и доступность обеих площадок (для будущего failover)."""
         started = time.monotonic()
@@ -215,8 +232,13 @@ class VenueCompareService:
         return {"status": "ok", "htx": htx, "kraken": kraken}
 
 
-def _prediction_pct(entry: dict | None) -> float | None:
-    """funding_rate_prediction Kraken (следующий фандинг) — есть только у них."""
+def _prediction_pct(entry: dict | None, mark: float | None = None) -> float | None:
+    """funding_rate_prediction Kraken (следующий фандинг) — есть только у них.
+
+    В bulk-ответе /tickers предикт лежит АБСОЛЮТНЫМ (USD на контракт) под
+    fundingRatePrediction; относительный relativeFundingRatePrediction бывает
+    не всегда. Порядок: относительный ключ → абсолютный / mark.
+    """
     if not isinstance(entry, dict):
         return None
     info = entry.get("info") or {}
@@ -227,4 +249,125 @@ def _prediction_pct(entry: dict | None) -> float | None:
                 return round(float(value) * 100, 6)
             except (TypeError, ValueError):
                 return None
+    for key in ("fundingRatePrediction", "funding_rate_prediction"):
+        value = info.get(key)
+        if value is not None and mark:
+            try:
+                return round(float(value) / float(mark) * 100, 6)
+            except (TypeError, ValueError, ZeroDivisionError):
+                return None
     return None
+
+
+# ── История снапшотов (P1.5, #kraken-p1-2026-07-18) ─────────────────────────
+# Funding-спреды mean-revert — решение по P2 должно приниматься по УСТОЙЧИВОСТИ
+# спреда за дни, а не по одному снимку. Почасовой воркер пишет компактный jsonl
+# на persistent-диск (Render: относительный storage/ml/* лежит на ml-диске,
+# переживает деплой — как trade_outcomes.jsonl).
+
+class VenueSpreadHistory:
+    def __init__(self, path: str | None = None):
+        self.path = path or str(getattr(settings, "KRAKEN_SPREAD_LOG_PATH", "storage/ml/venues_funding_spread.jsonl"))
+
+    def append(self, compare_payload: dict, ts: float | None = None) -> bool:
+        items = []
+        for item in compare_payload.get("items", []):
+            spread = item.get("spread")
+            if not spread:
+                continue
+            items.append({
+                "symbol": item.get("symbol"),
+                "spread_ann": spread.get("spread_annualized_pct"),
+                "dir": spread.get("direction"),
+                "htx_ann": (spread.get("htx") or {}).get("annualized_pct"),
+                "kraken_ann": (spread.get("kraken") or {}).get("annualized_pct"),
+                "price_diff": item.get("price_diff_pct"),
+                "break_even": spread.get("break_even_days"),
+            })
+        if not items:
+            return False
+        record = {
+            "ts": datetime.fromtimestamp(ts or time.time(), tz=timezone.utc).isoformat(),
+            "items": items,
+        }
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return True
+
+    def _read(self) -> list[dict]:
+        if not os.path.exists(self.path):
+            return []
+        max_lines = int(getattr(settings, "KRAKEN_SPREAD_HISTORY_MAX_LINES", 20000))
+        records: list[dict] = []
+        with open(self.path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[-max_lines:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception:  # noqa: BLE001 — битая строка не валит историю
+                continue
+        return records
+
+    def history(self, days: int = 7) -> dict:
+        """Агрегаты по символам: средний/мин/макс годовой спред, устойчивость
+        направления (доля доминирующего), дневная динамика."""
+        cutoff = time.time() - days * 86400
+        per_symbol: dict[str, list[tuple[float, dict]]] = {}
+        snapshots = 0
+        for record in self._read():
+            try:
+                ts = datetime.fromisoformat(record["ts"]).timestamp()
+            except Exception:  # noqa: BLE001
+                continue
+            if ts < cutoff:
+                continue
+            snapshots += 1
+            for item in record.get("items", []):
+                symbol = item.get("symbol")
+                if symbol:
+                    per_symbol.setdefault(symbol, []).append((ts, item))
+
+        by_symbol = []
+        daily: dict[tuple[str, str], list[float]] = {}
+        for symbol, entries in per_symbol.items():
+            spreads = [float(i.get("spread_ann") or 0.0) for _, i in entries]
+            dirs = [str(i.get("dir") or "") for _, i in entries]
+            dominant = max(set(dirs), key=dirs.count) if dirs else None
+            stability = round(dirs.count(dominant) / len(dirs) * 100, 1) if dirs else None
+            break_evens = [float(i["break_even"]) for _, i in entries if i.get("break_even") is not None]
+            last_ts, last_item = max(entries, key=lambda e: e[0])
+            by_symbol.append({
+                "symbol": symbol,
+                "snapshots": len(entries),
+                "avg_spread_ann_pct": round(sum(spreads) / len(spreads), 2),
+                "min_spread_ann_pct": round(min(spreads), 2),
+                "max_spread_ann_pct": round(max(spreads), 2),
+                "dominant_direction": dominant,
+                "direction_stability_pct": stability,
+                "avg_break_even_days": round(sum(break_evens) / len(break_evens), 1) if break_evens else None,
+                "last_spread_ann_pct": last_item.get("spread_ann"),
+                "last_direction": last_item.get("dir"),
+                "last_at": datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat(),
+            })
+            for ts, item in entries:
+                day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                daily.setdefault((day, symbol), []).append(float(item.get("spread_ann") or 0.0))
+
+        by_symbol.sort(key=lambda r: abs(r["avg_spread_ann_pct"]), reverse=True)
+        daily_series = [
+            {"date": day, "symbol": symbol, "avg_spread_ann_pct": round(sum(vals) / len(vals), 2), "n": len(vals)}
+            for (day, symbol), vals in sorted(daily.items())
+        ]
+        return {
+            "status": "ok",
+            "days": days,
+            "snapshots": snapshots,
+            "path": self.path,
+            "by_symbol": by_symbol,
+            "daily": daily_series,
+            "note": "Спред>0 → шорт HTX + лонг Kraken. Устойчивость = доля снапшотов с доминирующим направлением.",
+        }

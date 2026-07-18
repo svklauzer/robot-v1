@@ -1167,6 +1167,13 @@ class Settings(BaseSettings):
     HTX_FUNDING_INTERVAL_HOURS: float = 8.0
     KRAKEN_TAKER_FEE: float = 0.0005            # базовый тейкер Kraken Futures (0.05%)
     KRAKEN_COMPARE_CACHE_SEC: int = 60          # кэш /venues/compare
+    # P1.5: почасовой снапшот спредов в jsonl — решение по P2 (cross-funding-arb)
+    # принимается по устойчивости спреда за дни, а не по одному снимку.
+    # Относительный storage/ml/* на Render лежит на persistent ml-диске.
+    KRAKEN_SPREAD_LOG_ENABLED: bool = True
+    KRAKEN_SPREAD_LOG_INTERVAL_SEC: int = 3600
+    KRAKEN_SPREAD_LOG_PATH: str = "storage/ml/venues_funding_spread.jsonl"
+    KRAKEN_SPREAD_HISTORY_MAX_LINES: int = 20000  # кэп чтения истории
 
     @property
     def cors_origins(self) -> List[str]:

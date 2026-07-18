@@ -25,6 +25,19 @@ def venues_compare(symbols: str | None = None, fresh: bool = False):
         return {"status": "error", "error": str(e)}
 
 
+@router.get("/compare/history", dependencies=[Depends(require_owner_action)])
+def venues_compare_history(days: int = 7):
+    """История funding-спредов (почасовые снапшоты воркера): агрегаты по символам,
+    устойчивость направления, дневная динамика. Основание для решения по P2."""
+    if not bool(getattr(settings, "KRAKEN_ENABLED", True)):
+        return {"status": "disabled", "note": "KRAKEN_ENABLED=false"}
+    try:
+        from services.venue_compare import VenueSpreadHistory
+        return VenueSpreadHistory().history(days=min(max(days, 1), 90))
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": str(e)}
+
+
 @router.get("/health", dependencies=[Depends(require_owner_action)])
 def venues_health():
     """Доступность/латентность HTX и Kraken (задел под data-failover, P3)."""
