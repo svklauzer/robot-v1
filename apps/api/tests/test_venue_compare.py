@@ -187,6 +187,40 @@ def test_spread_history_empty_and_broken_lines(tmp_path):
     assert history.append({"status": "ok", "items": []}) is False
 
 
+def test_fetch_funding_rates_filters_symbols_before_ccxt(monkeypatch):
+    # (#kraken-tickers-fix-2026-07-19) ccxt должен получать СПИСОК существующих
+    # символов — иначе парсит все тикеры, включая истёкшие FI_* без рынка, и падает.
+    from services.kraken_client import KrakenClient
+
+    client = KrakenClient.__new__(KrakenClient)  # без ccxt-инициализации
+
+    class _FakeExchange:
+        def __init__(self):
+            self.called_with = "NOT_CALLED"
+
+        def fetch_funding_rates(self, symbols):
+            self.called_with = symbols
+            return {s: {"fundingRate": 0.0001} for s in symbols}
+
+    client.exchange = _FakeExchange()
+    markets = {"BTC/USD:USD": {"swap": True}, "ETH/USD:USD": {"swap": True}, "FI_LEGACY": {"swap": False}}
+    monkeypatch.setattr(client, "load_markets", lambda: markets)
+
+    # Несуществующий символ отрезан до ccxt.
+    result = client.fetch_funding_rates(["BTC/USD:USD", "NOPE/USD:USD"])
+    assert client.exchange.called_with == ["BTC/USD:USD"]
+    assert list(result) == ["BTC/USD:USD"]
+
+    # Без аргумента — только перпы из карты рынков, никогда None.
+    client.fetch_funding_rates()
+    assert sorted(client.exchange.called_with) == ["BTC/USD:USD", "ETH/USD:USD"]
+
+    # Ни одного валидного символа → {} без похода в ccxt.
+    client.exchange.called_with = "NOT_CALLED"
+    assert client.fetch_funding_rates(["NOPE/USD:USD"]) == {}
+    assert client.exchange.called_with == "NOT_CALLED"
+
+
 def test_log_snapshot_uses_history(tmp_path):
     path = str(tmp_path / "spread.jsonl")
     service = VenueCompareService(htx_client=_FakeHTX(), kraken_client=_FakeKraken())

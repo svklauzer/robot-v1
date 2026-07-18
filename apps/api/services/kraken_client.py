@@ -114,20 +114,29 @@ class KrakenClient:
         )
 
     def fetch_funding_rates(self, symbols: list[str] | None = None) -> dict:
-        """Bulk-фандинг всех перпов одним вызовом (ccxt fetchFundingRates).
+        """Bulk-фандинг перпов одним вызовом (ccxt fetchFundingRates).
 
-        Возвращает {unified_symbol: entry}. Fail-open: при сбое — {} (вызывающий
-        код падает на пер-символьный fetch_funding_rate или помечает ошибку).
+        (#kraken-tickers-fix-2026-07-19) Вызывать ccxt БЕЗ списка символов нельзя:
+        /tickers Kraken содержит и истёкшие датированные фьючерсы (напр.
+        FI_XRPUSD_250131), которых нет в карте рынков — парсер ccxt падает
+        («does not have market symbol»). Со списком ccxt отфильтровывает тикеры
+        ДО парсинга. Поэтому: переданные символы режем до существующих на бирже;
+        без аргумента — все перпы из карты рынков. Возвращает
+        {unified_symbol: entry}; fail-open: при сбое {} (вызывающий код падает
+        на пер-символьный фолбэк или помечает ошибку).
         """
-        self.load_markets()
+        markets = self.load_markets()
+        if not markets:
+            return {}
+        if symbols:
+            wanted = [s for s in symbols if s in markets]
+        else:
+            wanted = [s for s, m in markets.items() if (m or {}).get("swap")]
+        if not wanted:
+            return {}
         try:
-            result = self._retry(self.exchange.fetch_funding_rates, retries=2, delay=1.5)
-            if not isinstance(result, dict):
-                return {}
-            if symbols:
-                wanted = set(symbols)
-                return {k: v for k, v in result.items() if k in wanted}
-            return result
+            result = self._retry(self.exchange.fetch_funding_rates, wanted, retries=2, delay=1.5)
+            return result if isinstance(result, dict) else {}
         except Exception as e:  # noqa: BLE001
             log_event(logger, logging.WARNING, "kraken_funding_rates_failed", error=str(e))
             return {}
