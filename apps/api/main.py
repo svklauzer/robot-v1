@@ -734,7 +734,11 @@ def bootstrap_owner_and_bot():
     finally:
         db.close()
 
-@app.get("/")
+"""(#head-root-2026-07-19) Health-пингеры (Render/аптайм-мониторы) шлют HEAD /,
+а FastAPI для @app.get HEAD не добавляет → в логах шумело 405. GET+HEAD явно."""
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
         "service": "Robot V1 API",
