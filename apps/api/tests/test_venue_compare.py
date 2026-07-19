@@ -221,6 +221,65 @@ def test_fetch_funding_rates_filters_symbols_before_ccxt(monkeypatch):
     assert client.exchange.called_with == "NOT_CALLED"
 
 
+def test_kraken_cached_markets_rebuild_markets_by_id():
+    # (#kraken-markets-by-id-2026-07-19) Инжект кэша обязан строить markets_by_id,
+    # иначе safe_market внутри ccxt падает «NoneType is not iterable» у второго
+    # и последующих инстансов клиента.
+    from services.kraken_client import KrakenClient
+
+    saved = KrakenClient._cached_markets
+    try:
+        # Структура как у реального ccxt-рынка: set_markets требует spot/type и пр.
+        KrakenClient._cached_markets = {
+            "BTC/USD:USD": {
+                "id": "PF_XBTUSD",
+                "symbol": "BTC/USD:USD",
+                "base": "BTC",
+                "quote": "USD",
+                "settle": "USD",
+                "type": "swap",
+                "spot": False,
+                "swap": True,
+                "future": False,
+                "option": False,
+                "contract": True,
+                "active": True,
+                "precision": {},
+                "limits": {},
+                "info": {},
+            },
+        }
+        client = KrakenClient()
+        client.load_markets()
+        assert getattr(client.exchange, "markets_by_id", None), "markets_by_id должен быть построен"
+        assert "PF_XBTUSD" in client.exchange.markets_by_id
+    finally:
+        KrakenClient._cached_markets = saved
+
+
+def test_grid_net_realized_roundtrip_adapter():
+    # (#grid-roundtrip-fix-2026-07-19) Адаптер к _net_realized: tp/sl-путь с
+    # готовым gross и hedged-путь (gross сам, выход по обеим ногам).
+    from services.grid_engine import GridEngine
+
+    eng = GridEngine.__new__(GridEngine)  # без тяжёлой инициализации
+    fee = 0.001  # GRID_FEE_ROUND_PCT=0.1 по умолчанию
+
+    filled = [{"volume": 100.0, "price": 0.32, "side": "buy"}]
+    r = eng._net_realized_roundtrip(filled, 0.33, "long", 100.0, 1.0)
+    expected = 1.0 - 100.0 * 0.32 * fee - 100.0 * 0.33 * fee
+    assert r == pytest.approx(expected)
+
+    hedged = [
+        {"volume": 100.0, "price": 0.32, "side": "buy"},
+        {"volume": 100.0, "price": 0.34, "side": "sell"},
+    ]
+    r2 = eng._net_realized_roundtrip(hedged, 0.33)
+    gross = (0.33 - 0.32) * 100.0 + (0.34 - 0.33) * 100.0  # 2.0 — локированный PnL
+    expected2 = gross - (100.0 * 0.32 + 100.0 * 0.34) * fee - 200.0 * 0.33 * fee
+    assert r2 == pytest.approx(expected2)
+
+
 def test_log_snapshot_uses_history(tmp_path):
     path = str(tmp_path / "spread.jsonl")
     service = VenueCompareService(htx_client=_FakeHTX(), kraken_client=_FakeKraken())

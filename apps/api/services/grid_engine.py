@@ -291,6 +291,32 @@ class GridEngine:
             
         return float(gross) - entry_fee - exit_fee
 
+    def _net_realized_roundtrip(
+        self,
+        filled: list,
+        exit_price: float,
+        side: str = "flat",
+        net_qty: float | None = None,
+        gross: float | None = None,
+    ) -> float:
+        """(#grid-roundtrip-fix-2026-07-19) Недостающее звено эксперимента a61792e:
+        вызовы _net_realized_roundtrip появились в трёх местах _manage, а метода
+        не было — AttributeError валил manage-цикл сетки (TRX) каждые ~20с.
+        Адаптер к _net_realized с правильной семантикой аргументов:
+        - gross не передан (hedged-ветка) → считаем unrealized по filled на
+          exit_price;
+        - net_qty не передан (нейтрально-захеджированная корзина, нетто ≈ 0) →
+          выходная комиссия по СУММЕ обеих ног (закрываем оба направления),
+          а не по нетто.
+        """
+        exit_price = float(exit_price or 0.0)
+        if gross is None:
+            gross = gc.unrealized_pnl(filled or [], exit_price)
+        if net_qty is None:
+            total_qty = sum(abs(float(lv.get("volume") or 0.0)) for lv in (filled or []))
+            return self._net_realized(filled, float(gross), side="flat", net_qty=total_qty, exit_price=exit_price)
+        return self._net_realized(filled, float(gross), side=side, net_qty=float(net_qty), exit_price=exit_price)
+
     # ── открытие нового цикла ─────────────────────────────────────────────────
     def _maybe_open(self, symbol: str, price: float, *, bid=None, ask=None):
         # карман маржи: есть ли место хотя бы под базовый ордер

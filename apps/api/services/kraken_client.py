@@ -57,7 +57,19 @@ class KrakenClient:
         self.exchange = ccxt.krakenfutures(exchange_config)
 
         if KrakenClient._cached_markets:
-            self.exchange.markets = KrakenClient._cached_markets
+            self._inject_markets(KrakenClient._cached_markets)
+
+    def _inject_markets(self, markets: dict) -> None:
+        """(#kraken-markets-by-id-2026-07-19) Кэш рынков инжектим через
+        set_markets(): сырое присваивание exchange.markets оставляло внутренний
+        индекс ccxt markets_by_id = None, и safe_market() внутри
+        fetch_funding_rates падал «argument of type 'NoneType' is not iterable»
+        у каждого нового инстанса, получившего кэш (первый после старта работал,
+        последующие — нет)."""
+        try:
+            self.exchange.set_markets(markets)
+        except Exception:  # noqa: BLE001 — хуже сырого присваивания не будет
+            self.exchange.markets = markets
 
     def _retry(self, fn, *args, retries: int = 3, delay: float = 1.5, **kwargs):
         """Retry с экспоненциальным бэкоффом + джиттер ±20% (паттерн HTXClient)."""
@@ -76,8 +88,8 @@ class KrakenClient:
 
     def load_markets(self) -> dict:
         if KrakenClient._cached_markets:
-            if not self.exchange.markets:
-                self.exchange.markets = KrakenClient._cached_markets
+            if not self.exchange.markets or getattr(self.exchange, "markets_by_id", None) is None:
+                self._inject_markets(KrakenClient._cached_markets)
             return KrakenClient._cached_markets
         if self.exchange.markets:
             KrakenClient._markets_loaded = True
