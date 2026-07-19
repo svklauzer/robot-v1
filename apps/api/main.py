@@ -1178,15 +1178,23 @@ def list_positions(limit: int = 500):
         # (#audit-positions) У закрытой позиции unrealized_pnl = 0; реализованный
         # результат отдаём отдельным полем realized_pnl из Signal.closed_net_pnl
         # (покрывает и старые строки, где unrealized хранил net закрытия).
+        # (#tp1-partial-margin-2026-07-19) Для ОТКРЫТОЙ позиции после частичной
+        # фиксации на TP1 отдаём tp1_partial_pnl — уже забанканный net части,
+        # иначе на странице Positions он невидим до финального закрытия.
         signal_ids = [p.signal_id for p in positions if p.signal_id is not None]
         realized_map: dict = {}
+        partial_map: dict = {}
         if signal_ids:
             rows = (
-                db.query(Signal.id, Signal.closed_net_pnl)
+                db.query(Signal.id, Signal.closed_net_pnl, Signal.plan_json)
                 .filter(Signal.id.in_(signal_ids))
                 .all()
             )
-            realized_map = {sid: pnl for sid, pnl in rows}
+            for sid, pnl, plan_json in rows:
+                realized_map[sid] = pnl
+                partial = (plan_json or {}).get("tp1_partial") if isinstance(plan_json, dict) else None
+                if isinstance(partial, dict) and partial.get("net_pnl") is not None:
+                    partial_map[sid] = partial.get("net_pnl")
 
         return [
             {
@@ -1198,6 +1206,7 @@ def list_positions(limit: int = 500):
                 "mark_price": p.mark_price,
                 "unrealized_pnl": p.unrealized_pnl,
                 "realized_pnl": realized_map.get(p.signal_id) if str(p.status or "").lower() == "closed" else None,
+                "tp1_partial_pnl": partial_map.get(p.signal_id) if str(p.status or "").lower() != "closed" else None,
                 "status": p.status,
                 "signal_id": p.signal_id,
             }

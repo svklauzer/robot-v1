@@ -173,8 +173,17 @@ export default function PositionsPage() {
                   <td className="px-4 py-3">{p.qty ?? "-"}</td>
                   <td className="px-4 py-3">{p.entry_price ?? "-"}</td>
                   <td className="px-4 py-3">{p.mark_price ?? "-"}</td>
-                  {/* закрытая позиция: реализованный результат сделки; открытая: живой unrealized */}
-                  <td className={(rowPnl(p) ?? 0) < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>{rowPnl(p) ?? 0}</td>
+                  {/* закрытая позиция: реализованный результат сделки; открытая: живой unrealized.
+                      (#tp1-partial-margin-2026-07-19) tp1_partial_pnl — уже зафиксированный на TP1
+                      net открытой позиции: иначе он невидим на этой странице до финального закрытия */}
+                  <td className={(rowPnl(p) ?? 0) < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>
+                    {rowPnl(p) ?? 0}
+                    {p.tp1_partial_pnl != null && (
+                      <span className="ml-2 rounded bg-emerald-900/60 px-1.5 py-0.5 text-xs text-emerald-300">
+                        TP1 зафикс. {Number(p.tp1_partial_pnl) >= 0 ? "+" : ""}{Number(p.tp1_partial_pnl).toFixed(2)}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">{p.status}</td>
                   <td className="px-4 py-3 text-emerald-100/60">{p.signal_id ? `#${p.signal_id}` : "-"}</td>
                 </tr>

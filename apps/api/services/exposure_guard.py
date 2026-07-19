@@ -62,14 +62,36 @@ class ExposureGuard:
         return n
 
     def estimate_signal_margin(self, signal: Signal) -> float:
+        margin = None
         if getattr(signal, "required_margin", None):
-            return float(signal.required_margin)
+            margin = float(signal.required_margin)
+        else:
+            plan_json = getattr(signal, "plan_json", None) or {}
+            if isinstance(plan_json, dict) and plan_json.get("required_margin"):
+                margin = float(plan_json["required_margin"])
 
+        if margin is None:
+            return 325.0
+
+        # (#tp1-partial-margin-2026-07-19) После частичной фиксации на TP1 половина
+        # позиции реально закрыта — её маржа свободна. Signal.required_margin
+        # НАМЕРЕННО не трогаем (result_pct закрытия честно считается от исходной
+        # маржи всей сделки), поэтому освобождение учитываем здесь, в оценке
+        # экспозиции: занято = маржа × доля остатка. Иначе dynamic budget и
+        # anti-drain часами недосчитывали свободные деньги (у #266 — ~134 USDT).
         plan_json = getattr(signal, "plan_json", None) or {}
-        if isinstance(plan_json, dict) and plan_json.get("required_margin"):
-            return float(plan_json["required_margin"])
+        partial = plan_json.get("tp1_partial") if isinstance(plan_json, dict) else None
+        if isinstance(partial, dict):
+            try:
+                closed_qty = float(partial.get("closed_qty") or 0.0)
+                remaining_qty = float(partial.get("remaining_qty") or 0.0)
+                total_qty = closed_qty + remaining_qty
+                if closed_qty > 0 and remaining_qty > 0 and total_qty > 0:
+                    margin = margin * (remaining_qty / total_qty)
+            except (TypeError, ValueError):
+                pass  # битые данные партиала → консервативно полная маржа
 
-        return 325.0
+        return round(margin, 6)
 
     def used_margin(self, db: Session, bot_id: int) -> float:
         total = 0.0
