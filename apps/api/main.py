@@ -311,18 +311,41 @@ async def background_venues_spread_loop():
             if bool(getattr(settings, "KRAKEN_ENABLED", True)) and bool(
                 getattr(settings, "KRAKEN_SPREAD_LOG_ENABLED", True)
             ):
-                from services.venue_compare import VenueCompareService
+                from services.venue_compare import VenueCompareService, VenueSpreadHistory
 
-                result = VenueCompareService().log_snapshot()
+                # Один свежий compare на шаг: и в историю, и в P2-движок.
+                payload = VenueCompareService().compare(use_cache=False)
+                logged = False
+                if payload.get("status") == "ok":
+                    logged = VenueSpreadHistory().append(payload)
+                best = payload.get("best_spread") or {}
                 log_event(
                     logger,
                     logging.INFO,
                     "venues_spread_snapshot",
-                    logged=result.get("logged"),
-                    errors=result.get("errors"),
-                    best_symbol=result.get("best_symbol"),
-                    best_spread_ann_pct=result.get("best_spread_ann_pct"),
+                    logged=logged,
+                    errors=payload.get("errors"),
+                    best_symbol=best.get("symbol"),
+                    best_spread_ann_pct=best.get("spread_annualized_pct"),
                 )
+
+                # (#cross-farb-2026-07-19) P2 paper cross-funding-arb: шаг на тех же
+                # данных. Дефолт выключен; fail-open — сбой движка не валит воркер.
+                if bool(getattr(settings, "CROSS_FARB_ENABLED", False)) and payload.get("status") == "ok":
+                    try:
+                        from services.cross_funding_arb import CrossFundingArbEngine
+
+                        farb = CrossFundingArbEngine().step(payload)
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "cross_farb_step",
+                            actions=farb.get("actions"),
+                            open_count=farb.get("open_count"),
+                            realized_total_usdt=farb.get("realized_total_usdt"),
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        log_event(logger, logging.ERROR, "cross_farb_step_error", error_type=type(e).__name__, error=str(e))
         except Exception as e:  # noqa: BLE001
             log_event(logger, logging.ERROR, "venues_spread_loop_error", error_type=type(e).__name__, error=str(e))
 

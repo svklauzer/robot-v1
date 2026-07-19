@@ -1174,6 +1174,23 @@ class Settings(BaseSettings):
     KRAKEN_SPREAD_LOG_INTERVAL_SEC: int = 3600
     KRAKEN_SPREAD_LOG_PATH: str = "storage/ml/venues_funding_spread.jsonl"
     KRAKEN_SPREAD_HISTORY_MAX_LINES: int = 20000  # кэп чтения истории
+    # =========================
+    # P2: PAPER cross-venue funding-arb HTX↔Kraken (#cross-farb-2026-07-19)
+    # Две ноги перпов (шорт там, где фандинг выше), дельта-нейтрально, без
+    # переводов. СТРОГО paper, изолирован от всех движков, состояние на
+    # persistent-диске. Дефолт ВЫКЛ — включение отдельным коммитом после
+    # подтверждения устойчивости спреда ≥3 дней (критерий в отчёте).
+    # =========================
+    CROSS_FARB_ENABLED: bool = False
+    CROSS_FARB_SYMBOLS: str = "AVAX/USDT,XRP/USDT,TRX/USDT,SOL/USDT"  # без ARB (шум) и BTC/ETH (тонкий спред)
+    CROSS_FARB_NOTIONAL_USDT: float = 100.0     # консервативный нотионал ноги
+    CROSS_FARB_MAX_POSITIONS: int = 2
+    CROSS_FARB_MIN_ANN_PCT: float = 12.0        # вход: |спред| ≥ … % годовых
+    CROSS_FARB_MIN_STABILITY_PCT: float = 80.0  # вход: устойчивость направления за lookback
+    CROSS_FARB_LOOKBACK_DAYS: int = 1           # окно истории для гейта входа
+    CROSS_FARB_CLOSE_ANN_PCT: float = 3.0       # выход: carry сжался ниже … % годовых
+    CROSS_FARB_MAX_HOLD_DAYS: float = 14.0      # выход: максимальный возраст позиции
+    CROSS_FARB_STATE_PATH: str = "storage/ml/cross_funding_arb_state.json"
 
     @property
     def cors_origins(self) -> List[str]:

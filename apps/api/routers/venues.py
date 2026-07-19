@@ -38,6 +38,17 @@ def venues_compare_history(days: int = 7):
         return {"status": "error", "error": str(e)}
 
 
+@router.get("/cross-arb", dependencies=[Depends(require_owner_action)])
+def venues_cross_arb():
+    """P2 paper cross-funding-arb: состояние движка (открытые ноги, carry,
+    базис, реализованное). Работает и при выключенном флаге — показывает state."""
+    try:
+        from services.cross_funding_arb import CrossFundingArbEngine
+        return CrossFundingArbEngine().summary()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": str(e)}
+
+
 @router.get("/health", dependencies=[Depends(require_owner_action)])
 def venues_health():
     """Доступность/латентность HTX и Kraken (задел под data-failover, P3)."""
