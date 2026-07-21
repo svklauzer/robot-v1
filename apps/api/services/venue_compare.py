@@ -126,11 +126,22 @@ class VenueCompareService:
         self.htx = htx_client
         self.kraken = kraken_client
 
+    @staticmethod
+    def _default_symbols() -> list[str]:
+        """(#cross-farb-universe-2026-07-21) Вселенная compare = торговые символы
+        (HTX_SYMBOLS) ∪ CROSS_FARB_SYMBOLS. Иначе удаление символа из торговой
+        вселенной (как SOL из грида) молча лишило бы cross-arb данных по его
+        паре — P2 не должен зависеть от env торгового контура."""
+        base = [s.strip().upper() for s in settings.symbols]
+        raw = str(getattr(settings, "CROSS_FARB_SYMBOLS", "") or "")
+        extra = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        return base + [s for s in extra if s not in base]
+
     def compare(self, symbols: list[str] | None = None, use_cache: bool = True) -> dict:
         from services.funding_arbitrage import FundingSymbolMapper
         from services.kraken_client import map_to_kraken_symbol
 
-        symbols = symbols or settings.symbols
+        symbols = symbols or self._default_symbols()
         cache_key = ",".join(symbols)
         ttl = float(getattr(settings, "KRAKEN_COMPARE_CACHE_SEC", 60))
         now = time.time()
