@@ -417,40 +417,47 @@ class RobotLoop:
                         )
                     )
 
-                db.add(
-                    IntelligenceEvent(
-                        symbol=symbol,
-                        status="rejected",
-                        decision=str(plan.reject_reason or "trade_plan_invalid"),
-                        action=result.action,
-                        regime=result.regime,
-                        radar_state=result.radar_state,
-                        confidence_hint=result.confidence_hint,
-                        setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                        payload_json={
-                            "symbol": symbol,
-                            "status": "rejected",
-                            "decision": str(plan.reject_reason or "trade_plan_invalid"),
-                            "action": result.action,
-                            "regime": result.regime,
-                            "radar_state": result.radar_state,
-                            "confidence_hint": result.confidence_hint,
-                            "scores": result.scores,
-                            "setup_quality": result.setup_quality,
-                            "setup_decision": result.setup_decision,
-                            "reason": result.reason,
-                            "plan": {
-                                "net_pnl_tp1": plan.net_pnl_tp1,
-                                "net_pnl_tp2": plan.net_pnl_tp2,
-                                "net_pnl_stop": plan.net_pnl_stop,
-                                "net_rr_tp2": plan.net_rr_tp2,
-                                "required_margin": plan.required_margin,
-                                "reject_reason": plan.reject_reason,
+                # (#reject-event-dedup-2026-07-21) Один и тот же кандидат может
+                # реджектиться КАЖДЫЙ цикл часами (TRX trend_up:
+                # tp2_net_pnl_below_min_usdt каждые 1-2 мин при занятом бюджете) —
+                # лента событий забивается дублями. Пишем событие не чаще, чем раз
+                # в REJECT_EVENT_THROTTLE_MINUTES для той же пары symbol+reason;
+                # сам гейт экономики НЕ меняется, дедуп только телеметрии.
+                if self._should_record_reject_event(db, symbol, str(plan.reject_reason or "trade_plan_invalid")):
+                    db.add(
+                        IntelligenceEvent(
+                            symbol=symbol,
+                            status="rejected",
+                            decision=str(plan.reject_reason or "trade_plan_invalid"),
+                            action=result.action,
+                            regime=result.regime,
+                            radar_state=result.radar_state,
+                            confidence_hint=result.confidence_hint,
+                            setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
+                            payload_json={
+                                "symbol": symbol,
+                                "status": "rejected",
+                                "decision": str(plan.reject_reason or "trade_plan_invalid"),
+                                "action": result.action,
+                                "regime": result.regime,
+                                "radar_state": result.radar_state,
+                                "confidence_hint": result.confidence_hint,
+                                "scores": result.scores,
+                                "setup_quality": result.setup_quality,
+                                "setup_decision": result.setup_decision,
+                                "reason": result.reason,
+                                "plan": {
+                                    "net_pnl_tp1": plan.net_pnl_tp1,
+                                    "net_pnl_tp2": plan.net_pnl_tp2,
+                                    "net_pnl_stop": plan.net_pnl_stop,
+                                    "net_rr_tp2": plan.net_rr_tp2,
+                                    "required_margin": plan.required_margin,
+                                    "reject_reason": plan.reject_reason,
+                                },
                             },
-                        },
+                        )
                     )
-                )
-                db.flush()
+                    db.flush()
                 continue
 
             performance = self.symbol_performance_guard.analyze(
@@ -1345,6 +1352,17 @@ class RobotLoop:
 
     def _should_send_plan_reject_alert(self, db: Session, symbol: str, reject_reason: str) -> bool:
         minutes = int(getattr(settings, "PLAN_REJECT_ALERT_THROTTLE_MINUTES", 30))
+        return self._no_recent_reject_event(db, symbol, reject_reason, minutes)
+
+    def _should_record_reject_event(self, db: Session, symbol: str, reject_reason: str) -> bool:
+        """(#reject-event-dedup-2026-07-21) Событие rejected пишем не чаще раза в
+        окно — иначе один застрявший кандидат заливает ленту (и хоронит полезные
+        события) часами. Окно короче алертового: событие периодически
+        подтверждает, что условие ещё живо."""
+        minutes = int(getattr(settings, "REJECT_EVENT_THROTTLE_MINUTES", 15))
+        return self._no_recent_reject_event(db, symbol, reject_reason, minutes)
+
+    def _no_recent_reject_event(self, db: Session, symbol: str, reject_reason: str, minutes: int) -> bool:
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
         recent = (

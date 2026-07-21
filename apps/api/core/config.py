@@ -1181,7 +1181,11 @@ class Settings(BaseSettings):
     # persistent-диске. Дефолт ВЫКЛ — включение отдельным коммитом после
     # подтверждения устойчивости спреда ≥3 дней (критерий в отчёте).
     # =========================
-    CROSS_FARB_ENABLED: bool = False
+    # (#cross-farb-on-2026-07-21) Включён по критерию из отчёта: TRX — 5 дней
+    # avg 16.5% годовых при устойчивости направления 95.2% (дневные 11.2 → 13.1
+    # → 22.1 → 21.6); XRP за то же время схлопнулся (14.2% → 3.7%, устойчивость
+    # 61%) — гейт устойчивости оправдан, вход выбирает движок динамически.
+    CROSS_FARB_ENABLED: bool = True
     CROSS_FARB_SYMBOLS: str = "AVAX/USDT,XRP/USDT,TRX/USDT,SOL/USDT"  # без ARB (шум) и BTC/ETH (тонкий спред)
     CROSS_FARB_NOTIONAL_USDT: float = 100.0     # консервативный нотионал ноги
     CROSS_FARB_MAX_POSITIONS: int = 2
@@ -1191,6 +1195,10 @@ class Settings(BaseSettings):
     CROSS_FARB_CLOSE_ANN_PCT: float = 3.0       # выход: carry сжался ниже … % годовых
     CROSS_FARB_MAX_HOLD_DAYS: float = 14.0      # выход: максимальный возраст позиции
     CROSS_FARB_STATE_PATH: str = "storage/ml/cross_funding_arb_state.json"
+    # (#reject-event-dedup-2026-07-21) Rejected-событие пишется не чаще раза в
+    # окно на пару symbol+reason (алерты уже троттлились 30 мин, события — нет:
+    # TRX tp2_net_pnl_below_min_usdt заливал ленту каждые 1-2 мин часами).
+    REJECT_EVENT_THROTTLE_MINUTES: int = 15
 
     @property
     def cors_origins(self) -> List[str]:
