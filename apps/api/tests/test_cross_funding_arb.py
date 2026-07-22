@@ -91,7 +91,10 @@ def test_exit_reasons():
     assert exit_reason(pos, _item(ann=20.0), now_ts=15 * 86400) == "max_hold_reached"
 
 
-def test_engine_full_cycle(tmp_path):
+def test_engine_full_cycle(tmp_path, monkeypatch):
+    from core.config import settings
+    # Классический цикл проверяем без подтверждения выхода (1 шаг).
+    monkeypatch.setattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 1, raising=False)
     store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
     engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
     payload = {"status": "ok", "items": [_item(ann=25.0, basis=0.10)]}
@@ -149,6 +152,60 @@ def test_engine_respects_max_positions_and_symbol_list(tmp_path):
     # Повторный шаг: дублей нет.
     r2 = engine.step(payload, now=1000.0 + HOUR)
     assert r2["open_count"] == 2 and not [a for a in r2["actions"] if a["action"] == "open"]
+
+
+def test_exit_requires_confirmation_and_streak_resets(tmp_path):
+    # (#cross-farb-exit-confirm-2026-07-22) Один шумный флип НЕ закрывает
+    # позицию (в бою 3 закрытия за 12ч = 3× комиссии); нужен N шагов подряд.
+    store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
+    engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
+    engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
+    assert store.load()["open"], "позиция должна открыться"
+
+    # Флип 1: держим, streak=1.
+    engine.step({"status": "ok", "items": [_item(ann=-5.0)]}, now=1000.0 + HOUR)
+    state = store.load()
+    assert state["open"] and state["open"][0]["exit_streak"] == 1
+
+    # Восстановление: streak сбрасывается.
+    engine.step({"status": "ok", "items": [_item(ann=20.0)]}, now=1000.0 + 2 * HOUR)
+    assert store.load()["open"][0]["exit_streak"] == 0
+
+    # Три флипа подряд → закрытие.
+    for i in (3, 4, 5):
+        engine.step({"status": "ok", "items": [_item(ann=-5.0)]}, now=1000.0 + i * HOUR)
+    state = store.load()
+    assert not state["open"] and state["closed"][0]["close_reason"] == "spread_flipped"
+
+
+def test_reentry_cooldown_blocks_churn(tmp_path, monkeypatch):
+    from core.config import settings
+    monkeypatch.setattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 1, raising=False)
+    store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
+    engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
+    engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
+    engine.step({"status": "ok", "items": [_item(ann=-5.0)]}, now=1000.0 + HOUR)  # закрытие
+    assert store.load()["closed"], "должна закрыться"
+
+    # Спред вернулся через час — кулдаун (6ч) не пускает обратно.
+    r = engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0 + 2 * HOUR)
+    assert r["open_count"] == 0
+
+    # После кулдауна — вход разрешён.
+    r2 = engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0 + HOUR + 6.1 * 3600)
+    assert r2["open_count"] == 1
+
+
+def test_max_hold_closes_without_confirmation(tmp_path):
+    store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
+    engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
+    engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
+    # 15 дней спустя спред всё ещё хорош — но возраст закрывает сразу, без streak.
+    r = engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0 + 15 * 86400)
+    closed = store.load()["closed"]
+    assert closed and closed[0]["close_reason"] == "max_hold_reached"
+    # Свежезакрытая позиция попадает в кулдаун → мгновенного перезахода нет.
+    assert r["open_count"] == 0
 
 
 def test_engine_broken_state_file_fail_open(tmp_path):

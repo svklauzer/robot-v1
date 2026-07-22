@@ -176,8 +176,24 @@ class CrossFundingArbEngine:
                 str(pos.get("direction")),
             )
 
+            # (#cross-farb-exit-confirm-2026-07-22) Выход требует ПОДТВЕРЖДЕНИЯ,
+            # как вход требовал устойчивости: первые 12ч в бою дали 3 закрытия
+            # spread_flipped по ОДНОМУ шумному снапшоту (−0.60 = 3× комиссии),
+            # спред возвращался через час-два. Держать сквозь шумный флип стоит
+            # ~0.002/час отрицательного carry, перезаход — 0.20 комиссий.
+            # max_hold закрывает сразу (это не шум), остальное — N шагов подряд.
             reason = exit_reason(pos, item, now)
-            if reason:
+            if reason == "max_hold_reached":
+                do_close = True
+            elif reason:
+                pos["exit_streak"] = int(pos.get("exit_streak") or 0) + 1
+                pos["exit_streak_reason"] = reason
+                do_close = pos["exit_streak"] >= int(getattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 3))
+            else:
+                pos["exit_streak"] = 0
+                pos.pop("exit_streak_reason", None)
+                do_close = False
+            if do_close:
                 realized = round(
                     float(pos["funding_accrued_usdt"])
                     + float(pos["unrealized_basis_usdt"])
@@ -206,10 +222,24 @@ class CrossFundingArbEngine:
                 hist_rows = {r["symbol"]: r for r in self.history.history(days=lookback_days).get("by_symbol", [])}
             except Exception:  # noqa: BLE001
                 hist_rows = {}
+            # (#cross-farb-exit-confirm-2026-07-22) Кулдаун перезахода: после
+            # закрытия по сжатию/флипу тот же символ не открываем N часов —
+            # вторая половина защиты от чурна комиссий.
+            cooldown_sec = float(getattr(settings, "CROSS_FARB_REENTRY_COOLDOWN_HOURS", 6.0)) * 3600
+            last_closed_ts: dict[str, float] = {}
+            for closed_pos in state["closed"][-50:]:
+                try:
+                    ts = datetime.fromisoformat(str(closed_pos.get("closed_at"))).timestamp()
+                    sym = str(closed_pos.get("symbol"))
+                    last_closed_ts[sym] = max(last_closed_ts.get(sym, 0.0), ts)
+                except Exception:  # noqa: BLE001
+                    continue
             open_symbols = {p["symbol"] for p in state["open"]}
             candidates = [
                 items[s] for s in self._symbols()
-                if s in items and s not in open_symbols
+                if s in items
+                and s not in open_symbols
+                and (now - last_closed_ts.get(s, 0.0)) >= cooldown_sec
             ]
             candidates.sort(
                 key=lambda i: abs(float((i.get("spread") or {}).get("spread_annualized_pct") or 0.0)),

@@ -1193,6 +1193,12 @@ class Settings(BaseSettings):
     CROSS_FARB_MIN_STABILITY_PCT: float = 80.0  # вход: устойчивость направления за lookback
     CROSS_FARB_LOOKBACK_DAYS: int = 1           # окно истории для гейта входа
     CROSS_FARB_CLOSE_ANN_PCT: float = 3.0       # выход: carry сжался ниже … % годовых
+    # (#cross-farb-exit-confirm-2026-07-22) Первые 12ч в бою: 3 закрытия по
+    # ОДНОМУ шумному снапшоту (−0.60 = 3× комиссии), спред возвращался через
+    # час-два. Выход теперь симметричен входу: подтверждение N шагов подряд +
+    # кулдаун перезахода. max_hold закрывает без подтверждения.
+    CROSS_FARB_EXIT_CONFIRM_STEPS: int = 3      # часовых шагов подряд ниже порога/флип
+    CROSS_FARB_REENTRY_COOLDOWN_HOURS: float = 6.0
     CROSS_FARB_MAX_HOLD_DAYS: float = 14.0      # выход: максимальный возраст позиции
     CROSS_FARB_STATE_PATH: str = "storage/ml/cross_funding_arb_state.json"
     # (#reject-event-dedup-2026-07-21) Rejected-событие пишется не чаще раза в
