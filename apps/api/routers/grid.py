@@ -32,6 +32,10 @@ def _config() -> dict:
         "flip_confirm_ticks": settings.GRID_FLIP_CONFIRM_TICKS,
         "flip_cooldown_sec": settings.GRID_FLIP_COOLDOWN_SEC,
         "regime_band_pct": settings.GRID_REGIME_EMA_BAND_PCT,
+        # (#grid-neutral-only-2026-07-24) Видимость на фронте: сетка neutral-only
+        # и мейкерская cost-модель.
+        "directional_enabled": bool(getattr(settings, "GRID_DIRECTIONAL_ENABLED", False)),
+        "fee_round_pct": float(getattr(settings, "GRID_FEE_ROUND_PCT", 0.06)),
     }
 
 

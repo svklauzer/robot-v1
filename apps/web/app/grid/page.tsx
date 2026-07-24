@@ -140,6 +140,9 @@ export default function GridPage() {
           <Chip>NEUTRAL-зона ±{cfg.regime_band_pct}%</Chip>
           <Chip>flip confirm {cfg.flip_confirm_ticks} тик.</Chip>
           <Chip>flip cooldown {cfg.flip_cooldown_sec != null ? Math.round(cfg.flip_cooldown_sec / 60) : "—"} мин</Chip>
+          {/* (#grid-neutral-only-2026-07-24) сетка = range-инструмент: направленные корзины выкл, комиссия мейкерская */}
+          <Chip>{cfg.directional_enabled ? "directional: ON" : "только NEUTRAL"}</Chip>
+          <Chip>fee {cfg.fee_round_pct != null ? cfg.fee_round_pct : "—"}% round</Chip>
         </div>
       </section>
 

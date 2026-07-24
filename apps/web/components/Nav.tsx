@@ -17,6 +17,7 @@ const items = [
   { href: "/orderbook", label: "Order Book" },
   { href: "/ml", label: "ML" },
   { href: "/grid", label: "Grid" },
+  { href: "/venues", label: "Venues" },
 ];
 
 export default function Nav() {
