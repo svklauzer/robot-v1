@@ -813,7 +813,16 @@ class Settings(BaseSettings):
     GRID_MAX_SAFETY_ORDERS: int = 4 # было 6 (изм 17.06.2026) макс. исполненных уровней; дальше стоп выставлять
     GRID_MAX_USED_MARGIN_PCT: float = 20.0     # СВОЙ карман маржи (% экв), отдельно от тренда (70%)
     GRID_LEVERAGE: float = 1.0                 # плечо для нотионала/маржи (swap)
-    GRID_FEE_ROUND_PCT: float = 0.1            # round-trip комиссия для безубытка, %
+    # (#grid-neutral-only-2026-07-24) 0.1 → 0.06: уровни сетки — ЛИМИТНЫЕ ордера,
+    # в реале платят maker 0.02% (вход) + TP тоже лимиткой 0.02%; тейкер только
+    # на SL/flip (0.05%). Прежний тейкерский 0.1% round-trip съедал 12.5% каждого
+    # TP-круга и завышал минус всех закрытий (~1.5–2.5 из −4.05 за 136 циклов —
+    # фантомные комиссии). 0.06 = консервативный blend (maker вход + смесь выхода).
+    GRID_FEE_ROUND_PCT: float = 0.06           # round-trip комиссия для безубытка, %
+    # Направленные (long/short) корзины: по умолчанию ВЫКЛ — сетка только в
+    # NEUTRAL-зоне. Аудит 24.07: directional-корзины = почти весь минус сетки,
+    # дублируют тренд-движок. Откат: true.
+    GRID_DIRECTIONAL_ENABLED: bool = False
     GRID_REARM: bool = True                    # после TP/SL переоткрывать новый цикл
     GRID_SLIPPAGE_PCT: float = 0.05            # допуск проскальзывания при paper-филле, %
     GRID_TICK_INTERVAL_SEC: float = 20.0       # период фонового тика сетки

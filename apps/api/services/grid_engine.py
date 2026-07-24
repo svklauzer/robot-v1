@@ -341,6 +341,17 @@ class GridEngine:
             return
         regime, atr, ind = fm
 
+        # (#grid-neutral-only-2026-07-24) Сетка — range-инструмент. Аудит 136
+        # циклов: почти весь минус (−4.05) — направленные корзины, закрытые
+        # флипом/SL до TP (BTC 23.07: DCA в откат от максимумов — тот же паттерн,
+        # что тренд-лонги в перегрев). Направленные лестницы дублируют
+        # тренд-движок с худшей экономикой → по умолчанию выключены, сетка
+        # строится только в NEUTRAL-зоне (±GRID_REGIME_EMA_BAND_PCT от EMA200,
+        # двусторонняя — родная среда). Оба пути открытия (старт и переоткрытие
+        # после флипа) проходят здесь.
+        if regime in ("long", "short") and not bool(getattr(settings, "GRID_DIRECTIONAL_ENABLED", False)):
+            return
+
         v_base_qty = base_usdt / price  # базовый объём в базовой монете
         levels = gc.compute_grid(
             anchor=price, atr=atr, regime=regime,

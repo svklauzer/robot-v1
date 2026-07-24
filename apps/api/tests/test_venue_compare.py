@@ -262,8 +262,11 @@ def test_grid_net_realized_roundtrip_adapter():
     # готовым gross и hedged-путь (gross сам, выход по обеим ногам).
     from services.grid_engine import GridEngine
 
+    from core.config import settings as _settings
+
     eng = GridEngine.__new__(GridEngine)  # без тяжёлой инициализации
-    fee = 0.001  # GRID_FEE_ROUND_PCT=0.1 по умолчанию
+    # Читаем из настроек: дефолт менялся (#grid-neutral-only-2026-07-24: 0.1→0.06).
+    fee = float(getattr(_settings, "GRID_FEE_ROUND_PCT", 0.1)) / 100.0
 
     filled = [{"volume": 100.0, "price": 0.32, "side": "buy"}]
     r = eng._net_realized_roundtrip(filled, 0.33, "long", 100.0, 1.0)
