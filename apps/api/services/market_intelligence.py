@@ -1494,16 +1494,31 @@ class MarketIntelligenceEngine:
             _px = float(self._ctx_value(m5, "last_close", 0) or self._ctx_value(m1, "last_close", 0) or 0)
             _h4_rsi = float(self._ctx_value(h4, "rsi14", 50) or 50)
             _near = float(getattr(settings, "EXHAUSTION_LEVEL_DIST_PCT", 2.5)) / 100.0
+            # (#trend-htf-veto-2026-07-24) Дыра старого guard'а: он требовал
+            # близости к уровню ≤ EXHAUSTION_LEVEL_DIST_PCT. Все три тренд-пробоя
+            # июля (BTC #264 −4.54, ETH #276 −4.92, SOL #278 −2.48) входили в
+            # разгон к НОВЫМ максимумам — сопротивление далеко (2.7–4.7%), 4h RSI
+            # горит, вето молчит. Жёсткая ветка: экстремальный 4h RSI ветирует
+            # БЕЗ условия близости (пороги жёстче обычных, чтобы не резать
+            # здоровые тренды: ETH #271 вход ~70 прошёл бы, победители TRX
+            # #272/#281 с 4h RSI 53–63 не задеты).
+            _hard_veto = bool(getattr(settings, "TREND_HTF_EXTREME_VETO", True))
             if _px > 0 and action == "short":
                 _sup = float(self._ctx_value(h4, "support", 0) or self._ctx_value(h1, "support", 0) or 0)
                 if _h4_rsi <= float(getattr(settings, "EXHAUSTION_RSI_OVERSOLD", 30.0)) and _sup > 0 and (_px - _sup) / _px <= _near:
                     decision = "wait"
                     comment = "trend_exhaustion_short_into_support"
+                elif _hard_veto and _h4_rsi <= float(getattr(settings, "TREND_HTF_RSI_HARD_OVERSOLD", 28.0)):
+                    decision = "wait"
+                    comment = "trend_htf_oversold_veto"
             elif _px > 0 and action == "long":
                 _res = float(self._ctx_value(h4, "resistance", 0) or self._ctx_value(h1, "resistance", 0) or 0)
                 if _h4_rsi >= float(getattr(settings, "EXHAUSTION_RSI_OVERBOUGHT", 70.0)) and _res > 0 and (_res - _px) / _px <= _near:
                     decision = "wait"
                     comment = "trend_exhaustion_long_into_resistance"
+                elif _hard_veto and _h4_rsi >= float(getattr(settings, "TREND_HTF_RSI_HARD_OVERHEAT", 72.0)):
+                    decision = "wait"
+                    comment = "trend_htf_overheat_veto"
 
         # (#timing-veto) Купируем вход в микро-разворот. Аудит: лосеры шли +0.2%
         # и разворачивались — вход в ВЕРШИНУ (long) / ДНО (short) на исполнительном
