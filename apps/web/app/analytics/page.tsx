@@ -73,7 +73,21 @@ export default function AnalyticsPage() {
             ВСЯ история (единый источник истины), quality-метрики — последние 200
             закрытых. Failed setup красный только если причина ЖИВАЯ (7д). */}
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard title="Net PnL (вся история)" value={`${summary?.total_net_pnl_usdt ?? 0} USDT`} danger={(summary?.total_net_pnl_usdt ?? 0) < 0} good={(summary?.total_net_pnl_usdt ?? 0) > 0} />
+          {/* (#phantom-fill-2026-07-25) Показываем ЧЕСТНЫЙ PnL. Сырой
+              total_net_pnl_usdt завышен фантомными филлами (защитные ветки
+              книжили цену выхода по экономическому гейту, а не по рынку) —
+              главная карточка дашборда показывала прибыль, которой не было. */}
+          <StatCard
+            title="Net PnL (вся история, честный)"
+            value={`${summary?.total_net_pnl_honest_usdt ?? summary?.total_net_pnl_usdt ?? 0} USDT`}
+            danger={(summary?.total_net_pnl_honest_usdt ?? summary?.total_net_pnl_usdt ?? 0) < 0}
+            good={(summary?.total_net_pnl_honest_usdt ?? summary?.total_net_pnl_usdt ?? 0) > 0}
+            note={
+              (summary?.phantom_fill_count ?? 0) > 0
+                ? `в сыром PnL завышение +${summary.phantom_fill_overstatement_usdt} USDT на ${summary.phantom_fill_count} фантомн. филлах`
+                : undefined
+            }
+          />
           <StatCard title="Winrate (вся история)" value={`${summary?.winrate ?? 0}%`} warn={(summary?.winrate ?? 0) < 45} good={(summary?.winrate ?? 0) >= 50} />
           <StatCard title="Failed setup (посл. 200)" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active !== false} good={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active === false} />
           <StatCard title="Positive→Negative (посл. 200)" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
@@ -111,7 +125,21 @@ export default function AnalyticsPage() {
             {/* (#analytics-window-2026-07-10) Без фолбэка на total: rolling-окно
                 (последние 50) и вся история — разные числа, подмена вводила бы
                 в заблуждение при недоступном validation-эндпоинте. */}
-            <Metric label="Rolling net PnL" value={validationGates?.net_pnl_usdt != null ? `${validationGates.net_pnl_usdt} USDT` : "—"} good={validationGates?.gates?.rolling_net_pnl_positive} warn={validationGates != null && !validationGates?.gates?.rolling_net_pnl_positive} />
+            {/* (#phantom-fill-2026-07-25) Гейт судит по ЧЕСТНОМУ PnL — показываем
+                ровно ту цифру, по которой принимается решение о live. */}
+            <Metric label="Rolling net PnL (честный)" value={validationGates?.net_pnl_honest_usdt != null ? `${validationGates.net_pnl_honest_usdt} USDT` : validationGates?.net_pnl_usdt != null ? `${validationGates.net_pnl_usdt} USDT` : "—"} good={validationGates?.gates?.rolling_net_pnl_positive} warn={validationGates != null && !validationGates?.gates?.rolling_net_pnl_positive} />
+            <Metric
+              label="Фантомные филлы в окне"
+              value={
+                validationGates == null
+                  ? "—"
+                  : (validationGates.phantom_fill_count ?? 0) === 0
+                    ? "нет"
+                    : `${validationGates.phantom_fill_count} шт · +${validationGates.phantom_fill_overstatement_usdt} USDT завышения`
+              }
+              good={validationGates?.gates?.no_phantom_fills_in_sample}
+              warn={validationGates != null && !validationGates?.gates?.no_phantom_fills_in_sample}
+            />
             <Metric label="Failed setup" value={`${validationGates?.failed_setup_share_pct ?? 0}% / max ${validationGates?.failed_setup_max_pct ?? 35}%`} warn={!validationGates?.gates?.failed_setup_below_threshold} />
             <Metric label="Positive→Negative" value={`${validationGates?.positive_then_negative_rate_pct ?? 0}% / max ${validationGates?.positive_then_negative_max_pct ?? 25}%`} warn={!validationGates?.gates?.positive_then_negative_below_threshold} />
             <Metric label="MFE capture enabled" value={readiness?.required_gates?.adaptive_mfe_capture_enabled ? "yes" : "no"} />
@@ -407,7 +435,7 @@ function DailyDynamics({ daily }: { daily: any[] }) {
   );
 }
 
-function StatCard({ title, value, good, warn, danger }: { title: string; value: any; good?: boolean; warn?: boolean; danger?: boolean }) {
+function StatCard({ title, value, good, warn, danger, note }: { title: string; value: any; good?: boolean; warn?: boolean; danger?: boolean; note?: string }) {
   const valueClass = danger
     ? "text-red-300"
     : warn
@@ -420,6 +448,7 @@ function StatCard({ title, value, good, warn, danger }: { title: string; value: 
     <div className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
       <div className="text-sm text-emerald-100/60">{title}</div>
       <div className={`mt-2 text-2xl font-bold ${valueClass}`}>{value}</div>
+      {note && <div className="mt-2 text-xs text-yellow-200/80">{note}</div>}
     </div>
   );
 }

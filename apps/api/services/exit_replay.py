@@ -38,9 +38,41 @@ def _load_rows(path: Path) -> list[dict]:
     return rows
 
 
+def _honest_final_pct(row: dict, traj: list, final_pct: float) -> tuple[float, bool]:
+    """(#replay-honesty-2026-07-25) Честный результат фактического закрытия.
+
+    Записанный `result_pct` мог быть посчитан от ФАНТОМНОЙ цены выхода (баг
+    #phantom-fill: защитные ветки книжили филл по `MIN_PROTECTIVE_EXIT_PCT`,
+    а не по рынку). Признак — результат выше максимума, который сделка вообще
+    видела: result_pct > mfe_pct. В этом случае берём последнюю точку
+    траектории — реальную цену на момент закрытия.
+
+    Возвращает (pct, is_phantom).
+    """
+    lc = row.get("lifecycle") or {}
+    try:
+        mfe = float(lc.get("mfe_pct"))
+    except (TypeError, ValueError):
+        return final_pct, False
+    if final_pct > mfe + 1e-9:
+        try:
+            return float(traj[-1][1]), True
+        except (TypeError, ValueError, IndexError):
+            return mfe, True
+    return final_pct, False
+
+
 def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
                 ts_min: float | None, hard_mult: float) -> tuple[float, str]:
-    """Возвращает (result_pct, exit_reason) для варианта конфига."""
+    """Возвращает (result_pct, exit_reason) для варианта конфига.
+
+    ВАЖНО (#replay-honesty-2026-07-25): `final_pct` здесь — ЧЕСТНЫЙ результат
+    удержания до конца траектории, а не записанный `result_pct` факта. Раньше
+    fallback брал фактический результат, который сам был произведён ТЕКУЩИМ
+    конфигом → каждый вариант, который не сработал раньше, наследовал исход
+    текущего конфига, и текущий не мог проиграть. Отсюда «текущий конфиг №1
+    шесть замеров подряд» — артефакт сравнения конфига с самим собой.
+    """
     mfe = 0.0
     ts_sec = (ts_min or 0.0) * 60.0
     hard_sec = ts_sec * max(hard_mult, 1.0)
@@ -68,6 +100,7 @@ def build(limit: int = 2000) -> dict:
 
     trades = []
     skipped_no_traj = 0
+    phantom_count = 0
     for r in rows:
         lc = r.get("lifecycle") or {}
         traj = lc.get("traj")
@@ -81,7 +114,11 @@ def build(limit: int = 2000) -> dict:
         if not traj or len(traj) < 3:
             skipped_no_traj += 1
             continue
-        trades.append({"traj": traj, "final_pct": float(final_pct),
+        honest_pct, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        if is_phantom:
+            phantom_count += 1
+        trades.append({"traj": traj, "final_pct": honest_pct,
+                       "booked_pct": float(final_pct), "phantom": is_phantom,
                        "symbol": r.get("symbol"), "signal_id": r.get("signal_id")})
 
     if not trades:
@@ -133,11 +170,18 @@ def build(limit: int = 2000) -> dict:
         "trades_replayed": len(trades),
         "skipped_no_trajectory": skipped_no_traj,
         "actual_total_pct": actual_total,
+        "booked_total_pct": round(sum(t["booked_pct"] for t in trades), 4),
+        "phantom_fill_trades": phantom_count,
         "current_config": current,
         "best": variants[0],
         "worst": variants[-1],
         "variants": variants,
         "note": ("Сравнение по gross-% (издержки у вариантов одинаковы). Replay закрывает "
                  "только РАНЬШЕ факта; траектория даунсемплирована (шаг traj_step) → "
-                 "результат консервативная оценка. Выборка <30 сделок = не доказательство."),
+                 "результат консервативная оценка. Выборка <30 сделок = не доказательство. "
+                 "(#replay-honesty-2026-07-25) actual_total_pct — ЧЕСТНЫЙ базис: фантомные "
+                 "филлы (result_pct > mfe_pct) заменены последней точкой траектории, а "
+                 "fallback варианта = удержание до конца траектории, а не результат "
+                 "текущего конфига. Прежние замеры «текущий конфиг №1» сравнивали "
+                 "конфиг сам с собой и недействительны."),
     }

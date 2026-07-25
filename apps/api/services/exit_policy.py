@@ -69,6 +69,24 @@ class ExitPolicyService:
             return 0.0
         return max(mfe_pct - current_pct, 0.0)
 
+    def _achievable_pct(self, protected_pct: float, current_pct: float) -> float:
+        """(#phantom-fill-2026-07-25) Реально достижимый результат выхода.
+
+        Защитные/трейл-ветки считают `protected_pct` как
+        `max(доля_от_MFE, net_safe_pct, MIN_PROTECTIVE_EXIT_PCT)`. Полы
+        `net_safe_pct`/`MIN_PROTECTIVE_EXIT_PCT` — это ЭКОНОМИЧЕСКИЕ ГЕЙТЫ
+        («не стоит фиксировать дешевле»), но они попадали прямо в цену филла:
+        `exit_price = entry × (1 + protected_pct/100)`. При MIN_PROTECTIVE_EXIT_PCT
+        =1.80 и реальном MFE 0.97% сделка закрывалась по цене, которой рынок
+        НИКОГДА не видел (TRX #281: филл 0.334561 при максимуме 0.331845 —
+        ровно entry×1.018; +8.18 USDT вместо честных ~+1.6).
+
+        Стоп/трейл не может исполниться ЛУЧШЕ рынка: фактический результат
+        ограничен текущей ценой. min() корректен для обеих сторон, т.к.
+        `_result_pct` уже нормализует знак по side.
+        """
+        return min(float(protected_pct), float(current_pct))
+
     def _estimated_net_usdt(
         self,
         result_pct: float,
@@ -291,7 +309,20 @@ class ExitPolicyService:
         # Это напрямую лечит positive_then_negative (был 50-64%).
         be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
         be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.80))
-        be_floor = float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10))
+        # (#be-floor-cost-2026-07-25) Пол замка ДОЛЖЕН покрывать round-trip издержки,
+        # иначе «безубыток» математически не может закрыться в плюс.
+        # Факт по телеметрии 19–25.07: round-trip = 0.15% нотионала, а пол стоял
+        # 0.10% (откат 0.15→0.10 в коммите 4df5092 от 17.07 отменил фикс #leak-be-lock).
+        # Выход при gross ≤ 0.10% → net = 0.10 − 0.15 = −0.05%. Проверено на 7 из
+        # последних 20 закрытий: #282 −0.056, #279 −0.068, #275 −0.155, #273 −0.055,
+        # #270 −0.102, #268 −0.071, #267 −0.061 — все ровно gross − 0.15.
+        # Берём фактическую стоимость round-trip (комиссии обеих ног + слиппедж)
+        # плюс буфер: замок обязан оставлять хотя бы символический плюс.
+        be_cost_pct = (float(fee_rate or 0.0) * 2 + float(settings.SLIPPAGE_BUFFER_PCT)) * 100
+        be_floor = max(
+            float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+            be_cost_pct + float(getattr(settings, "BREAKEVEN_LOCK_COST_BUFFER_PCT", 0.05)),
+        )
         # (#wick) Вик-фильтр: мягкие выходы только при подтверждённом развороте
         # (flow_against) ИЛИ реальном уходе в минус. Иначе тонкий откат = вик, держим.
         require_flow = bool(getattr(settings, "EXIT_REQUIRE_FLOW_CONFIRM", True))
@@ -306,6 +337,9 @@ class ExitPolicyService:
         failed_setup_enabled = (not is_trend_mode) or bool(
             getattr(settings, "FAILED_SETUP_EXIT_TREND_ENABLED", False)
         )
+        # Замок обязан иметь запас между вооружением и полом, иначе он
+        # срабатывает мгновенно после arm и вырождается в «выход по шуму».
+        be_arm = max(be_arm, be_floor * float(getattr(settings, "BREAKEVEN_LOCK_ARM_FLOOR_RATIO", 1.2)))
         breakeven_armed = be_enabled and mfe >= be_arm
         if breakeven_armed and current_pct <= be_floor and (soft_exit_confirmed or current_pct <= be_hard_floor):
             # Фиксируем по текущей цене (реальный филл). После хорошего MFE это
@@ -362,6 +396,7 @@ class ExitPolicyService:
                 est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
                 if est_net is not None and est_net < min_protective_net_usdt:
                     return ExitDecision(exit=False)
+                protected_pct = self._achievable_pct(protected_pct, current_pct)
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
                 return ExitDecision(
                     exit=True, reason="trend_ride_trailing_stop",
@@ -371,6 +406,39 @@ class ExitPolicyService:
                         f"prot={protected_pct:.4f} min_mfe={ride_min_mfe} trail_dd={ride_trail_dd}"
                     ),
                 )
+
+            # ── Ярус 2: фиксация в «мёртвой зоне» MFE (#trend-capture-band-2026-07-25)
+            # Выше стоит ранний `return ExitDecision(exit=False)`, поэтому
+            # adaptive_mfe_capture в тренде НЕДОСТИЖИМ. Сделки с MFE в полосе
+            # [arm, ride_min_mfe) не имели ни одного механизма фиксации, кроме
+            # безубыток-замка — а это модальный случай (медиана MFE тренда 0.64%,
+            # ride требует 0.8%). Здесь — тугой трейл ИМЕННО в этой полосе:
+            # как только mfe >= ride_min_mfe, ярус 2 отключается и работает
+            # широкий ride-трейл выше (раннеров не режем).
+            if bool(getattr(settings, "TREND_CAPTURE_BAND_ENABLED", True)):
+                band_arm = float(getattr(settings, "TREND_CAPTURE_ARM_PCT", 0.55))
+                band_give = float(getattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.25))
+                if (
+                    band_arm <= mfe < ride_min_mfe
+                    and drawdown_from_mfe >= mfe * band_give
+                ):
+                    band_pct = self._achievable_pct(mfe * (1.0 - band_give), current_pct)
+                    # Гейты: фиксируем только то, что реально платит за издержки.
+                    if band_pct >= max(net_safe_pct, min_protective_exit_pct):
+                        est_net = self._estimated_net_usdt(
+                            band_pct, position_notional_usdt, fee_rate=fee_rate
+                        )
+                        if est_net is None or est_net >= min_protective_net_usdt:
+                            exit_price = self._price_from_result_pct(side, entry_price, band_pct)
+                            return ExitDecision(
+                                exit=True, reason="trend_capture_band",
+                                exit_price=round(exit_price, 8),
+                                note=(
+                                    f"band mfe={mfe:.4f} cur={current_pct:.4f} "
+                                    f"dd={drawdown_from_mfe:.4f} prot={band_pct:.4f} "
+                                    f"arm={band_arm} give={band_give} ride_min={ride_min_mfe}"
+                                ),
+                            )
             return ExitDecision(exit=False)
 
         if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)):
@@ -387,6 +455,7 @@ class ExitPolicyService:
                 est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
                 if est_net is not None and est_net < min_protective_net_usdt:
                     return ExitDecision(exit=False)
+                protected_pct = self._achievable_pct(protected_pct, current_pct)
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
                 return ExitDecision(
                     exit=True,
@@ -405,6 +474,7 @@ class ExitPolicyService:
             est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
+            protected_pct = self._achievable_pct(protected_pct, current_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
                 exit=True, reason="protective_breakeven_profit_guard",
@@ -420,6 +490,7 @@ class ExitPolicyService:
             est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
+            protected_pct = self._achievable_pct(protected_pct, current_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
                 exit=True, reason="protective_trailing_stop",
@@ -435,6 +506,7 @@ class ExitPolicyService:
             est_net = self._estimated_net_usdt(protected_pct, position_notional_usdt, fee_rate=fee_rate)
             if est_net is not None and est_net < min_protective_net_usdt:
                 return ExitDecision(exit=False)
+            protected_pct = self._achievable_pct(protected_pct, current_pct)
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
                 exit=True, reason="adaptive_trailing_stop",
@@ -492,7 +564,9 @@ class ExitPolicyService:
         if stop_distance_pct is not None and stop_distance_pct >= 3.0:
             tp2_progress = current_pct / tp2_pct if tp2_pct > 0 else 0
             if tp2_progress >= 0.80 and drawdown_from_mfe >= mfe * 0.20:
-                protected_pct = max(mfe * 0.70, net_safe_pct, min_post_tp1_exit_pct)
+                protected_pct = self._achievable_pct(
+                    max(mfe * 0.70, net_safe_pct, min_post_tp1_exit_pct), current_pct
+                )
                 exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
                 return ExitDecision(
                     exit=True,
@@ -505,7 +579,9 @@ class ExitPolicyService:
                 )
 
         if mfe >= 3.0 and drawdown_from_mfe >= mfe * 0.30:
-            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
+            protected_pct = self._achievable_pct(
+                max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct), current_pct
+            )
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
                 exit=True,
@@ -518,7 +594,9 @@ class ExitPolicyService:
             )
 
         if mfe >= 2.0 and drawdown_from_mfe >= mfe * 0.35:
-            protected_pct = max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct)
+            protected_pct = self._achievable_pct(
+                max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct), current_pct
+            )
             exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
             return ExitDecision(
                 exit=True,

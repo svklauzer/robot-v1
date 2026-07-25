@@ -6,6 +6,7 @@ from core.security import require_owner_action
 from models.bot import Bot
 from models.signal import Signal
 from services.exposure_guard import ExposureGuard
+from services.phantom_fill import summarize as summarize_phantom
 from services.validation_gates import ValidationGateService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.symbol_performance_summary import SymbolPerformanceSummaryService
@@ -58,6 +59,13 @@ def _analytics_summary_data():
         winrate = round((wins / closed_count * 100), 2) if closed_count else 0.0
         avg_net_pnl = round((total_net_pnl / closed_with_money), 6) if closed_with_money else 0.0
 
+        # (#phantom-fill-2026-07-25) Сводка питалась ТОЛЬКО от closed_net_pnl, а он
+        # завышен фантомными филлами — главная карточка дашборда показывала прибыль
+        # по ценам, которых рынок не видел. Отдаём обе цифры: сырую (для сверки с
+        # историей) и честную (для решений).
+        phantom = summarize_phantom(closed_signals)
+        total_net_pnl_honest = round(total_net_pnl + phantom["phantom_fill_delta_usdt"], 6)
+
         guard = ExposureGuard()
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
         used_margin = max_allowed_margin = free_margin = 0.0
@@ -82,8 +90,10 @@ def _analytics_summary_data():
             "winrate": winrate,
             "total_result_pct": round(total_result_pct, 4),
             "total_net_pnl_usdt": round(total_net_pnl, 6),
+            "total_net_pnl_honest_usdt": total_net_pnl_honest,
             "avg_net_pnl_usdt": avg_net_pnl,
             "total_costs_usdt": round(total_costs, 6),
+            **{k: v for k, v in phantom.items() if k != "phantom_fill_delta_usdt"},
             "exposure": {
                 "used_margin": used_margin,
                 "max_allowed_margin": max_allowed_margin,

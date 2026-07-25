@@ -64,6 +64,23 @@ class ReEntryCooldownGuard:
         plan = signal.plan_json or {}
         return self._safe_float(plan.get("priority_score"), 0.0)
 
+    def _adverse_reentry_pct(self, side: str, last_exit_price: float, entry_price: float) -> float | None:
+        """Насколько ХУЖЕ прошлого выхода мы заходим (%). >0 = хуже.
+
+        Для лонга «хуже» = выше цены выхода (покупаем дороже, чем продали),
+        для шорта — ниже. None, если данных нет.
+        """
+        try:
+            last_exit_price = float(last_exit_price)
+            entry_price = float(entry_price)
+        except (TypeError, ValueError):
+            return None
+        if last_exit_price <= 0 or entry_price <= 0:
+            return None
+        if str(side).lower() in ("long", "buy"):
+            return (entry_price - last_exit_price) / last_exit_price * 100
+        return (last_exit_price - entry_price) / last_exit_price * 100
+
     def _is_strong_override(
         self,
         *,
@@ -87,6 +104,54 @@ class ReEntryCooldownGuard:
             and priority_delta >= 25
         )
 
+    def _adverse_price_block(
+        self, *, side: str, last_signal: Signal, entry_price, now, closed_at
+    ) -> ReEntryCooldownDecision | None:
+        """Блок перезахода по цене ХУЖЕ предыдущего выхода (чурн-зона).
+
+        None → блокировать не за что (нет данных / зашли не хуже / рынок ушёл
+        достаточно далеко, чтобы это был другой сетап / окно истекло).
+        """
+        from core.config import settings
+
+        if not bool(getattr(settings, "REENTRY_ADVERSE_PRICE_GUARD_ENABLED", True)):
+            return None
+        if entry_price is None:
+            return None
+
+        last_exit = getattr(last_signal, "closed_exit_price", None)
+        adverse = self._adverse_reentry_pct(side, last_exit, entry_price)
+        if adverse is None or adverse <= 0:
+            return None  # зашли по той же или лучшей цене — это не чурн
+
+        window_min = float(getattr(settings, "REENTRY_ADVERSE_WINDOW_MINUTES", 240.0))
+        if closed_at is not None and (now - closed_at) > timedelta(minutes=window_min):
+            return None  # слишком давно — связь с прошлым выходом потеряна
+
+        churn_max = float(getattr(settings, "REENTRY_ADVERSE_CHURN_MAX_PCT", 0.30))
+        if adverse > churn_max:
+            return None  # рынок ушёл далеко — это уже другая ситуация, не чурн
+
+        return ReEntryCooldownDecision(
+            allowed=False,
+            reason="reentry_adverse_price",
+            payload={
+                "symbol": last_signal.symbol,
+                "side": side,
+                "last_signal_id": last_signal.id,
+                "last_closed_reason": str(last_signal.closed_reason or "unknown"),
+                "last_exit_price": float(last_exit),
+                "entry_price": float(entry_price),
+                "adverse_pct": round(adverse, 4),
+                "churn_max_pct": churn_max,
+                "window_minutes": window_min,
+                "note": (
+                    "перезаход в ту же сторону по цене хуже выхода в пределах "
+                    "чурн-зоны: round-trip будет оплачен дважды без изменения сетапа"
+                ),
+            },
+        )
+
     def check(
         self,
         *,
@@ -97,6 +162,7 @@ class ReEntryCooldownGuard:
         current_priority_score: float,
         current_setup_score: float,
         current_rr_tp2: float,
+        entry_price: float | None = None,
     ) -> ReEntryCooldownDecision:
         last_signal = (
             db.query(Signal)
@@ -139,6 +205,24 @@ class ReEntryCooldownGuard:
         cooldown_until = closed_at + timedelta(minutes=cooldown_minutes)
 
         if now >= cooldown_until:
+            # (#reentry-adverse-price-2026-07-25) Истёкший таймер — ещё не повод
+            # заходить ХУЖЕ, чем вышли. AVAX 25.07: #282 закрыт замком в 00:51 по
+            # 6.2708, #283 открыт в 01:54 по 6.2751 — тот же символ, та же сторона,
+            # цена хуже на 0.07%, round-trip оплачен дважды. Таймер отработал
+            # формально, экономику не защитил.
+            #
+            # Логика: небольшой неблагоприятный сдвиг = та же ценовая зона = чурн
+            # (издержки съедают всё). Крупный сдвиг = рынок реально ушёл, это уже
+            # другой сетап — пропускаем. Порог по умолчанию ≈ 2× round-trip.
+            adverse = self._adverse_price_block(
+                side=side,
+                last_signal=last_signal,
+                entry_price=entry_price,
+                now=now,
+                closed_at=closed_at,
+            )
+            if adverse is not None:
+                return adverse
             return ReEntryCooldownDecision(
                 allowed=True,
                 reason="cooldown_expired",

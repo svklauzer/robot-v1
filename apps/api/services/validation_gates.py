@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.signal import Signal
+from services.phantom_fill import phantom_adjustment, summarize as summarize_phantom
 
 
 class ValidationGateService:
@@ -28,6 +29,10 @@ class ValidationGateService:
             else getattr(settings, "VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT", 25.0)
         )
 
+    # (#phantom-fill-2026-07-25) Детектор вынесен в services/phantom_fill.py —
+    # один источник правды для validation-gates, /analytics/summary и отчётов.
+    _phantom_adjustment = staticmethod(phantom_adjustment)
+
     def evaluate(self, db: Session, limit: int | None = None) -> dict[str, Any]:
         sample_limit = max(int(limit or self.min_closed), self.min_closed)
         signals = (
@@ -39,6 +44,14 @@ class ValidationGateService:
         )
         closed_count = len(signals)
         net_pnl = round(sum(float(signal.closed_net_pnl or 0.0) for signal in signals), 6)
+
+        # (#phantom-fill-2026-07-25) Честный PnL: снимаем завышение фантомных филлов.
+        phantom = summarize_phantom(signals)
+        phantom_count = phantom["phantom_fill_count"]
+        phantom_delta = phantom["phantom_fill_delta_usdt"]
+        phantom_signal_ids = phantom["phantom_fill_signal_ids"]
+        net_pnl_honest = round(net_pnl + phantom_delta, 6)
+
         failed_setup_count = sum(1 for signal in signals if signal.closed_reason == "failed_setup_exit")
         failed_setup_share = round((failed_setup_count / closed_count * 100), 2) if closed_count else 0.0
 
@@ -52,7 +65,9 @@ class ValidationGateService:
         positive_then_negative_rate = round((positive_then_negative_count / lifecycle_count * 100), 2) if lifecycle_count else 0.0
 
         gates = {
-            "rolling_net_pnl_positive": net_pnl > 0,
+            # Гейт судит по ЧЕСТНОМУ PnL: фантомные филлы не должны открывать live.
+            "rolling_net_pnl_positive": net_pnl_honest > 0,
+            "no_phantom_fills_in_sample": phantom_count == 0,
             "failed_setup_below_threshold": failed_setup_share < self.failed_setup_max_pct if closed_count else False,
             "positive_then_negative_below_threshold": (
                 positive_then_negative_rate < self.positive_then_negative_max_pct if lifecycle_count else False
@@ -61,7 +76,12 @@ class ValidationGateService:
         }
         blockers: list[str] = []
         if not gates["rolling_net_pnl_positive"]:
-            blockers.append("validation rolling net PnL is not positive after costs")
+            blockers.append("validation rolling net PnL is not positive after costs (honest fills)")
+        if not gates["no_phantom_fills_in_sample"]:
+            blockers.append(
+                f"sample contains {phantom_count} phantom-fill outcomes (result_pct > mfe_pct): "
+                "PnL is fiction until they roll out of the window"
+            )
         if not gates["failed_setup_below_threshold"]:
             blockers.append("validation failed_setup_exit share is above threshold")
         if not gates["positive_then_negative_below_threshold"]:
@@ -76,6 +96,10 @@ class ValidationGateService:
             "closed_count": closed_count,
             "min_closed": self.min_closed,
             "net_pnl_usdt": net_pnl,
+            "net_pnl_honest_usdt": net_pnl_honest,
+            "phantom_fill_count": phantom_count,
+            "phantom_fill_overstatement_usdt": round(abs(phantom_delta), 6),
+            "phantom_fill_signal_ids": phantom_signal_ids,
             "failed_setup_count": failed_setup_count,
             "failed_setup_share_pct": failed_setup_share,
             "failed_setup_max_pct": self.failed_setup_max_pct,

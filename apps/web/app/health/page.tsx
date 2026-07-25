@@ -136,6 +136,18 @@ export default function HealthPage() {
           <InfoRow label="24h Net PnL" value={`${liveSafety?.daily_net_pnl_usdt ?? 0} USDT`} danger={(liveSafety?.daily_net_pnl_usdt ?? 0) < 0} />
           <InfoRow label="Daily loss" value={`${liveSafety?.daily_loss_pct ?? 0}%`} danger={liveSafety?.daily_loss_blocked} />
           <InfoRow label="Max daily loss" value={`${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
+          {/* (#max-trades-per-day-2026-07-25) Дневной лимит УБЫТКА не ловит чурн:
+              серия мелких перезаходов не пробивает −3%, но выедает депозит
+              комиссиями. Второй предохранитель — по числу сделок. */}
+          <InfoRow
+            label="Сделок за сутки"
+            value={
+              (liveSafety?.max_trades_per_day ?? 0) > 0
+                ? `${liveSafety?.trades_today ?? 0} / ${liveSafety.max_trades_per_day}`
+                : `${liveSafety?.trades_today ?? 0} (лимит выключен)`
+            }
+            danger={liveSafety?.trade_count_blocked}
+          />
           {liveSafety?.kill_switch_reason && <InfoRow label="Reason" value={liveSafety.kill_switch_reason} danger={liveSafety?.kill_switch_enabled} />}
           {killSwitchSmoke && <InfoRow label="Smoke" value={killSwitchSmoke?.status === "ok" ? "passed dry-run" : (killSwitchSmoke?.error || "failed")} danger={killSwitchSmoke?.status !== "ok"} />}
         </Panel>

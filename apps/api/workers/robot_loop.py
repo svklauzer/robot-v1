@@ -774,21 +774,24 @@ class RobotLoop:
                     current_priority_score=float(production_decision.payload.get("priority_score", 0) or 0),
                     current_setup_score=float(result.setup_quality.get("final_score", 0) if result.setup_quality else 0),
                     current_rr_tp2=float(plan.net_rr_tp2 or 0),
+                    # (#reentry-adverse-price-2026-07-25) цена нужна, чтобы не
+                    # перезаходить дороже собственного выхода внутри чурн-зоны.
+                    entry_price=float(getattr(plan, "entry_price", 0) or 0) or None,
                 )
                 if not cooldown.allowed:
-                    if not self._should_record_block_event(db, symbol, "reentry_cooldown_active"):
+                    if not self._should_record_block_event(db, symbol, cooldown.reason):
                         continue
                     db.add(
                         IntelligenceEvent(
                             symbol=symbol,
                             status="blocked",
-                            decision="reentry_cooldown_active",
+                            decision=cooldown.reason,
                             action=result.action,
                             regime=result.regime,
                             radar_state=result.radar_state,
                             confidence_hint=result.confidence_hint,
                             setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                            payload_json={"symbol": symbol, "status": "blocked", "decision": "reentry_cooldown_active", "reentry_cooldown": cooldown.payload},
+                            payload_json={"symbol": symbol, "status": "blocked", "decision": cooldown.reason, "reentry_cooldown": cooldown.payload},
                         )
                     )
                     db.flush()

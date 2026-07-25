@@ -31,6 +31,9 @@ const CLOSE_REASON_LABELS: Record<string, string> = {
   protective_breakeven_profit_guard: "Защита безубытка",
   adaptive_mfe_capture: "Фиксация MFE",
   wide_stop_tp2_guard: "Защита TP2 (широкий стоп)",
+  // (#trend-capture-band-2026-07-25) Ярус 2: фиксация в модальной полосе MFE.
+  // До правки сделки с MFE 0.35–0.8% в тренде не имели механизма фиксации.
+  trend_capture_band: "Трендовая фиксация (полоса MFE)",
 };
 
 function closeReasonLabel(code: string | null | undefined): string {

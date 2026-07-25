@@ -31,6 +31,22 @@ class LiveSafetyService:
         )
         return round(sum(float(signal.closed_net_pnl or 0.0) for signal in signals), 6)
 
+    def trades_opened_today(self, db: Session, hours: int = 24) -> int:
+        """(#max-trades-per-day-2026-07-25) Сколько сделок открыто за окно.
+
+        Предохранитель от чурна: серия мелких «безубытков» и перезаходов может
+        не пробить дневной лимит УБЫТКА, но выесть депозит комиссиями. Считаем
+        открытия (created_at), а не закрытия — ограничиваем именно активность.
+        """
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        return int(
+            db.query(Signal)
+            .filter(Signal.created_at.isnot(None))
+            .filter(Signal.created_at >= since)
+            .filter(Signal.status.in_(["opened", "tp1", "closed"]))
+            .count()
+        )
+
     def snapshot(self, db: Session, bot: Bot | None, equity_usdt: float | None = None, hours: int = 24) -> dict:
         config = dict(bot.config_json or {}) if bot else {}
         daily_net_pnl = self.daily_net_pnl_usdt(db, hours=hours)
@@ -40,11 +56,19 @@ class LiveSafetyService:
         daily_loss_blocked = daily_loss_pct >= max_daily_loss_pct
         kill_switch_enabled = bool(config.get("kill_switch_enabled"))
 
+        max_trades_per_day = int(getattr(settings, "MAX_TRADES_PER_DAY", 0) or 0)
+        trades_today = self.trades_opened_today(db, hours=hours) if max_trades_per_day > 0 else 0
+        trade_count_blocked = bool(max_trades_per_day > 0 and trades_today >= max_trades_per_day)
+
         blockers: list[str] = []
         if kill_switch_enabled:
             blockers.append("owner kill switch is enabled")
         if daily_loss_blocked:
             blockers.append("daily loss circuit breaker is active")
+        if trade_count_blocked:
+            blockers.append(
+                f"daily trade-count limit reached ({trades_today}/{max_trades_per_day})"
+            )
 
         return {
             "blocked": bool(blockers),
@@ -59,6 +83,9 @@ class LiveSafetyService:
             "daily_loss_blocked": daily_loss_blocked,
             "equity_usdt": equity,
             "window_hours": hours,
+            "trades_today": trades_today,
+            "max_trades_per_day": max_trades_per_day,
+            "trade_count_blocked": trade_count_blocked,
         }
 
     def enforce(self, db: Session, bot: Bot | None, equity_usdt: float | None = None) -> dict:

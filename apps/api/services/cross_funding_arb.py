@@ -235,11 +235,23 @@ class CrossFundingArbEngine:
                 except Exception:  # noqa: BLE001
                     continue
             open_symbols = {p["symbol"] for p in state["open"]}
+
+            def _cooldown_passed(sym: str) -> bool:
+                """(#farb-cooldown-sentinel-2026-07-25) Кулдаун применяется ТОЛЬКО
+                к символам, которые реально закрывались. Раньше отсутствие записи
+                давало sentinel 0.0 (== «закрыт в эпоху 0»), и условие
+                `now - 0.0 >= cooldown` держалось лишь потому, что now — большой
+                unix-timestamp. При любом малом now (тесты, backtest, replay,
+                относительное время) движок молча НЕ открывал ни одной позиции.
+                Тот же класс ошибки, что уже ловили в `opened_ts or now_ts`."""
+                last = last_closed_ts.get(sym)
+                return last is None or (now - last) >= cooldown_sec
+
             candidates = [
                 items[s] for s in self._symbols()
                 if s in items
                 and s not in open_symbols
-                and (now - last_closed_ts.get(s, 0.0)) >= cooldown_sec
+                and _cooldown_passed(s)
             ]
             candidates.sort(
                 key=lambda i: abs(float((i.get("spread") or {}).get("spread_annualized_pct") or 0.0)),

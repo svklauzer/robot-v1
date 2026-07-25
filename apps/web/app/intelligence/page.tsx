@@ -41,8 +41,13 @@ const IMPORTANT_DECISIONS = [
   "protective_breakeven_profit_guard",
   "adaptive_mfe_capture",
   "trend_ride_trailing_stop",
+  "trend_capture_band",
   "stop_loss",
   "tp2_reached",
+
+  // защита от чурна: перезаход по цене хуже собственного выхода
+  "reentry_cooldown_active",
+  "reentry_adverse_price",
 
   // depth + anti-drain (новые коды бэкенда)
   "blocked_depth_gate",
@@ -773,6 +778,9 @@ function decisionLabel(code: string | null | undefined) {
     symbol_negative_expectancy_blocked: "Заблокирован: отрицательное матожидание",
     symbol_weak_reduce_risk: "Слабый символ: риск снижен",
     reentry_cooldown_active: "Cooldown повторного входа",
+    // (#reentry-adverse-price-2026-07-25) Второй контур: таймер истёк, но вход
+    // был бы ХУЖЕ прошлого выхода внутри чурн-зоны (round-trip дважды за тот же сетап).
+    reentry_adverse_price: "Перезаход по худшей цене (чурн)",
 
     skip_no_trade_conditions: "Нет условий",
     short_candidate_but_shorts_disabled: "Short отключён",
@@ -783,6 +791,7 @@ function decisionLabel(code: string | null | undefined) {
     // lifecycle / выходы
     breakeven_lock: "Безубыток-замок",
     scalp_breakeven_lock: "Скальп: безубыток-замок",
+    trend_capture_band: "Трендовая фиксация (полоса MFE)",
     adaptive_post_tp1_stop: "Трейл после TP1",
     trend_trailing_stop: "Трейл по тренду",
     adaptive_trailing_stop: "Адаптивный трейл",

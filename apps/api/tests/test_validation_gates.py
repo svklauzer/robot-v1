@@ -63,7 +63,7 @@ def test_validation_gates_block_negative_pnl_bad_reasons_and_small_sample():
         assert result["net_pnl_usdt"] == -4.0
         assert result["failed_setup_share_pct"] == 50.0
         assert result["positive_then_negative_rate_pct"] == 50.0
-        assert "validation rolling net PnL is not positive after costs" in result["blockers"]
+        assert "validation rolling net PnL is not positive after costs (honest fills)" in result["blockers"]
         assert "validation failed_setup_exit share is above threshold" in result["blockers"]
         assert "validation positive_then_negative rate is above threshold or missing lifecycle sample" in result["blockers"]
         assert "validation requires at least 200 closed paper/live_shadow outcomes" in result["blockers"]
@@ -88,6 +88,6 @@ def test_validation_gates_only_block_runtime_when_live_enabled(monkeypatch):
         live_state = ValidationGateService(min_closed=5).live_blockers(db)
         assert live_state["enforced"] is True
         assert live_state["live_blockers"]
-        assert "validation rolling net PnL is not positive after costs" in live_state["live_blockers"]
+        assert "validation rolling net PnL is not positive after costs (honest fills)" in live_state["live_blockers"]
     finally:
         db.close()

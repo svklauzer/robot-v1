@@ -3478,6 +3478,8 @@ async def intelligence_scan_run():
                 current_priority_score=float(priority_score or 0),
                 current_setup_score=float(setup_score or 0),
                 current_rr_tp2=float(plan.net_rr_tp2 or 0),
+                # (#reentry-adverse-price-2026-07-25) не перезаходим дороже выхода
+                entry_price=float(getattr(plan, "entry_price", 0) or 0) or None,
             )
 
             if not cooldown_result.allowed:
