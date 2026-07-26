@@ -138,6 +138,20 @@ def system_exchange_diagnostics(timeout: float = 8.0):
     return diagnose(timeout=timeout)
 
 
+@router.get("/egress-history", dependencies=[Depends(require_owner_action)])
+def system_egress_history(hours: float = 24.0):
+    """(#egress-monitor-2026-07-26) Доказательная база для тикета в поддержку.
+
+    Временной ряд доступности внешних хостов, замеренный С САМОГО инстанса, с
+    контрольной группой (Cloudflare/Google/Telegram). `outage_windows` — готовый
+    список окон с временными метками: именно то, что просит поддержка и чего
+    нет на глобальной статус-странице платформы.
+    """
+    from services.egress_monitor import history
+
+    return history(hours=hours)
+
+
 @router.get("/readiness", dependencies=[Depends(require_owner_action)])
 def system_readiness():
     db = SessionLocal()

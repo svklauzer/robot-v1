@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     EGRESS_GUARD_ENABLED: bool = True
     EGRESS_DNS_TIMEOUT_SEC: float = 3.0
     EGRESS_CACHE_TTL_SEC: float = 30.0
+    # ── Монитор исходящей сети (#egress-monitor-2026-07-26) ───────────────────
+    # Статус-страница Render показывает «All Systems Operational» и «No downtime»
+    # за 26.07, тогда как инстанс в те же часы не видел ни HTX, ни Kraken.
+    # Противоречия нет: глобальная страница отражает платформенные сервисы, а не
+    # egress конкретного инстанса. Доказательства собираем сами, с той стороны,
+    # где проблема, — вместе с контрольной группой хостов для разделения причин.
+    EGRESS_MONITOR_ENABLED: bool = True
+    EGRESS_MONITOR_INTERVAL_SEC: int = 60
+    EGRESS_MONITOR_TIMEOUT_SEC: float = 5.0
+    EGRESS_MONITOR_PATH: str = "storage/ml/egress_monitor.jsonl"
     HTX_MARKET_TYPE: str = "spot"
     # Универсум подобран по РЕАЛЬНОЙ ликвидности HTX spot (top-of-book спред):
     # BTC ~0.00002%, ETH ~0.0006%, AVAX ~0.008%, XRP ~0.017%, SOL ~0.036%,

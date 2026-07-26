@@ -382,7 +382,13 @@ class HTXClient:
             self.load_markets()
             return float(self.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
-            log_event(logger, logging.WARNING, "htx_amount_precision_fallback", symbol=symbol, error=str(e))
+            # (#precision-log-2026-07-26) Логируем САМО значение: без него разобрать
+            # «amount must be greater than minimum amount precision» невозможно —
+            # не видно, пришёл ли микроскопический остаток или не загрузились рынки.
+            log_event(logger, logging.WARNING, "htx_amount_precision_fallback",
+                      symbol=symbol, amount=float(amount),
+                      markets_loaded=bool(HTXClient._cached_markets),
+                      error_type=type(e).__name__, error=str(e))
             return float(amount)
 
     def market_limits(self, symbol: str) -> dict:
@@ -405,8 +411,16 @@ class HTXClient:
             }
 
         except Exception as e:
-            log_event(logger, logging.WARNING, "htx_market_meta_error", symbol=symbol, error=str(e))
+            # (#limits-silent-off-2026-07-26) Пустые лимиты = валидация ОТКЛЮЧЕНА:
+            # в trade_plan проверка `if min_amount is not None` просто не сработает,
+            # и план построится без сверки с биржевыми минимумами. При сетевом сбое
+            # (markets не загрузились) это происходило молча. Помечаем явно.
+            log_event(logger, logging.WARNING, "htx_market_meta_error", symbol=symbol,
+                      error_type=type(e).__name__, error=str(e),
+                      note="лимиты биржи недоступны — проверка min_amount/min_cost "
+                           "для этого символа НЕ выполняется")
             return {
+                "limits_available": False,
                 "min_amount": None,
                 "max_amount": None,
                 "min_cost": None,

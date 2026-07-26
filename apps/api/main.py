@@ -294,6 +294,42 @@ async def background_ml_retrain_loop():
         await asyncio.sleep(int(getattr(settings, "ML_RETRAIN_INTERVAL_SEC", 86400)))
 
 
+async def background_egress_monitor_loop():
+    """Непрерывный замер исходящей сети (#egress-monitor-2026-07-26).
+
+    Статус-страница платформы показывает «All Systems Operational», а инстанс в
+    те же часы не видит ни HTX, ни Kraken. Противоречия нет: глобальная страница
+    отражает платформенные сервисы, а не egress конкретного инстанса — этот слой
+    на ней не виден в принципе. Поэтому доказательства собираем сами, с той
+    стороны, где проблема, и с контрольной группой хостов, чтобы отличить
+    «лежит сеть инстанса» от «недоступны конкретно биржи».
+
+    Замер блокирующий (DNS+TCP) → уходит в to_thread, event loop не трогаем.
+    Fail-open: сбой монитора не влияет ни на что.
+    """
+    await asyncio.sleep(20)
+
+    while True:
+        try:
+            if bool(getattr(settings, "EGRESS_MONITOR_ENABLED", True)):
+                from services.egress_monitor import log_snapshot, probe_once
+
+                snapshot = await asyncio.to_thread(probe_once)
+                await asyncio.to_thread(log_snapshot, snapshot)
+                if snapshot["verdict"] != "ok":
+                    log_event(
+                        logger, logging.WARNING, "egress_monitor_degraded",
+                        verdict=snapshot["verdict"],
+                        exchange_ok=f'{snapshot["exchange_ok"]}/{snapshot["exchange_total"]}',
+                        control_ok=f'{snapshot["control_ok"]}/{snapshot["control_total"]}',
+                    )
+        except Exception as e:  # noqa: BLE001
+            log_event(logger, logging.ERROR, "egress_monitor_error",
+                      error_type=type(e).__name__, error=str(e))
+
+        await asyncio.sleep(int(getattr(settings, "EGRESS_MONITOR_INTERVAL_SEC", 60)))
+
+
 async def background_venues_spread_loop():
     """Почасовой снапшот funding-спредов HTX↔Kraken (#kraken-p1-2026-07-18, P1.5).
 
@@ -587,6 +623,7 @@ async def lifespan(app: FastAPI):
 
     venues_spread_loop_enabled = True
     venues_spread_task = asyncio.create_task(background_venues_spread_loop())
+    egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
 
     yield
 
