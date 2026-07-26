@@ -125,6 +125,19 @@ def system_product_e2e_smoke(payload: ProductE2ESmokeRequest | None = None):
         db.close()
 
 
+@router.get("/exchange-diagnostics", dependencies=[Depends(require_owner_action)])
+def system_exchange_diagnostics(timeout: float = 8.0):
+    """(#htx-outage-2026-07-26) Почему биржа недоступна: DNS / TCP / TLS / HTTP.
+
+    Запускать С САМОГО инстанса — проверяет сеть именно из ДЦ, где живёт сервис.
+    Логи ccxt дают только `htx GET <url>` без причины; здесь причина названа явно,
+    включая гео-блокировку (403/451) и подсказку, какой хост живой.
+    """
+    from services.exchange_diagnostics import diagnose
+
+    return diagnose(timeout=timeout)
+
+
 @router.get("/readiness", dependencies=[Depends(require_owner_action)])
 def system_readiness():
     db = SessionLocal()

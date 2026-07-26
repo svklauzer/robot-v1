@@ -12,6 +12,7 @@ from services.billing_service import BillingService
 from services.exchange_reconciliation import ExchangeReconciliationService
 from services.exit_policy import ExitPolicyService
 from services.funding_arbitrage import FundingArbEngine
+from services.htx_client import HTXClient
 from services.live_safety import LiveSafetyService
 from services.market_connectivity import MarketConnectivityService
 from services.ml_outcome_stats import MLOutcomeStatsService
@@ -54,6 +55,10 @@ class SystemHealthService:
             },
             "loops": loops or {},
             "market": MarketConnectivityService().check(market_symbol),
+            # (#htx-outage-2026-07-26) Состояние размыкателя биржи: видно, что HTX
+            # признан недоступным, на каком хосте сейчас и когда будет проба.
+            # Без этого недоступность биржи выглядела как «сервис упал».
+            "exchange_circuit": HTXClient.circuit_state(),
             "exchange_reconciliation": ExchangeReconciliationService().check(db),
             "signals": signal_counts,
             "subscribers": subscriber_counts,

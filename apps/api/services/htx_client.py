@@ -36,6 +36,75 @@ class HTXClient:
     _fee_api_backoff_until: float = 0.0
     _FEE_BACKOFF_SECONDS: float = 4 * 3600  # 4 hours
 
+    # ── Circuit breaker всей биржи (#htx-outage-2026-07-26) ───────────────────
+    # Инцидент 26.07: HTX перестал отвечать (RequestTimeout на ПУБЛИЧНОМ
+    # /v1/common/timestamp — ключи ни при чём). Каждый вызов уходил в
+    # timeout 45s × 5 попыток + 20s блокирующего sleep = 245s. Сканирование
+    # (8 символов × 5 ТФ) морозило event loop на десятки минут → /health
+    # переставал отвечать → Render убивал инстанс. В логах видно ровно это:
+    # последний health в 17:23:49, рестарт в 17:24:55 — 66с тишины.
+    #
+    # Размыкатель превращает многоминутную заморозку в мгновенное исключение:
+    # после N подряд неудач цепь размыкается на M секунд, вызовы падают сразу.
+    # Торговый цикл ловит исключение и идёт спать — сервис жив.
+    _cb_consecutive_failures: int = 0
+    _cb_open_until: float = 0.0
+    _cb_host_index: int = 0
+
+    class ExchangeUnavailable(Exception):
+        """Цепь разомкнута: биржа признана недоступной, сеть не трогаем."""
+
+    @classmethod
+    def _cb_hosts(cls) -> list[str]:
+        """Хосты для ротации. HTX действительно держит несколько эндпоинтов
+        (api.huobi.pro / api-aws.huobi.pro) и мигрирует на htx.com — если один
+        адрес заблокирован или не маршрутизируется из ДЦ, пробуем следующий."""
+        raw = str(getattr(settings, "HTX_API_HOSTNAME_FALLBACKS", "") or "")
+        hosts = [h.strip() for h in raw.split(",") if h.strip()]
+        primary = str(getattr(settings, "HTX_API_HOSTNAME", "") or "").strip()
+        if primary:
+            hosts = [primary] + [h for h in hosts if h != primary]
+        return hosts
+
+    @classmethod
+    def circuit_state(cls) -> dict:
+        now = time.time()
+        hosts = cls._cb_hosts()
+        return {
+            "open": now < cls._cb_open_until,
+            "opens_in_sec": max(0.0, round(cls._cb_open_until - now, 1)),
+            "consecutive_failures": cls._cb_consecutive_failures,
+            "active_host": hosts[cls._cb_host_index % len(hosts)] if hosts else None,
+            "hosts": hosts,
+        }
+
+    @classmethod
+    def _cb_note_success(cls) -> None:
+        cls._cb_consecutive_failures = 0
+        cls._cb_open_until = 0.0
+
+    @classmethod
+    def _cb_note_failure(cls) -> None:
+        cls._cb_consecutive_failures += 1
+        threshold = int(getattr(settings, "HTX_CIRCUIT_FAILURE_THRESHOLD", 3))
+        if cls._cb_consecutive_failures < threshold:
+            return
+        cls._cb_open_until = time.time() + float(
+            getattr(settings, "HTX_CIRCUIT_OPEN_SECONDS", 120.0)
+        )
+        # Ротация хоста: следующая проба пойдёт на другой эндпоинт.
+        hosts = cls._cb_hosts()
+        if len(hosts) > 1:
+            cls._cb_host_index = (cls._cb_host_index + 1) % len(hosts)
+        log_event(
+            logger,
+            logging.ERROR,
+            "htx_circuit_open",
+            consecutive_failures=cls._cb_consecutive_failures,
+            open_seconds=float(getattr(settings, "HTX_CIRCUIT_OPEN_SECONDS", 120.0)),
+            next_host=hosts[cls._cb_host_index] if hosts else None,
+        )
+
     def __init__(self):
         proxy_url = str(getattr(settings, "HTX_PROXY_URL", "") or "").strip()
 
@@ -43,7 +112,11 @@ class HTXClient:
             "apiKey": settings.HTX_API_KEY,
             "secret": settings.HTX_API_SECRET,
             "enableRateLimit": True,
-            "timeout": 45000,   # raised 20s→30s→45s; Docker-on-Windows + VPN adds RTT
+            # (#htx-outage-2026-07-26) 45s → 15s. 45 закладывали под Docker-on-Windows
+            # + VPN, но в проде это потолок заморозки на КАЖДУЮ попытку: 45×5+20 = 245с
+            # на один вызов. Живой HTX отвечает за десятки миллисекунд; 15с — это уже
+            # «биржа не отвечает», ждать дольше смысла нет.
+            "timeout": int(getattr(settings, "HTX_HTTP_TIMEOUT_MS", 15000)),
             "options": {
                 "defaultType": settings.HTX_MARKET_TYPE,
                 "adjustForTimeDifference": True,
@@ -54,7 +127,11 @@ class HTXClient:
         # Set HTX_PROXY_URL=http://user:pass@host:port  or
         #     HTX_PROXY_URL=socks5://user:pass@host:port
         # Переопределение хоста (например api-aws.huobi.pro для AWS-регионов).
-        hostname = str(getattr(settings, "HTX_API_HOSTNAME", "") or "").strip()
+        # (#htx-outage-2026-07-26) Хост берём из ротации размыкателя: если основной
+        # эндпоинт перестал маршрутизироваться из ДЦ, следующая проба уйдёт на
+        # запасной (api-aws.huobi.pro / api.htx.com) без ручного вмешательства.
+        _hosts = HTXClient._cb_hosts()
+        hostname = _hosts[HTXClient._cb_host_index % len(_hosts)] if _hosts else ""
         if hostname:
             exchange_config["hostname"] = hostname
 
@@ -88,20 +165,51 @@ class HTXClient:
         Jitter (±20%) prevents thundering-herd when multiple symbols retry in sync.
         Delays: ~2s, ~4s before attempts 2 and 3.
         """
+        # (#htx-outage-2026-07-26) Цепь разомкнута — не тратим 245с на заведомо
+        # мёртвую биржу и не морозим event loop. Падаем сразу, вызывающий цикл
+        # переживёт исключение и попробует на следующей итерации.
+        if time.time() < HTXClient._cb_open_until:
+            raise HTXClient.ExchangeUnavailable(
+                f"htx circuit open for {HTXClient._cb_open_until - time.time():.0f}s "
+                f"after {HTXClient._cb_consecutive_failures} consecutive failures"
+            )
+
+        # Адаптивные попытки: первый сбой может быть разовым — отрабатываем полный
+        # набор. Но если предыдущий вызов уже упал, повторять по 3–5 раз бессмысленно,
+        # это лишь удлиняет заморозку. Сокращаем до одной попытки, чтобы размыкатель
+        # сработал за секунды, а не за минуты.
+        if HTXClient._cb_consecutive_failures >= 1:
+            retries = 1
+
         last_error = None
 
         for attempt in range(1, retries + 1):
             try:
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
+                HTXClient._cb_note_success()
+                return result
             except Exception as e:
                 last_error = e
-                log_event(logger, logging.WARNING, "htx_retry", attempt=attempt, retries=retries, error=str(e))
+                # error_type критичен для диагностики: str(e) у ccxt для
+                # RequestTimeout — это просто "htx GET <url>" без причины, и по
+                # логам 26.07 нельзя было отличить таймаут от 403 (гео-блок),
+                # DNS-сбоя или 5xx. Теперь тип виден сразу.
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "htx_retry",
+                    attempt=attempt,
+                    retries=retries,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                )
 
                 if attempt < retries:
                     base = delay * attempt
                     jitter = base * 0.2 * (random.random() * 2 - 1)  # ±20%
                     time.sleep(max(0.1, base + jitter))
 
+        HTXClient._cb_note_failure()
         raise last_error
 
     def load_markets(self):
