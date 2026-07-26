@@ -13,6 +13,7 @@ from services.exchange_reconciliation import ExchangeReconciliationService
 from services.exit_policy import ExitPolicyService
 from services.funding_arbitrage import FundingArbEngine
 from services.htx_client import HTXClient
+from services.net_guard import state as net_guard_state
 from services.live_safety import LiveSafetyService
 from services.market_connectivity import MarketConnectivityService
 from services.ml_outcome_stats import MLOutcomeStatsService
@@ -59,6 +60,10 @@ class SystemHealthService:
             # признан недоступным, на каком хосте сейчас и когда будет проба.
             # Без этого недоступность биржи выглядела как «сервис упал».
             "exchange_circuit": HTXClient.circuit_state(),
+            # (#egress-guard-2026-07-26) Резолвится ли вообще исходящая сеть.
+            # В инциденте 26.07 одновременно легли HTX и Kraken — это признак
+            # проблемы egress/DNS ДЦ, а не конкретной биржи.
+            "egress": net_guard_state(),
             "exchange_reconciliation": ExchangeReconciliationService().check(db),
             "signals": signal_counts,
             "subscribers": subscriber_counts,

@@ -30,7 +30,14 @@ def _alive(*_a, **_k):
 
 
 @pytest.fixture(autouse=True)
-def _reset_circuit():
+def _reset_circuit(monkeypatch):
+    # Изолируем размыкатель от egress-гварда: здесь проверяется реакция на
+    # ошибки БИРЖИ, а не на отсутствие DNS (у DNS свой набор тестов).
+    from services import net_guard
+
+    net_guard.reset_cache()
+    monkeypatch.setattr(net_guard, "_blocking_resolve", lambda host: True)
+
     HTXClient._cb_consecutive_failures = 0
     HTXClient._cb_open_until = 0.0
     HTXClient._cb_host_index = 0
@@ -38,6 +45,7 @@ def _reset_circuit():
     HTXClient._cb_consecutive_failures = 0
     HTXClient._cb_open_until = 0.0
     HTXClient._cb_host_index = 0
+    net_guard.reset_cache()
 
 
 def _client():

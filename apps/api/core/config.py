@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     # (разовый сбой) — 120с без торговли; цена медленного размыкания — убитый инстанс.
     HTX_CIRCUIT_FAILURE_THRESHOLD: int = 2
     HTX_CIRCUIT_OPEN_SECONDS: float = 120.0
+    # ── Предохранитель исходящей сети (#egress-guard-2026-07-26) ──────────────
+    # Второй раунд логов 26.07: 65с между попытками при таймауте ccxt 15с — время
+    # уходит в getaddrinfo, который синхронный и НЕ подчиняется таймауту ccxt.
+    # Отсюда 5.5 минут блокировки на load_markets и «No open HTTP ports detected»:
+    # порт слушается, но accept() не выполняется — сервис не поднялся вообще.
+    # Резолвим в отдельном потоке с жёстким таймаутом: зависший поток бросаем.
+    EGRESS_GUARD_ENABLED: bool = True
+    EGRESS_DNS_TIMEOUT_SEC: float = 3.0
+    EGRESS_CACHE_TTL_SEC: float = 30.0
     HTX_MARKET_TYPE: str = "spot"
     # Универсум подобран по РЕАЛЬНОЙ ликвидности HTX spot (top-of-book спред):
     # BTC ~0.00002%, ETH ~0.0006%, AVAX ~0.008%, XRP ~0.017%, SOL ~0.036%,

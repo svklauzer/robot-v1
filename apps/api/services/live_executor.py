@@ -208,9 +208,20 @@ class LiveExecutor:
 
         # предохранитель размера (нотионал)
         cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
-        if cap > 0 and reference_price and amount * float(reference_price) > cap:
+        over_cap = bool(cap > 0 and reference_price and amount * float(reference_price) > cap)
+
+        # (#dry-run-cap-2026-07-26) В LIVE кэп блокирует отправку — это его работа.
+        # В DRY_RUN блокировать нельзя: весь смысл режима в том, чтобы прогнать
+        # живой путь исполнения целиком и увидеть, что он делает. Кэп, стоящий
+        # ДО ветки dry_run, обрывал прогон и делал этап 1 плана вывода в live
+        # бессмысленным — в логах 26.07 видно ровно это:
+        #   {"cap": 25.0, "event": "live_order_notional_cap", "notional": 249.34}
+        # Здесь предупреждаем громко (владелец должен видеть, что в live этот
+        # ордер был бы отклонён), но прогон продолжаем.
+        if over_cap and mode != "dry_run":
             log_event(logger, logging.WARNING, "live_order_notional_cap",
-                      symbol=symbol, notional=amount * float(reference_price), cap=cap)
+                      symbol=symbol, notional=amount * float(reference_price), cap=cap,
+                      blocked=True)
             return OrderResult(ok=False, mode=mode, sent=False, status="error",
                                error=f"notional>{cap}", **base)
 
@@ -218,6 +229,13 @@ class LiveExecutor:
 
         # DRY-RUN: проходим всю логику, но НЕ отправляем. Возвращаем синтетический ack.
         if mode == "dry_run":
+            if over_cap:
+                log_event(logger, logging.WARNING, "live_order_notional_cap",
+                          symbol=symbol, notional=amount * float(reference_price), cap=cap,
+                          blocked=False,
+                          note="в LIVE этот ордер был бы ОТКЛОНЁН кэпом. Поднять "
+                               "LIVE_MAX_ORDER_NOTIONAL_USDT или снизить размер позиции "
+                               "ДО включения live — иначе бумага разойдётся с биржей")
             log_event(logger, logging.INFO, "live_dry_run_order", symbol=symbol, side=side,
                       qty=amount, market_type=market_type, reduce_only=reduce_only,
                       ref_price=reference_price, purpose=purpose, client_order_id=client_id)

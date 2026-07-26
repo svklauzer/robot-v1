@@ -174,6 +174,21 @@ class HTXClient:
                 f"after {HTXClient._cb_consecutive_failures} consecutive failures"
             )
 
+        # (#egress-guard-2026-07-26) DNS проверяем ДО похода в ccxt: getaddrinfo
+        # синхронный и не подчиняется таймауту ccxt — именно на нём уходило по 65с
+        # на попытку (5.5 минут на load_markets), из-за чего Render не мог даже
+        # подключиться к порту. Проверка идёт в отдельном потоке с жёстким лимитом.
+        from services.net_guard import resolve_ok
+
+        _hosts = HTXClient._cb_hosts()
+        _host = _hosts[HTXClient._cb_host_index % len(_hosts)] if _hosts else "api.huobi.pro"
+        if not resolve_ok(_host):
+            HTXClient._cb_note_failure()
+            raise HTXClient.ExchangeUnavailable(
+                f"htx host {_host} does not resolve within DNS guard timeout — "
+                f"outbound network/DNS problem, not the exchange"
+            )
+
         # Адаптивные попытки: первый сбой может быть разовым — отрабатываем полный
         # набор. Но если предыдущий вызов уже упал, повторять по 3–5 раз бессмысленно,
         # это лишь удлиняет заморозку. Сокращаем до одной попытки, чтобы размыкатель

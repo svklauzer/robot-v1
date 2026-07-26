@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
@@ -115,13 +116,27 @@ class RobotLoop:
         _dyn_free = 0.0
         if dyn_alloc:
             try:
-                dyn_budget, analyses_cache, _dyn_ready, _dyn_free = self._compute_dynamic_budget(db, bot, balance_usdt)
+                # (#egress-guard-2026-07-26) Пред-проход ходит в биржу по всем
+                # символам СИНХРОННО. В event loop это означало, что при
+                # недоступной сети uvicorn не мог выполнить accept() — Render
+                # писал «No open HTTP ports detected» и убивал инстанс, хотя
+                # порт слушался. Уносим блокирующую работу в отдельный поток.
+                dyn_budget, analyses_cache, _dyn_ready, _dyn_free = await asyncio.to_thread(
+                    self._compute_dynamic_budget, db, bot, balance_usdt
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[DYNAMIC MARGIN ERROR] {exc}")
                 dyn_budget, analyses_cache, _dyn_free = None, {}, 0.0
 
         for symbol in bot.config_json.get("symbols", []):
-            result = analyses_cache[symbol] if symbol in analyses_cache else self.intelligence.analyze_symbol(symbol)
+            # (#egress-guard-2026-07-26) analyze_symbol — синхронные сетевые вызовы
+            # (OHLCV по 5 ТФ). Держать их в event loop нельзя: при сетевом сбое
+            # они морозят весь веб-процесс.
+            result = (
+                analyses_cache[symbol]
+                if symbol in analyses_cache
+                else await asyncio.to_thread(self.intelligence.analyze_symbol, symbol)
+            )
             if result is None:
                 continue
 

@@ -192,6 +192,13 @@ def test_fetch_funding_rates_filters_symbols_before_ccxt(monkeypatch):
     # символов — иначе парсит все тикеры, включая истёкшие FI_* без рынка, и падает.
     from services.kraken_client import KrakenClient
 
+    # (#egress-guard-2026-07-26) _retry теперь сначала проверяет резолв хоста —
+    # тест про фильтрацию символов, а не про сеть, поэтому резолв мокаем.
+    from services import net_guard
+
+    net_guard.reset_cache()
+    monkeypatch.setattr(net_guard, "_blocking_resolve", lambda host: True)
+
     client = KrakenClient.__new__(KrakenClient)  # без ccxt-инициализации
 
     class _FakeExchange:

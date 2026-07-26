@@ -98,18 +98,43 @@ def diagnose(timeout: float | None = None) -> dict[str, Any]:
 
     timeout = float(timeout or 8.0)
     hosts = HTXClient._cb_hosts() or ["api.huobi.pro"]
+
+    # (#egress-guard-2026-07-26) Контрольные хосты вне HTX. В инциденте 26.07
+    # одновременно лёг и Kraken — если не резолвятся и они, проблема в egress/DNS
+    # ДЦ, а не в бирже, и менять HTX_API_HOSTNAME бесполезно.
+    control = ["futures.kraken.com", "api.telegram.org"]
     results = [_probe_host(h, timeout=timeout) for h in hosts]
+    control_results = [_probe_host(h, timeout=timeout) for h in control]
 
     reachable = [r for r in results if (r.get("http") or {}).get("ok")]
+    control_dns_ok = [r for r in control_results if (r.get("dns") or {}).get("ok")]
+
+    if not reachable and not control_dns_ok:
+        verdict = (
+            "НЕ РЕЗОЛВЯТСЯ НИ БИРЖИ, НИ КОНТРОЛЬНЫЕ ХОСТЫ — проблема исходящей "
+            "сети/DNS всего инстанса, а не HTX. Менять HTX_API_HOSTNAME бесполезно; "
+            "смотреть сторону Render (egress, DNS-резолвер)"
+        )
+    elif not reachable and control_dns_ok:
+        verdict = (
+            "Контрольные хосты живы, а хосты HTX — нет: проблема адресная. "
+            "Это либо блокировка HTX для этого ДЦ, либо смена эндпоинта — "
+            "нужен HTX_PROXY_URL или другой HTX_API_HOSTNAME"
+        )
+    else:
+        verdict = "Есть доступный хост HTX — см. recommended_hostname"
+
     return {
         "status": "ok",
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "verdict": verdict,
         "any_host_reachable": bool(reachable),
         "reachable_hosts": [r["host"] for r in reachable],
         "recommended_hostname": reachable[0]["host"] if reachable else None,
         "proxy_configured": bool(str(getattr(settings, "HTX_PROXY_URL", "") or "").strip()),
         "circuit": HTXClient.circuit_state(),
         "hosts": results,
+        "control_hosts": control_results,
         "note": (
             "Публичный /v1/common/timestamp не требует API-ключа: если он не "
             "отвечает, статус ключа значения не имеет. Если доступен НЕ основной "

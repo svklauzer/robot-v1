@@ -431,6 +431,24 @@ class ExecutionEngine:
                 margin_mode=getattr(settings, "TREND_MARGIN_MODE", "isolated"),
                 purpose=purpose,
             )
+            # (#live-paper-divergence-2026-07-26) Результат live-ордера раньше
+            # никем не проверялся: бумажная позиция открывалась независимо от
+            # того, ушёл ордер или нет. В paper/dry_run это безвредно, а в LIVE
+            # даёт ТИХИЙ рассинхрон — система считает себя в рынке, а её там нет,
+            # и все последующие reduceOnly-выходы уходят в пустоту.
+            # Реальный случай: кэп нотионала 25 против позиции 249 USDT (ADA/USDT,
+            # 26.07) — ордер отклонён, бумага этого не заметила.
+            if not res.ok and LIVE_EXECUTOR.is_live():
+                from core.logging import get_logger, log_event
+                import logging as _logging
+
+                log_event(
+                    get_logger(__name__), _logging.ERROR, "live_paper_divergence",
+                    symbol=symbol, side=side, qty=float(qty), purpose=purpose,
+                    status=res.status, error=res.error,
+                    note="LIVE-ордер НЕ исполнен, а бумажная позиция ведётся дальше — "
+                         "состояние робота и биржи разошлись, требуется вмешательство",
+                )
             return res.as_dict()
         except Exception as exc:  # noqa: BLE001 — бумага не должна падать из-за live-слоя
             print(f"[LIVE submit skip] {symbol} {side}: {type(exc).__name__}: {exc}")

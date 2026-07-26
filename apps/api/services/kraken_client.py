@@ -73,13 +73,26 @@ class KrakenClient:
 
     def _retry(self, fn, *args, retries: int = 3, delay: float = 1.5, **kwargs):
         """Retry с экспоненциальным бэкоффом + джиттер ±20% (паттерн HTXClient)."""
+        # (#egress-guard-2026-07-26) В логах инцидента 26.07 лежал не только HTX,
+        # но и Kraken (`kraken_retry` на futures.kraken.com) — две независимые
+        # биржи одновременно означают проблему исходящей сети/DNS, а не биржи.
+        # Тот же предохранитель: не пускаем зависший getaddrinfo в event loop.
+        from services.net_guard import resolve_ok
+
+        if not resolve_ok("futures.kraken.com"):
+            raise ConnectionError(
+                "futures.kraken.com does not resolve within DNS guard timeout — "
+                "outbound network/DNS problem, not the exchange"
+            )
+
         last_error = None
         for attempt in range(1, retries + 1):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:  # noqa: BLE001
                 last_error = e
-                log_event(logger, logging.WARNING, "kraken_retry", attempt=attempt, retries=retries, error=str(e))
+                log_event(logger, logging.WARNING, "kraken_retry", attempt=attempt, retries=retries,
+                          error_type=type(e).__name__, error=str(e))
                 if attempt < retries:
                     base = delay * attempt
                     jitter = base * 0.2 * (random.random() * 2 - 1)
