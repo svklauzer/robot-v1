@@ -20,8 +20,19 @@ from typing import Any
 from core.config import settings
 
 
-def _probe_host(host: str, *, timeout: float) -> dict[str, Any]:
-    step: dict[str, Any] = {"host": host}
+def _probe_host(host: str, *, timeout: float, role: str = "exchange") -> dict[str, Any]:
+    """(#diag-control-role-2026-07-27) role различает СМЫСЛ проверки.
+
+    Для хоста биржи важен рабочий ответ на публичный эндпоинт HTX. Для
+    контрольного хоста важно ровно одно: доходит ли до него сеть. Дёргать у
+    Kraken и Telegram путь `/v1/common/timestamp` бессмысленно — его там нет,
+    и ответ 302/404 ЕСТЬ доказательство живой сети, а не ошибка.
+
+    Первая версия этого не различала и красила живой Kraken в красный с
+    подписью «биржа отвечает ошибкой». Контрольная группа существует, чтобы
+    снимать ложную тревогу, — а сама её и создавала.
+    """
+    step: dict[str, Any] = {"host": host, "role": role}
 
     # 1. DNS
     t0 = time.time()
@@ -64,16 +75,26 @@ def _probe_host(host: str, *, timeout: float) -> dict[str, Any]:
         step["verdict"] = "TCP есть, TLS не встаёт — вероятен MITM/перехват или SNI-фильтрация"
         return step
 
-    # 4. HTTP на публичный эндпоинт (ключи не нужны)
+    # 4. HTTP. Путь и критерий успеха зависят от роли хоста.
+    is_control = role == "control"
+    path = "/" if is_control else "/v1/common/timestamp"
     t0 = time.time()
     try:
         import httpx
 
-        r = httpx.get(f"https://{host}/v1/common/timestamp", timeout=timeout)
+        r = httpx.get(f"https://{host}{path}", timeout=timeout, follow_redirects=False)
+        ms = round((time.time() - t0) * 1000, 1)
+
+        if is_control:
+            # Любой HTTP-ответ = сеть до хоста доходит. Это всё, что от него нужно.
+            step["http"] = {"ok": True, "status": r.status_code, "ms": ms}
+            step["verdict"] = f"сеть доходит (HTTP {r.status_code})"
+            return step
+
         step["http"] = {
             "ok": r.status_code == 200,
             "status": r.status_code,
-            "ms": round((time.time() - t0) * 1000, 1),
+            "ms": ms,
             "body": r.text[:200],
         }
         if r.status_code == 200:
@@ -87,7 +108,11 @@ def _probe_host(host: str, *, timeout: float) -> dict[str, Any]:
             step["verdict"] = f"HTTP {r.status_code} — биржа отвечает ошибкой, не сеть"
     except Exception as e:  # noqa: BLE001
         step["http"] = {"ok": False, "error_type": type(e).__name__, "error": str(e)}
-        step["verdict"] = "TLS есть, но HTTP-ответа нет — биржа принимает соединение и молчит"
+        step["verdict"] = (
+            "TLS встаёт, но HTTP-ответа нет — сеть до хоста есть, отвечать он перестал"
+            if is_control
+            else "TLS есть, но HTTP-ответа нет — биржа принимает соединение и молчит"
+        )
 
     return step
 
@@ -103,8 +128,8 @@ def diagnose(timeout: float | None = None) -> dict[str, Any]:
     # одновременно лёг и Kraken — если не резолвятся и они, проблема в egress/DNS
     # ДЦ, а не в бирже, и менять HTX_API_HOSTNAME бесполезно.
     control = ["futures.kraken.com", "api.telegram.org"]
-    results = [_probe_host(h, timeout=timeout) for h in hosts]
-    control_results = [_probe_host(h, timeout=timeout) for h in control]
+    results = [_probe_host(h, timeout=timeout, role="exchange") for h in hosts]
+    control_results = [_probe_host(h, timeout=timeout, role="control") for h in control]
 
     reachable = [r for r in results if (r.get("http") or {}).get("ok")]
     control_dns_ok = [r for r in control_results if (r.get("dns") or {}).get("ok")]

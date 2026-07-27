@@ -399,6 +399,11 @@ export default function HealthPage() {
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">
                   Контрольные хосты — живы ли они, решает, где искать
                 </h3>
+                {/* Для контрольного хоста важно только «доходит ли сеть»: любой
+                    HTTP-ответ, включая 302 и 404, это доказательство. */}
+                <p className="mb-2 text-xs text-violet-100/40">
+                  Здесь любой HTTP-ответ — успех. 302 или 404 значат, что сеть дошла.
+                </p>
                 <div className="space-y-2">
                   {(diagnostics.control_hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
                 </div>
