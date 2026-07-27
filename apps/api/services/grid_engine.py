@@ -219,6 +219,49 @@ class GridEngine:
         if bool(getattr(settings, "GRID_FREEZE_ON_NEUTRAL", True)):
             cyc["frozen"] = (regime_now == "neutral")
 
+        # (#grid-vol-regime-2026-07-27) Заморозка добора на НАПРАВЛЕННОМ ПРОБОЕ.
+        #
+        # Сетка усредняется против движения — это её механика и её же риск.
+        # В боковике добор берёт осцилляцию; в пробое он берёт нож: каждый
+        # следующий уровень исполняется, цена не возвращается, и корзина растёт
+        # против тренда до стопа. Регайм long/short этого не ловит — он говорит
+        # о НАПРАВЛЕНИИ, а не о том, есть ли ещё возврат к среднему.
+        #
+        # Признак пробоя — расстояние цены от EMA в единицах ATR. Нормировка на
+        # ATR обязательна: 2% от EMA это пробой для BTC и обычный день для TRX.
+        #
+        # Гистерезис на двух порогах: замерзаем на breakout_dist, оттаиваем на
+        # range_dist (заметно меньшем), и только после confirm-тиков подряд.
+        # Без него корзина дёргалась бы у самой границы, включая и выключая
+        # добор на каждом тике — та же пила, что мы уже лечили у флипа.
+        if bool(getattr(settings, "GRID_FREEZE_ON_BREAKOUT", True)) and ema_now > 0 and atr > 0:
+            dist_atr = abs(price - ema_now) / atr
+            cyc["dist_atr"] = round(dist_atr, 3)
+            brk = float(getattr(settings, "GRID_BREAKOUT_ATR_DIST", 2.0))
+            rng = float(getattr(settings, "GRID_RANGE_ATR_DIST", 1.0))
+            need = int(getattr(settings, "GRID_RANGE_CONFIRM_TICKS", 3))
+
+            if dist_atr >= brk:
+                # Пробой — замерзаем немедленно и сбрасываем счётчик возврата.
+                cyc["vol_regime"] = "breakout"
+                cyc["range_streak"] = 0
+                cyc["frozen"] = True
+            elif dist_atr <= rng:
+                # Кандидат на возврат в диапазон — но не сразу: диапазон надо
+                # подтвердить, иначе оттаем на первом же откате внутри пробоя.
+                cyc["range_streak"] = int(cyc.get("range_streak", 0)) + 1
+                if cyc["range_streak"] >= need:
+                    cyc["vol_regime"] = "range"
+                    if not (bool(getattr(settings, "GRID_FREEZE_ON_NEUTRAL", True))
+                            and regime_now == "neutral"):
+                        cyc["frozen"] = False
+                else:
+                    cyc["vol_regime"] = "range_pending"
+            else:
+                # Промежуточная зона: состояние НЕ меняем — в этом и гистерезис.
+                cyc["vol_regime"] = cyc.get("vol_regime") or "range"
+                cyc["range_streak"] = 0
+
         confirm = int(getattr(settings, "GRID_FLIP_CONFIRM_TICKS", 3))
         if cyc["flip_streak"] >= confirm:
             filled = [lv for lv in cyc["levels"] if lv.get("filled")]

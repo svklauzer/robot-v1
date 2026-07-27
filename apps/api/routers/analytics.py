@@ -452,6 +452,41 @@ def analytics_symbol_performance(lookback: int = 12, window_hours: float | None 
         db.close()
 
 
+@router.get("/expectancy", dependencies=[Depends(require_owner_action)])
+def analytics_expectancy(window_hours: float | None = None, limit: int = 2000):
+    """(#expectancy-2026-07-27) Ожидание на сделку по символам и причинам входа.
+
+    Win-rate как критерий отбора вводит в заблуждение: на боевых #264–282 он
+    составил 67% при ожидании −0.251% на сделку. Здесь считается то, по чему
+    осмысленно сравнивать: сколько приносит одна средняя сделка после издержек.
+    """
+    from services.expectancy import symbol_expectancy
+
+    db = SessionLocal()
+    try:
+        return symbol_expectancy(db, window_hours=window_hours, limit=limit)
+    finally:
+        db.close()
+
+
+@router.get("/venue-expectancy", dependencies=[Depends(require_owner_action)])
+def analytics_venue_expectancy(window_hours: float = 720.0, limit: int = 2000):
+    """(#venue-expectancy-2026-07-27) Ожидание раздельно по spot/swap.
+
+    Round-trip spot ≈0.40% против swap ≈0.10%. При средней победе порядка 0.09%
+    смешивать их в одной статистике нельзя — разница определяет знак.
+    Здесь же сверка booked против achievable: положительный разрыв означает
+    запись результата лучше рынка, то есть повтор фантомных филлов.
+    """
+    from services.venue_expectancy import by_venue
+
+    db = SessionLocal()
+    try:
+        return by_venue(db, window_hours=window_hours, limit=limit)
+    finally:
+        db.close()
+
+
 @router.get("/symbol-policy-replay", dependencies=[Depends(require_owner_action)])
 def analytics_symbol_policy_replay(lookback: int = 12, sample_limit: int = 25):
     return SymbolPolicyReplayService().replay_path(

@@ -204,6 +204,34 @@ class RobotLoop:
 
             entry_from = float(result.entry_zone[0])
             entry_to = float(result.entry_zone[1])
+
+            # (#entry-zone-2026-07-27) Зона входа с учётом книги. Раньше она
+            # строилась только от последней цены: depth-гейт решал «входить или
+            # нет», но КУДА ставить цену — не влиял, и вход шёл фактически по
+            # рынку при любом состоянии стакана.
+            _ez = None
+            try:
+                from services.entry_zone import evaluate as _entry_zone_eval
+
+                _ez = _entry_zone_eval(
+                    side=result.action,
+                    last_price=(entry_from + entry_to) / 2.0,
+                    snapshot=ORDERBOOK_STORE.snapshot(symbol),
+                    regime=str(result.regime or ""),
+                )
+                if not _ez.allowed:
+                    self.decisions.record(
+                        db, symbol=symbol, status="rejected",
+                        decision="entry_zone_support_too_far", action=result.action,
+                        payload=_ez.to_payload(),
+                    )
+                    db.flush()
+                    continue
+                if _ez.entry_from is not None and _ez.entry_to is not None:
+                    entry_from, entry_to = float(_ez.entry_from), float(_ez.entry_to)
+            except Exception as exc:  # noqa: BLE001 — зона не должна ронять цикл
+                print(f"[ENTRY ZONE ERROR] {symbol}: {exc}")
+
             # ФИКС (#4): round(...,2) ломал суб-долларовые символы. Для ADA
             # (~0.166) середина зоны 0.1662 округлялась до 0.17 — это ВЫШЕ стопа
             # шорта (0.1686), поэтому проверка tp2<tp1<entry<stop падала и КАЖДЫЙ
@@ -606,7 +634,23 @@ class RobotLoop:
                 db.flush()
                 continue
 
-            performance_adjustment = self._apply_symbol_performance_adjustment(plan, performance)
+            # (#rsi-dynamic-2026-07-27) Поздний вход по RSI режет размер, а не
+            # запрещает сделку. Признак приходит комментарием из intelligence:
+            # `*_late_entry` означает зону между динамическим порогом и жёстким
+            # блоком — сильный тренд имеет право быть перекупленным, но входить
+            # в него в верхней части движения нужно меньшим размером.
+            _sq = getattr(result, "setup_quality", None) or {}
+            _comment = str(_sq.get("comment") or "") if isinstance(_sq, dict) else ""
+            _late = _comment.endswith("_late_entry")
+            _late_mult = (
+                float(getattr(settings, "RSI_LATE_ENTRY_RISK_MULTIPLIER", 0.55))
+                if _late else 1.0
+            )
+            performance_adjustment = self._apply_symbol_performance_adjustment(
+                plan, performance,
+                extra_multiplier=_late_mult,
+                extra_reason=_comment if _late else None,
+            )
             performance_adjustment["policy_profile"] = policy_profile
             if float(plan.qty or 0) <= 0:
                 continue
@@ -961,6 +1005,16 @@ class RobotLoop:
                     # Режим сделки для exit-политики: trend → ride (едем движение),
                     # scalp → быстрый выход. Range-вход (Phase 2) проставит "scalp".
                     "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
+                    # (#entry-zone-2026-07-27) Как строилась цена входа: по рынку
+                    # или перенесена к опоре в книге, и почему. Нужно, чтобы
+                    # сравнивать expected fill с achievable fill постфактум.
+                    "entry_zone_plan": _ez.to_payload() if _ez is not None else None,
+                    # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
+                    # вовсе: разрез результата по типу сетапа был невозможен —
+                    # `trend_volume_breakout_v2` и разворот от поддержки лежали в
+                    # одной куче «trend». Без этого поля нельзя ответить, какой
+                    # именно сетап зарабатывает, а какой кормит биржу.
+                    "entry_reason": str(getattr(result, "reason", "") or "unknown"),
                     # Контекст для ML-датасета (фичи на момент входа).
                     "regime": str(result.regime or ""),
                     "radar_state": str(getattr(result, "radar_state", "") or ""),
@@ -1030,8 +1084,17 @@ class RobotLoop:
 
         return payload
 
-    def _apply_symbol_performance_adjustment(self, plan, performance) -> dict:
+    def _apply_symbol_performance_adjustment(self, plan, performance,
+                                             extra_multiplier: float = 1.0,
+                                             extra_reason: str | None = None) -> dict:
+        # (#rsi-dynamic-2026-07-27) `extra_multiplier` — штраф за поздний вход по
+        # RSI. Множители перемножаются, а не выбирается минимальный: это разные
+        # независимые основания уменьшить размер (история символа и точка входа
+        # в движении), и совпадение обоих должно резать сильнее каждого.
         multiplier = float(getattr(performance, "risk_multiplier", 1.0) or 1.0)
+        extra_multiplier = float(extra_multiplier or 1.0)
+        if extra_multiplier != 1.0:
+            multiplier = round(multiplier * extra_multiplier, 6)
         original = {
             "qty": float(plan.qty or 0),
             "required_margin": float(plan.required_margin or 0),
@@ -1050,6 +1113,8 @@ class RobotLoop:
             "allowed": bool(getattr(performance, "allowed", True)),
             "reason": getattr(performance, "reason", "symbol_performance_ok"),
             "risk_multiplier": multiplier,
+            "late_entry_multiplier": extra_multiplier if extra_multiplier != 1.0 else None,
+            "late_entry_reason": extra_reason,
             "symbol": getattr(performance, "symbol", None),
             "classification": "reduced" if multiplier < 1.0 else "ok",
             "original": original,

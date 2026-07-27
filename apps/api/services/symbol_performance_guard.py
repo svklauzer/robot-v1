@@ -142,6 +142,14 @@ class SymbolPerformanceGuard:
         winrate = round((wins / closed_count * 100), 2) if closed_count else 0.0
         total_net_pnl = round(total_net_pnl, 6)
 
+        # (#expectancy-2026-07-27) Ожидание на сделку — то, по чему символ и надо
+        # судить. Win-rate вводит в заблуждение: 67% побед при средней победе
+        # +0.091% и среднем убытке −0.822% (боевые #264–282) дают ожидание
+        # −0.251% на сделку. Такой символ проходил гвард, потому что тот смотрел
+        # на winrate < block_max_winrate, а 67 > 40.
+        expectancy_usdt = round(total_net_pnl / closed_count, 6) if closed_count else 0.0
+        ptn_rate = round(positive_then_negative_count / closed_count * 100, 1) if closed_count else 0.0
+
         last_closed_reason = closed_signals[0].closed_reason
 
         min_history = int(getattr(settings, "SYMBOL_PERF_MIN_HISTORY", 3))
@@ -162,6 +170,14 @@ class SymbolPerformanceGuard:
         # должен получать карательный weak-множитель. Раньше DOT при -0.27 USDT
         # шёл в 0.45x — победители урезаны, лоссы в полный размер → слив.
         weak_pnl_tol = abs(float(getattr(settings, "SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT", 2.0)))
+
+        # (#expectancy-2026-07-27) Пороги ожидания. Толеранс в USDT на сделку,
+        # а не на всё окно: символ судится по средней сделке, иначе результат
+        # зависит от того, сколько раз он успел сходить.
+        expectancy_gate_on = bool(getattr(settings, "EXPECTANCY_GATE_ENABLED", True))
+        expectancy_min_history = int(getattr(settings, "EXPECTANCY_MIN_HISTORY", 12))
+        expectancy_tol = abs(float(getattr(settings, "EXPECTANCY_TOLERANCE_USDT", 0.05)))
+        expectancy_ptn_max = float(getattr(settings, "EXPECTANCY_PTN_MAX_PCT", 40.0))
 
         def _mk(allowed: bool, reason: str, rm: float) -> SymbolPerformanceDecision:
             return SymbolPerformanceDecision(
@@ -198,6 +214,23 @@ class SymbolPerformanceGuard:
         # Серия failed_setup_exit → probe-режим.
         if losing_streak >= cooldown_streak and failed_setup_count >= cooldown_failed_setups:
             return _restrict("symbol_cooldown_failed_setup_streak")
+
+        # (#expectancy-2026-07-27) Отрицательное ОЖИДАНИЕ при высокой доле
+        # отданной прибыли. Ветка стоит ПЕРЕД winrate-веткой намеренно: она
+        # ловит ровно тот класс символов, который winrate пропускает —
+        # много мелких побед и редкие крупные убытки.
+        #
+        # Условие двойное. Одного отрицательного ожидания мало: символ может
+        # быть в минусе из-за пары стопов на старте. Высокая доля
+        # positive→negative добавляет механизм: минус набран НЕ ошибкой входа,
+        # а отданным плюсом — и повторится, пока сопровождение не исправлено.
+        if (
+            expectancy_gate_on
+            and closed_count >= expectancy_min_history
+            and expectancy_usdt < -expectancy_tol
+            and ptn_rate >= expectancy_ptn_max
+        ):
+            return _restrict("symbol_negative_expectancy_gives_back")
 
         # Статистически убыточный В ОКНЕ → probe-режим. У этой ветки СВОЙ порог
         # выборки (block_min_history), поэтому она тоже идёт до small_history:
@@ -250,9 +283,21 @@ class SymbolPerformanceGuard:
             "positive_then_negative_count": decision.positive_then_negative_count,
             "last_closed_reason": decision.last_closed_reason,
             "losing_streak": decision.losing_streak,
+            # (#expectancy-2026-07-27) Ожидание на сделку — то, по чему принято
+            # решение. Раньше в payload уходил только winrate, и на витрине было
+            # не видно, из-за чего символ понижен.
+            "expectancy_usdt": (
+                round(decision.total_net_pnl / decision.closed_count, 6)
+                if decision.closed_count else None
+            ),
+            "positive_then_negative_pct": (
+                round(decision.positive_then_negative_count / decision.closed_count * 100, 1)
+                if decision.closed_count else None
+            ),
         }
 
     _PROBE_REASONS = (
+        "symbol_negative_expectancy_gives_back_probe",
         "symbol_cooldown_losing_streak_probe",
         "symbol_cooldown_failed_setup_streak_probe",
         "symbol_negative_expectancy_probe",

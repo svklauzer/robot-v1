@@ -27,6 +27,27 @@ def ml_exit_replay(limit: int = 2000, profile: str = "trend"):
     return build_trend(limit=limit)
 
 
+@router.get("/walk-forward", dependencies=[Depends(require_owner_action)])
+def ml_walk_forward(regime: str = "trend", folds: int = 4, limit: int = 2000):
+    """(#walk-forward-2026-07-27) Out-of-sample оценка подбора exit-параметров.
+
+    `/ml/exit-replay` подбирает и оценивает на ОДНОЙ выборке — это in-sample,
+    и его лидер систематически красивее правды. Здесь параметры выбираются на
+    прошлых фолдах и применяются к следующему без права пересмотра.
+    """
+    from services.exit_replay import walk_forward
+
+    return walk_forward(regime=regime, folds=folds, limit=limit)
+
+
+@router.get("/walk-forward/history", dependencies=[Depends(require_owner_action)])
+def ml_walk_forward_history(limit: int = 60):
+    """История регулярных прогонов: виден дрейф оптимума во времени."""
+    from services.walkforward_monitor import history
+
+    return history(limit=limit)
+
+
 @router.post("/outcomes/backfill", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_backfill(limit: int = 500):
     db = SessionLocal()

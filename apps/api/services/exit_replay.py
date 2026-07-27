@@ -122,6 +122,9 @@ def _replay_trend_one(
     ride_arm: float,
     ride_trail: float,
     min_protective: float,
+    capture_start: float | None = None,
+    capture_drawdown: float = 0.30,
+    capture_share: float = 0.40,
 ) -> tuple[float, str]:
     """(#backtest-trend-2026-07-27) Трендовая лестница выхода по траектории.
 
@@ -153,6 +156,14 @@ def _replay_trend_one(
             protect = mfe * (1.0 - ride_trail)
             if pct <= protect and pct >= min_protective:
                 return pct, "replay_trend_trail"
+        elif capture_start is not None and mfe >= capture_start:
+            # adaptive_mfe_capture: пик набран, откат превысил порог — забираем
+            # долю пика. Ярус живёт МЕЖДУ ride и полосой захвата, поэтому его
+            # параметры тоже должны перебираться, а не считаться данностью.
+            if (mfe - pct) >= capture_drawdown and pct >= max(
+                mfe * capture_share, min_protective
+            ):
+                return pct, "replay_mfe_capture"
         elif mfe >= band_arm:
             if (mfe - pct) >= mfe * band_give and pct >= max(band_floor, min_protective):
                 return pct, "replay_capture_band"
@@ -473,5 +484,251 @@ def build_trend(limit: int = 2000) -> dict:
             "содержит прежнее боевое 1.80 и правку 0.40 — разница между ними и есть "
             "измеренный эффект правки 27.07. Выборка меньше 30 сделок доказательством "
             "не является; смотрите overfit_check прежде чем что-то менять."
+        ),
+    }
+
+
+# ── WALK-FORWARD ──────────────────────────────────────────────────────────────
+#
+# Зачем отдельно от build_trend. `build_trend` подбирает параметры на ВСЕЙ
+# выборке и там же их оценивает — это in-sample, и лидер такой процедуры почти
+# всегда красивее, чем он есть. `_split_check` ловит грубую подгонку, но не
+# отвечает на главный вопрос: работал бы найденный конфиг на данных, которых
+# он не видел.
+#
+# Walk-forward отвечает. Выборка режется хронологически на фолды; для каждого
+# фолда k параметры подбираются на фолдах [0..k-1] и применяются к фолду k без
+# права пересмотра. Сумма по фолдам — честная out-of-sample оценка.
+#
+# Практический смысл: если OOS-результат подбора не бьёт текущий конфиг на тех
+# же данных, подбирать нечего — разница была шумом.
+
+TREND_GRID_AXES = {
+    "be_arm_pct": [0.35, 0.60, 1.00],
+    "be_floor_pct": [0.10, 0.25],
+    "band_arm_pct": [0.30, 0.40, 0.55],
+    "band_giveback_share": [0.25, 0.35],
+    "ride_trail_share": [0.35, 0.50],
+    "min_protective_pct": [0.40, 1.80],
+    "capture_start_pct": [0.90, None],
+    "capture_drawdown_pct": [0.30],
+    "capture_share": [0.40],
+}
+
+SCALP_GRID_AXES = {
+    "arm_pct": [0.3, 0.5, 0.7],
+    "giveback_share": [0.4, 0.5, 0.6],
+    "time_stop_min": [45.0, 90.0, None],
+}
+
+# Режим -> какие trade_mode в него попадают. Разрезы нужны потому, что
+# лестницы выхода у движков разные: оптимум скальпа ничего не говорит о тренде.
+REGIME_MODES = {
+    "trend": ("trend", "crt", "position", ""),
+    "range": ("range",),
+    "scalp": ("scalp",),
+}
+
+
+def _grid(axes: dict) -> list[dict]:
+    keys = list(axes)
+    return [dict(zip(keys, combo)) for combo in product(*(axes[k] for k in keys))]
+
+
+def _load_trades(regime: str, limit: int) -> tuple[list[dict], int, int]:
+    """Сделки нужного режима с траекторией, в хронологическом порядке."""
+    from services.ml_trade_logger import MLTradeLogger
+
+    allowed = REGIME_MODES.get(regime, REGIME_MODES["trend"])
+    rows = _load_rows(Path(MLTradeLogger().path))[-int(limit):]
+
+    trades: list[dict] = []
+    skipped = 0
+    phantom = 0
+    for r in rows:
+        mode = str(r.get("trade_mode") or "").lower()
+        if mode not in allowed:
+            continue
+        final_pct = r.get("result_pct")
+        if final_pct is None:
+            continue
+        lc = r.get("lifecycle") or {}
+        traj = lc.get("traj")
+        if not traj or len(traj) < 3:
+            skipped += 1
+            continue
+        honest, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        phantom += int(is_phantom)
+        trades.append({
+            "traj": traj, "final_pct": honest, "booked_pct": float(final_pct),
+            "symbol": r.get("symbol"), "signal_id": r.get("signal_id"),
+            "mfe_pct": lc.get("mfe_pct"), "phantom": is_phantom,
+        })
+    return trades, skipped, phantom
+
+
+def _score(trades: list[dict], params: dict, regime: str) -> float:
+    """Суммарный gross-% набора параметров на выборке."""
+    total = 0.0
+    if regime == "scalp":
+        hard = float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
+        for t in trades:
+            total += _replay_one(
+                t["traj"], t["final_pct"],
+                arm=params["arm_pct"], give=params["giveback_share"],
+                ts_min=params["time_stop_min"], hard_mult=hard,
+            )[0]
+        return total
+
+    band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
+    ride_arm = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8))
+    for t in trades:
+        total += _replay_trend_one(
+            t["traj"], t["final_pct"],
+            be_arm=params["be_arm_pct"], be_floor=params["be_floor_pct"],
+            band_arm=params["band_arm_pct"], band_give=params["band_giveback_share"],
+            band_floor=band_floor, ride_arm=ride_arm,
+            ride_trail=params["ride_trail_share"],
+            min_protective=params["min_protective_pct"],
+            capture_start=params.get("capture_start_pct"),
+            capture_drawdown=params.get("capture_drawdown_pct", 0.30),
+            capture_share=params.get("capture_share", 0.40),
+        )[0]
+    return total
+
+
+def _current_params(regime: str) -> dict:
+    if regime == "scalp":
+        return {
+            "arm_pct": float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.3)),
+            "giveback_share": float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.4)),
+            "time_stop_min": (float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
+                              if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)) else None),
+        }
+    return {
+        "be_arm_pct": float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
+        "be_floor_pct": float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+        "band_arm_pct": float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
+        "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
+        "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
+        "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        "capture_start_pct": (float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.9))
+                              if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)) else None),
+        "capture_drawdown_pct": float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30)),
+        "capture_share": float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.40)),
+    }
+
+
+def walk_forward(regime: str = "trend", folds: int = 4, limit: int = 2000,
+                 min_train: int = 20) -> dict:
+    """Честная out-of-sample оценка подбора exit-параметров.
+
+    Для каждого фолда k: параметры выбираются на [0..k-1], применяются к k.
+    Ни один результат в `oos_total_pct` не получен на данных, которые видел
+    оптимизатор.
+    """
+    regime = regime if regime in REGIME_MODES else "trend"
+    trades, skipped, phantom = _load_trades(regime, limit)
+    axes = SCALP_GRID_AXES if regime == "scalp" else TREND_GRID_AXES
+    grid = _grid(axes)
+    current = _current_params(regime)
+
+    folds = max(2, min(int(folds), 8))
+    if len(trades) < min_train + folds:
+        return {
+            "status": "insufficient_data",
+            "regime": regime,
+            "trades": len(trades),
+            "skipped_no_trajectory": skipped,
+            "required": min_train + folds,
+            "message": (
+                f"Для walk-forward нужно минимум {min_train + folds} сделок режима "
+                f"«{regime}» с траекторией, есть {len(trades)}. Пока копится — "
+                "смотрите in-sample через /ml/exit-replay, помня о его ограничении."
+            ),
+        }
+
+    size = len(trades) // folds
+    bounds = [(i * size, (i + 1) * size if i < folds - 1 else len(trades))
+              for i in range(folds)]
+
+    steps = []
+    oos_total = 0.0
+    oos_current = 0.0
+    for k, (lo, hi) in enumerate(bounds):
+        train = trades[:lo]
+        test = trades[lo:hi]
+        if len(train) < min_train or not test:
+            steps.append({
+                "fold": k + 1, "train_size": len(train), "test_size": len(test),
+                "skipped": True,
+                "reason": f"обучающая часть меньше {min_train} — фолд не оценивается",
+            })
+            continue
+
+        best = max(grid, key=lambda p: _score(train, p, regime))
+        picked = _score(test, best, regime)
+        base = _score(test, current, regime)
+        oos_total += picked
+        oos_current += base
+        steps.append({
+            "fold": k + 1,
+            "train_size": len(train),
+            "test_size": len(test),
+            "skipped": False,
+            "picked_params": best,
+            "picked_test_pct": round(picked, 4),
+            "current_test_pct": round(base, 4),
+            "edge_pct": round(picked - base, 4),
+        })
+
+    scored = [s for s in steps if not s.get("skipped")]
+    wins = sum(1 for s in scored if s["edge_pct"] > 0)
+    edge = round(oos_total - oos_current, 4)
+
+    # Стабильность выбора: если каждый фолд просит СВОИ параметры, то оптимума
+    # нет — есть шум, и внедрять «лучший» нельзя.
+    picks = [tuple(sorted(s["picked_params"].items(), key=lambda kv: kv[0])) for s in scored]
+    unique_picks = len(set(picks))
+
+    if not scored:
+        verdict = "фолдов с достаточной обучающей частью нет — данных мало"
+    elif edge <= 0:
+        verdict = ("подбор НЕ бьёт текущий конфиг вне выборки — разница на всей "
+                   "истории была подгонкой, менять нечего")
+    elif unique_picks == len(scored) and len(scored) > 2:
+        verdict = ("каждый фолд просит свои параметры — устойчивого оптимума нет, "
+                   "внедрять нельзя")
+    elif wins < len(scored) - 1:
+        verdict = (f"перевес только в {wins} фолдах из {len(scored)} — сигнал слабый, "
+                   "стоит подождать данных")
+    else:
+        verdict = ("подбор устойчиво бьёт текущий конфиг вне выборки — "
+                   "изменение обосновано")
+
+    return {
+        "status": "ok",
+        "regime": regime,
+        "folds": folds,
+        "trades": len(trades),
+        "skipped_no_trajectory": skipped,
+        "phantom_fill_trades": phantom,
+        "grid_size": len(grid),
+        "current_config": current,
+        "oos_total_pct": round(oos_total, 4),
+        "oos_current_pct": round(oos_current, 4),
+        "oos_edge_pct": edge,
+        "folds_won": wins,
+        "folds_scored": len(scored),
+        "unique_param_picks": unique_picks,
+        "steps": steps,
+        "verdict": verdict,
+        "note": (
+            "Out-of-sample: в каждом фолде параметры выбраны ТОЛЬКО на предыдущих "
+            "сделках и применены к последующим без права пересмотра. oos_edge_pct — "
+            "то, что подбор дал бы сверх текущего конфига в реальном времени. "
+            "Отрицательный или нулевой edge означает, что выигрыш на всей истории "
+            "был артефактом подгонки. Разброс unique_param_picks по фолдам — второй "
+            "признак: устойчивый оптимум выбирается одинаково."
         ),
     }

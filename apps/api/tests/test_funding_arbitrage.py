@@ -59,9 +59,15 @@ def test_monitor_scan_persists_candidate_when_funding_edge_is_positive():
     db = _db_session()
     old_enabled = settings.ENABLE_FUNDING_ARB
     old_futures = settings.ENABLE_FUTURES
+    # (#funding-confirm-2026-07-27) Тест проверяет ЭКОНОМИКУ кандидата. Гейт
+    # подтверждения ставки — отдельный слой со своими тестами
+    # (test_funding_rate_confirmation.py); здесь он выключен, иначе тест
+    # проверял бы наличие истории наблюдений, а не расчёт доходности.
+    old_confirm = settings.FUNDING_ARB_CONFIRM_ENABLED
     try:
         settings.ENABLE_FUNDING_ARB = True
         settings.ENABLE_FUTURES = True
+        settings.FUNDING_ARB_CONFIRM_ENABLED = False
         result = FundingMonitorService(client=FakeHTXFundingClient()).scan(db, symbols=["BTC/USDT"])
 
         assert result["errors"] == []
@@ -71,6 +77,7 @@ def test_monitor_scan_persists_candidate_when_funding_edge_is_positive():
     finally:
         settings.ENABLE_FUNDING_ARB = old_enabled
         settings.ENABLE_FUTURES = old_futures
+        settings.FUNDING_ARB_CONFIRM_ENABLED = old_confirm
         db.close()
 
 
@@ -331,9 +338,13 @@ def test_snapshot_computes_fee_aware_net_yield():
     """Net yield per period must account for round-trip fees."""
     old_enabled = settings.ENABLE_FUNDING_ARB
     old_assumed = settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS
+    # См. комментарий выше: здесь проверяется расчёт доходности, а не наличие
+    # подтверждённой истории ставки.
+    old_confirm = settings.FUNDING_ARB_CONFIRM_ENABLED
     try:
         settings.ENABLE_FUNDING_ARB = True
         settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS = 10
+        settings.FUNDING_ARB_CONFIRM_ENABLED = False
 
         snapshot = FundingMonitorService(client=FakeHTXFundingClient()).snapshot("BTC/USDT")
 
@@ -350,6 +361,7 @@ def test_snapshot_computes_fee_aware_net_yield():
     finally:
         settings.ENABLE_FUNDING_ARB = old_enabled
         settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS = old_assumed
+        settings.FUNDING_ARB_CONFIRM_ENABLED = old_confirm
 
 
 def test_funding_arb_paper_cycle_smoke_logs_closed_pnl():

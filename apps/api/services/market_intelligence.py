@@ -102,6 +102,32 @@ class MarketIntelligenceEngine:
 
         return getattr(ctx, key, default)
 
+    def _rsi_gate_for(self, side: str, h4, h1):
+        """(#rsi-dynamic-2026-07-27) Решение RSI-гейта по контексту старших ТФ.
+
+        Сила тренда собирается из веера EMA (нормированного на ATR — иначе
+        порог несравним между BTC и TRX), импульса объёма и согласия 4h с 1h.
+        Логика вынесена в `services/rsi_gate.py` чистой функцией, чтобы её
+        можно было проверять без рынка и без БД.
+        """
+        from services.rsi_gate import evaluate as _rsi_evaluate
+
+        want_up = str(side).lower() == "long"
+        h4_trend = str(self._ctx_value(h4, "trend", "") or "")
+        h1_trend = str(self._ctx_value(h1, "trend", "") or "")
+        key = "up" if want_up else "down"
+        aligned = key in h4_trend and key in h1_trend
+
+        return _rsi_evaluate(
+            side=side,
+            rsi=self._ctx_value(h4, "rsi14"),
+            ema20=self._ctx_value(h4, "ema20"),
+            ema50=self._ctx_value(h4, "ema50"),
+            atr=self._ctx_value(h4, "atr14"),
+            volume_ratio=self._ctx_value(h4, "volume_ratio"),
+            htf_aligned=aligned,
+        )
+
     def _tf(self, contexts, timeframe: str, default=None):
         if contexts is None:
             return default
@@ -1508,17 +1534,30 @@ class MarketIntelligenceEngine:
                 if _h4_rsi <= float(getattr(settings, "EXHAUSTION_RSI_OVERSOLD", 30.0)) and _sup > 0 and (_px - _sup) / _px <= _near:
                     decision = "wait"
                     comment = "trend_exhaustion_short_into_support"
-                elif _hard_veto and _h4_rsi <= float(getattr(settings, "TREND_HTF_RSI_HARD_OVERSOLD", 28.0)):
-                    decision = "wait"
-                    comment = "trend_htf_oversold_veto"
+                elif _hard_veto:
+                    # (#rsi-dynamic-2026-07-27) Порог не плоский: сильный тренд
+                    # имеет право дольше оставаться перепроданным. Между
+                    # динамическим порогом и жёстким блоком — поздний вход
+                    # уменьшенным размером, а не отказ.
+                    _rsi_gate = self._rsi_gate_for("short", h4, h1)
+                    if _rsi_gate.zone == "hard_block":
+                        decision = "wait"
+                        comment = "trend_htf_oversold_veto"
+                    elif _rsi_gate.zone == "late_entry":
+                        comment = "trend_htf_oversold_late_entry"
             elif _px > 0 and action == "long":
                 _res = float(self._ctx_value(h4, "resistance", 0) or self._ctx_value(h1, "resistance", 0) or 0)
                 if _h4_rsi >= float(getattr(settings, "EXHAUSTION_RSI_OVERBOUGHT", 70.0)) and _res > 0 and (_res - _px) / _px <= _near:
                     decision = "wait"
                     comment = "trend_exhaustion_long_into_resistance"
-                elif _hard_veto and _h4_rsi >= float(getattr(settings, "TREND_HTF_RSI_HARD_OVERHEAT", 72.0)):
-                    decision = "wait"
-                    comment = "trend_htf_overheat_veto"
+                elif _hard_veto:
+                    # (#rsi-dynamic-2026-07-27) См. симметричную ветку шорта.
+                    _rsi_gate = self._rsi_gate_for("long", h4, h1)
+                    if _rsi_gate.zone == "hard_block":
+                        decision = "wait"
+                        comment = "trend_htf_overheat_veto"
+                    elif _rsi_gate.zone == "late_entry":
+                        comment = "trend_htf_overheat_late_entry"
 
         # (#timing-veto) Купируем вход в микро-разворот. Аудит: лосеры шли +0.2%
         # и разворачивались — вход в ВЕРШИНУ (long) / ДНО (short) на исполнительном

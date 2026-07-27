@@ -164,6 +164,32 @@ class FundingMonitorService:
                 f"(fees eat funding at {break_even_periods} periods break-even)"
             )
 
+        # (#funding-confirm-2026-07-27) Наблюдение пишется ВСЕГДА — история
+        # должна копиться и по отвергнутым кандидатам, иначе подтверждать
+        # будет нечем.
+        confirmation: dict | None = None
+        try:
+            from services.funding_rate_history import confirm, record
+
+            record(spot_symbol, rate_pct=funding_rate_pct, basis_pct=basis_pct)
+
+            # Подтверждение — последний гейт: проверяем только то, что уже
+            # прошло экономику. Ставка одного замера не прогноз: она
+            # mean-reverts (TRX 16.5% → −1.65% годовых по нашей же истории),
+            # а мы закладываемся на десятки часов удержания вперёд.
+            if status == "candidate":
+                confirmation = confirm(
+                    spot_symbol,
+                    current_rate_pct=funding_rate_pct,
+                    basis_pct=basis_pct,
+                    fee_round_trip_pct=fee_round_trip_pct,
+                )
+                if not confirmation.get("ok"):
+                    status = "rate_not_confirmed"
+                    reject_reason = confirmation.get("reason")
+        except Exception as exc:  # noqa: BLE001 — история не должна ронять скан
+            confirmation = {"ok": True, "error": str(exc)}
+
         return FundingSnapshot(
             symbol=spot_symbol,
             spot_symbol=spot_symbol,
@@ -182,7 +208,7 @@ class FundingMonitorService:
             next_funding_at=self._parse_next_funding_at(funding),
             status=status,
             reject_reason=reject_reason,
-            raw={"funding": funding},
+            raw={"funding": funding, "confirmation": confirmation},
         )
 
     def scan_interval_seconds(self) -> int:

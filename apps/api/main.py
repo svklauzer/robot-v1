@@ -330,6 +330,45 @@ async def background_egress_monitor_loop():
         await asyncio.sleep(int(getattr(settings, "EGRESS_MONITOR_INTERVAL_SEC", 60)))
 
 
+async def background_walkforward_loop():
+    """Регулярный walk-forward exit-параметров (#walk-forward-2026-07-27).
+
+    Одиночный прогон отвечает «что лучше сейчас». Ряд прогонов отвечает на
+    более важное: держится ли оптимум во времени. Если из раза в раз подбор
+    выбирает разные параметры — устойчивого оптимума нет, и правка конфига по
+    такому результату будет подгонкой под последний кусок истории.
+
+    Перебор блокирующий (сотни вариантов × сотни траекторий) → to_thread.
+    Fail-open: сбой монитора ни на что не влияет, это read-only анализ.
+    """
+    # Стартуем позже остальных: воркер не должен соревноваться за CPU с
+    # торговым циклом на разогреве инстанса.
+    await asyncio.sleep(180)
+
+    while True:
+        try:
+            if bool(getattr(settings, "WALKFORWARD_ENABLED", True)):
+                from services.walkforward_monitor import log_snapshot, run_once
+
+                snapshot = await asyncio.to_thread(run_once)
+                await asyncio.to_thread(log_snapshot, snapshot)
+                for regime, res in (snapshot.get("regimes") or {}).items():
+                    if res.get("status") != "ok":
+                        continue
+                    log_event(
+                        logger, logging.INFO, "walkforward_run",
+                        regime=regime, trades=res.get("trades"),
+                        oos_edge_pct=res.get("oos_edge_pct"),
+                        folds_won=f'{res.get("folds_won")}/{res.get("folds_scored")}',
+                        unique_picks=res.get("unique_param_picks"),
+                    )
+        except Exception as e:  # noqa: BLE001
+            log_event(logger, logging.ERROR, "walkforward_error",
+                      error_type=type(e).__name__, error=str(e))
+
+        await asyncio.sleep(int(getattr(settings, "WALKFORWARD_INTERVAL_SEC", 86400)))
+
+
 async def background_venues_spread_loop():
     """Почасовой снапшот funding-спредов HTX↔Kraken (#kraken-p1-2026-07-18, P1.5).
 
@@ -624,6 +663,7 @@ async def lifespan(app: FastAPI):
     venues_spread_loop_enabled = True
     venues_spread_task = asyncio.create_task(background_venues_spread_loop())
     egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
+    walkforward_task = asyncio.create_task(background_walkforward_loop())
 
     yield
 
@@ -666,6 +706,13 @@ async def lifespan(app: FastAPI):
     venues_spread_loop_enabled = False
     if venues_spread_task:
         venues_spread_task.cancel()
+
+    # (#walk-forward-2026-07-27) egress-монитор и walk-forward тоже надо гасить:
+    # незакрытые задачи держат event loop при остановке инстанса.
+    if egress_monitor_task:
+        egress_monitor_task.cancel()
+    if walkforward_task:
+        walkforward_task.cancel()
 
 
 app = FastAPI(title="Robot V1 API", lifespan=lifespan)
