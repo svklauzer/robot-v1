@@ -113,12 +113,20 @@ def test_symbol_performance_summary_marks_giveback_symbols_as_watch_only(monkeyp
 
         item = SymbolPerformanceSummaryService().summarize(db, symbols=["SOL/USDT"], lookback=6)["items"][0]
 
-        assert item["classification"] == "reduced"
-        assert item["reason"] == "symbol_gives_back_profit_reduce_risk"
-        assert item["policy_profile"]["profile"] == "watch_only"
+        # (#no-noise-guard-2026-07-27) На выборке 6 символ больше НЕ штрафуется.
+        # Здесь он суммарно ПРИБЫЛЬНЫЙ (6 × +0.5), а прежняя политика резала ему
+        # размер и поднимала порог confidence на +5 за то, что три сделки отдали
+        # MFE. Душить зарабатывающий символ по трём исходам — не риск-менеджмент.
+        # Giveback-классификация включается только на осмысленной выборке
+        # (SYMBOL_PERF_MIN_HISTORY), а серии убытков ловит cooldown.
+        assert item["classification"] == "ok"
+        assert item["reason"] == "small_history_ok"
+        assert item["policy_profile"]["profile"] == "tradeable"
         assert item["policy_profile"]["publish_allowed"] is True
-        assert item["policy_profile"]["min_confidence_delta"] == 5
-        assert item["policy_profile"]["min_rr_delta"] == 0.10
-        assert item["policy_profile"]["exit_bias"] == "earlier_mfe_capture"
+        assert item["policy_profile"]["min_confidence_delta"] == 0
+        # Ни надбавки к RR, ни смещения выхода: прибыльный символ на короткой
+        # истории торгуется в обычном режиме, без самоограничений.
+        assert item["policy_profile"]["min_rr_delta"] == 0
+        assert item["policy_profile"]["exit_bias"] == "standard"
     finally:
         db.close()

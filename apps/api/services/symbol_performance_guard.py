@@ -184,11 +184,12 @@ class SymbolPerformanceGuard:
                 return _mk(True, base_reason + "_probe", probe_mult)
             return _mk(False, base_reason + "_blocked", 0.0)
 
-        # Мало истории — не блокируем, но можем слегка уменьшить риск после стопа.
-        if closed_count < min_history:
-            if last_closed_reason == "stop_loss":
-                return _mk(True, "small_history_last_stop_reduce_risk", small_history_stop_multiplier)
-            return _mk(True, "small_history_ok", 1.0)
+        # (#no-noise-guard-2026-07-27) СЕРИИ проверяются ДО ветки малой истории.
+        # Серия из N убытков подряд — это последовательность, а не одиночный
+        # исход: она информативна независимо от общего размера выборки. Раньше
+        # порядок был обратный, и после подъёма min_history серия из 4 стопов
+        # проваливалась в `small_history_ok` — то есть защита молча отключалась.
+        # Именно это и поймали тесты гварда.
 
         # Серия стопов → probe-режим (не мёртвый ноль).
         if losing_streak >= cooldown_streak and stop_loss_count >= cooldown_stops:
@@ -197,6 +198,19 @@ class SymbolPerformanceGuard:
         # Серия failed_setup_exit → probe-режим.
         if losing_streak >= cooldown_streak and failed_setup_count >= cooldown_failed_setups:
             return _restrict("symbol_cooldown_failed_setup_streak")
+
+        # Статистически убыточный В ОКНЕ → probe-режим. У этой ветки СВОЙ порог
+        # выборки (block_min_history), поэтому она тоже идёт до small_history:
+        # иначе общий min_history глушил бы её вопреки собственному порогу.
+        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol and winrate < block_max_winrate:
+            return _restrict("symbol_negative_expectancy")
+
+        # Мало истории — судить о символе не по чему. Одиночный стоп информации
+        # не несёт: множитель нейтральный (см. SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER).
+        if closed_count < min_history:
+            if last_closed_reason == "stop_loss":
+                return _mk(True, "small_history_last_stop_reduce_risk", small_history_stop_multiplier)
+            return _mk(True, "small_history_ok", 1.0)
 
         # Статистически убыточный В ОКНЕ → probe-режим.
         # Только при ВНЯТНОМ минусе (за толерансом), не у безубытка.

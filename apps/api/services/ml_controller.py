@@ -26,7 +26,70 @@ class MLController:
         self._labeler = None
 
     def _mode(self) -> str:
-        return str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        """Эффективный режим с АВТО-ДЕГРАДАЦИЕЙ по качеству модели.
+
+        (#ml-auto-demote-2026-07-27) Модель имеет право влиять на деньги только
+        пока доказывает качество. Ретрейн 16.07 дал val AUC 0.5067 — монетку, —
+        и переключение в shadow пришлось делать руками. Это неправильно: провал
+        качества обязан отзывать полномочия САМ.
+
+        Правило: full_auto/advisory требуют val AUC >= ML_MIN_AUC_FOR_AUTO.
+        Ниже — режим автоматически понижается до shadow (score виден рядом с
+        сигналами, на сделки не влияет). Обратное повышение — только вручную:
+        модель возвращает полномочия, доказав качество на ретрейне, а не
+        случайным скачком метрики.
+
+        Fail-open сохранён: если метрику прочитать не удалось, режим не трогаем —
+        ML не должен ломать торговлю из-за проблемы с чтением файла.
+        """
+        mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        if mode not in ("advisory", "full_auto"):
+            return mode
+        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
+            return mode
+
+        auc = self._val_auc()
+        if auc is None:
+            return mode
+        min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
+        if auc < min_auc:
+            self._last_demote_reason = (
+                f"val_auc={auc:.4f} < {min_auc} — модель не подтверждает качество, "
+                f"полномочия отозваны до shadow"
+            )
+            return "shadow"
+        return mode
+
+    def _val_auc(self) -> float | None:
+        """Валидационный AUC последнего обучения. None — метрики нет (fail-open)."""
+        try:
+            labeler = self._get_labeler()
+            meta = getattr(labeler, "metadata", None)
+            if callable(meta):
+                meta = meta()
+            if not isinstance(meta, dict):
+                return None
+            for key in ("val_auc", "auc_val", "validation_auc", "auc"):
+                if meta.get(key) is not None:
+                    return float(meta[key])
+        except Exception:  # noqa: BLE001 — метрика не критична
+            return None
+        return None
+
+    def health(self) -> dict:
+        """Состояние ML-контура для /ml/status и отчётов."""
+        configured = str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        effective = self._mode()
+        auc = self._val_auc()
+        return {
+            "configured_mode": configured,
+            "effective_mode": effective,
+            "demoted": configured != effective,
+            "demote_reason": getattr(self, "_last_demote_reason", None) if configured != effective else None,
+            "val_auc": auc,
+            "min_auc_for_auto": float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55)),
+            "auto_demote_enabled": bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)),
+        }
 
     def _get_labeler(self):
         if self._labeler is None:

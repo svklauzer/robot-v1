@@ -349,21 +349,19 @@ class RobotLoop:
                     "OB_POSITION_MAX_SPREAD_PCT" if _is_position else "OB_MAX_SPREAD_PCT",
                     0.20 if _is_position else 0.08,
                 ))
+                # (#depth-profiles-2026-07-27) Пороги реакции на стакан — из
+                # профиля движка. Скальп на 1m и тренд с 4h-биасом не должны
+                # реагировать одинаково: информативность мгновенного потока
+                # падает с горизонтом сделки. Раньше по профилю разделялся
+                # только спред, из-за чего трендовые сетапы со score 88–100
+                # резались секундным перекосом стакана.
+                from services.depth_profiles import depth_gate_params
+
+                _dp = depth_gate_params(result.regime)
+                _dp["max_spread_pct"] = _max_spread   # спред уже выбран выше
                 ob_ok, ob_reason = OrderBookAnalyzer.entry_gate(
                     result.action, ob_sig,
-                    max_spread_pct=_max_spread,
-                    obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
-                    wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
-                    # CVD на входе: не входим против агрессивного исполненного потока.
-                    cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
-                    cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
-                    # Жёсткое вето при подавляющем OBI против входа (стенка не спасает).
-                    obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
-                    # (#leak-A) стенка не спасает при встречном OBI глубже порога;
-                    # CVD режет и на тонкой выборке при ~100% потоке против.
-                    wall_rescue_max_adverse_obi=float(getattr(settings, "OB_WALL_RESCUE_MAX_ADVERSE_OBI", 0.35)),
-                    cvd_thin_ratio=float(getattr(settings, "OB_CVD_THIN_RATIO", 0.9)),
-                    cvd_thin_min_trades=int(getattr(settings, "OB_CVD_THIN_MIN_TRADES", 1)),
+                    **{k: v for k, v in _dp.items() if k != "profile"},
                 )
                 if not ob_ok or _liq_block:
                     _block_reason = ob_reason if not ob_ok else f"liq_spread:{_liq_reason}"
@@ -1084,16 +1082,16 @@ class RobotLoop:
                 ob_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
                 _is_position = str(result.regime or "").lower() not in ("range", "scalp")
                 _max_spread = float(getattr(settings, "OB_POSITION_MAX_SPREAD_PCT" if _is_position else "OB_MAX_SPREAD_PCT", 0.20 if _is_position else 0.08))
+                # (#depth-profiles-2026-07-27) Тот же профиль, что и в основном
+                # пути входа — иначе пред-проход и публикация разойдутся в
+                # оценке одного и того же сетапа.
+                from services.depth_profiles import depth_gate_params
+
+                _dp = depth_gate_params(getattr(result, "regime", None))
+                _dp["max_spread_pct"] = _max_spread
                 ob_ok, _ = OrderBookAnalyzer.entry_gate(
-                    result.action, ob_sig, max_spread_pct=_max_spread,
-                    obi_confirm=float(getattr(settings, "OB_OBI_CONFIRM", 0.15)),
-                    wall_confirm=float(getattr(settings, "OB_WALL_CONFIRM_SHARE", 0.30)),
-                    cvd_block_ratio=float(getattr(settings, "OB_CVD_ENTRY_BLOCK_RATIO", 0.6)),
-                    cvd_min_trades=int(getattr(settings, "OB_CVD_MIN_TRADES", 25)),
-                    obi_hard_veto=float(getattr(settings, "OB_OBI_HARD_VETO", 0.75)),
-                    wall_rescue_max_adverse_obi=float(getattr(settings, "OB_WALL_RESCUE_MAX_ADVERSE_OBI", 0.35)),
-                    cvd_thin_ratio=float(getattr(settings, "OB_CVD_THIN_RATIO", 0.9)),
-                    cvd_thin_min_trades=int(getattr(settings, "OB_CVD_THIN_MIN_TRADES", 1)),
+                    result.action, ob_sig,
+                    **{k: v for k, v in _dp.items() if k != "profile"},
                 )
                 if not ob_ok:
                     return False
@@ -1167,7 +1165,17 @@ class RobotLoop:
         free = max(0.0, ceiling - used)
         from services.margin_allocator import per_trade_margin
         cap = float(getattr(settings, "DYNAMIC_MARGIN_CAP_PCT_OF_FREE", 1.0))
-        budget = per_trade_margin(free, ready, cap_pct_of_free=cap) if ready > 0 else None
+        # (#fair-share-2026-07-27) Равная доля каждому символу вселенной вместо
+        # «первый готовый забирает всё»: иначе сетапы отклоняются не по качеству,
+        # а потому что деньги уже занял другой символ.
+        universe = 0
+        if bool(getattr(settings, "DYNAMIC_MARGIN_FAIR_SHARE", True)):
+            universe = len(bot.config_json.get("symbols", []) or [])
+        budget = (
+            per_trade_margin(free, ready, cap_pct_of_free=cap,
+                             universe_size=universe, ceiling=ceiling)
+            if ready > 0 else None
+        )
         return budget, analyses, ready, free
 
     async def _publish_new_signal_safely(

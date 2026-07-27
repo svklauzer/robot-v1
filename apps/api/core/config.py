@@ -88,7 +88,18 @@ class Settings(BaseSettings):
     # как считалось) — постоянно бьёт depth-гейт (0.12%), заваливал ленту blocked,
     # а когда проскакивал — слив на спреде (#95 -5.05, #85 -3.85). LINK/LTC/DOGE/BNB
     # НЕ добавлены — их spot спред (0.12–1%) тоже хуже порога.
-    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT"
+    # (#illiquid-2026-07-27) Вселенная без ARB. Замер спреда против типичного хода
+    # (медиана MFE тренда 0.49%) даёт разрыв на порядок:
+    #   BTC 0.0000%  ETH 0.0005%  XRP 0.0009%  TRX 0.0024%  SOL 0.0094%
+    #   AVAX 0.0175%  ADA 0.0178%          ← все ниже 4% от хода
+    #   ARB  0.3652%  (макс 0.365%)        ← 74.5% хода уходит в спред
+    # ARB дважды блокировался `depth_spread_too_wide` 27.07 и ранее был
+    # дисквалифицирован из cross-arb как «шум тонкой пары» (19.07).
+    # Исторические +6.28 USDT по нему — три сделки, из них одна CRT с MFE 9.16%:
+    # выброс на малой выборке, а не доказанный edge.
+    # NB: боевая вселенная задаётся HTX_SYMBOLS в env Render — там ARB тоже
+    # нужно убрать, иначе дефолт не применится.
+    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -100,7 +111,6 @@ class Settings(BaseSettings):
     # Username бота без @ (например finmt_bot) — для deep-link в FREE-тизере.
     TELEGRAM_BOT_USERNAME: str = ""
     TELEGRAM_OWNER_CHAT_ID: int = 0
-    TELEGRAM_SIGNALS_CHAT_ID: int = 0
     TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
     TELEGRAM_VIP_SIGNALS_CHAT_ID: int = 0
 
@@ -195,7 +205,6 @@ class Settings(BaseSettings):
     GRID_MARGIN_ISOLATED_MAX_LEV: float = 1.0
 
     ENABLE_FUTURES: bool = False
-    FUTURES_MARGIN_MODE: str = "isolated"
     FUTURES_LEVERAGE: int = 1
     ALLOW_SHORTS: bool = True
     SIGNAL_PROFILE: str = "learning"
@@ -211,9 +220,6 @@ class Settings(BaseSettings):
     # Здесь хранятся только loss-пороги и минимальные ограничения.
     # =========================
     # Минимальный MFE до применения early-failed-setup блока.
-    FAILED_SETUP_MFE_SOFT_PCT: float = 0.50
-    FAILED_SETUP_MFE_MID_PCT: float = 0.80
-    FAILED_SETUP_MFE_DEEP_PCT: float = 1.10
     FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT: float = 0.50
 
     # Пороги убытка для принудительного закрытия слабого setup до TP1.
@@ -378,7 +384,6 @@ class Settings(BaseSettings):
     # но дали ВСЮ прибыль (+20). Победителей резали на ~60% MFE (capture ~40%).
     # Старт трейла/фиксации позже → раннеры доезжают к TP2; мелкие плюсы (0.45–1.3)
     # держит безубыток-замок, не давая откатиться в минус.
-    ADAPTIVE_TRAIL_MFE_START_PCT: float = 0.9 # было 1.3 (изм 17.07.2026)
     ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
@@ -406,6 +411,14 @@ class Settings(BaseSettings):
     ML_LABEL_KIND: str = "is_win"          # is_win | hit_tp2
     ML_MIN_TRAIN_SAMPLES: int = 150        # меньше — модель не обучается (честно)
     ML_MIN_SCORE_TO_TRADE: float = 0.45    # full_auto/advisory: ниже — skip/block
+    # (#ml-auto-demote-2026-07-27) Модель влияет на деньги только пока доказывает
+    # качество. Ретрейн 16.07 дал val AUC 0.5067 — монетку, — и переключение в
+    # shadow делалось руками. Провал качества обязан отзывать полномочия сам:
+    # при val AUC ниже порога режим автоматически понижается до shadow
+    # (score виден рядом с сигналами, на сделки не влияет).
+    # Повышение обратно — только вручную, после подтверждённого ретрейна.
+    ML_AUTO_DEMOTE_ENABLED: bool = True
+    ML_MIN_AUC_FOR_AUTO: float = 0.55
     ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
     ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
     # Ежесуточный авто-retrain (держит модель свежей; при данных < min — honest skip).
@@ -628,6 +641,24 @@ class Settings(BaseSettings):
     # слишком вольно — DOT #80 при спреде 0.197% (неликвид) прошёл впритык и сразу
     # в стоп. Затянуто 0.20→0.12: широкий спред = тонкий стакан/слиппедж.
     OB_POSITION_MAX_SPREAD_PCT: float = 0.12
+    # ── Профиль POSITION: реакция на стакан (#depth-profiles-2026-07-27) ──────
+    # Depth-гейт имеет 7 параметров, а по профилю был разделён ровно ОДИН —
+    # спред. Скальпер на 1m и трендовый вход с 4h-биасом реагировали на стакан
+    # одинаково, хотя информативность мгновенного потока падает с горизонтом.
+    # Телеметрия 27.07: ADA trend_down со setup_score 88–100 отклонён ВОСЕМЬ раз
+    # за 1.5 часа по `obi_against_short: obi=0.87>=0.45` — сетап с 4-часовым
+    # биасом резался состоянием стакана в конкретную секунду.
+    # Ниже — огрубление ИМЕННО для длинного горизонта. Защита не выключается:
+    # вето на экстремальный перекос и на полностью встречный поток остаются,
+    # уходит лишь чувствительность к рядовым колебаниям.
+    OB_POSITION_OBI_CONFIRM: float = 0.05        # 0.15 → почти нейтрально
+    OB_POSITION_WALL_CONFIRM_SHARE: float = 0.20 # 0.30 → стенка менее критична
+    OB_POSITION_OBI_HARD_VETO: float = 0.80      # 0.45 → режем лишь экстремум
+    OB_POSITION_WALL_RESCUE_MAX_ADVERSE_OBI: float = 0.60   # 0.35
+    OB_POSITION_CVD_ENTRY_BLOCK_RATIO: float = 0.70         # 0.35 → нужен явный поток против
+    OB_POSITION_CVD_MIN_TRADES: int = 25
+    OB_POSITION_CVD_THIN_RATIO: float = 1.0      # тонкая выборка режет только при 100% против
+    OB_POSITION_CVD_THIN_MIN_TRADES: int = 3     # 1 сделка — не выборка для часового горизонта
     OB_OBI_CONFIRM: float = 0.15          # нужный перекос стакана в сторону входа
     OB_WALL_CONFIRM_SHARE: float = 0.30   # доля уровня в топ-N = «стенка»
     # Жёсткое OBI-вето: при подавляющем перекосе стакана ПРОТИВ входа блокируем
@@ -680,8 +711,20 @@ class Settings(BaseSettings):
     # SYMBOL PERFORMANCE GUARD
     # =========================
     SYMBOL_PERF_LOOKBACK: int = 10
-    SYMBOL_PERF_MIN_HISTORY: int = 3
-    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 5
+    # (#no-noise-guard-2026-07-27) 3 → 12 и 5 → 20. При min_history=3 гвард делал
+    # вывод о символе по ОДНОЙ-ДВУМ сделкам: после единственного стопа резал
+    # размер на 35%, а symbol_policy поднимал требуемую confidence на +5 — из-за
+    # чего сетапы со setup_score 85–100 отклонялись как `symbol_policy_confidence_
+    # too_low` (ADA 27.07: 64.4 против требуемых 65.0 при истории в 2 сделки).
+    # Это не риск-менеджмент, а шум: на выборке 1–2 знак результата случаен.
+    # Замер по урезанным сделкам это и подтверждает — эффект разнонаправленный:
+    #   ETH #280 урезан 200→130 маржи, результат +0.08 → урезание СТОИЛО прибыли
+    #   BTC #265 урезан 200→130,       результат −0.76 → урезание сэкономило
+    #   ADA #279 урезан 284→185,       результат −0.13 → почти ноль
+    # Защита от РЕАЛЬНОЙ серии убытков (losing_streak, cooldown) не тронута —
+    # она срабатывает по последовательности, а не по одному исходу.
+    SYMBOL_PERF_MIN_HISTORY: int = 12
+    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 20
     SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 48.0
     # Снижено 55→48 (#3): при RR>1.5 символ с винрейтом 48-55% прибылен,
     # карать его уменьшением размера незачем — это резало победителей.
@@ -689,7 +732,12 @@ class Settings(BaseSettings):
     SYMBOL_PERF_COOLDOWN_STREAK: int = 3
     SYMBOL_PERF_COOLDOWN_STOPS: int = 3
     SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 2
-    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 0.65
+    # (#no-noise-guard-2026-07-27) 0.65 → 1.0. Резать размер на 35% после ОДНОГО
+    # стопа — это не управление риском, а суеверие: один исход не несёт
+    # информации о символе. Урезание к тому же било по обеим сторонам — теряло
+    # прибыль на восстановлении так же часто, как экономило на продолжении.
+    # 1.0 = на малой истории символ не штрафуется; серии убытков ловит cooldown.
+    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 1.0
     # Повышено 0.45→0.70 (#3): перевёрнутый риск (лоссы в полный размер,
     # профиты в 0.45x) математически гарантировал слив. Множитель мягче.
     SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.70
@@ -760,7 +808,6 @@ class Settings(BaseSettings):
     # economics_use_tp2 (net_pnl_tp2 ≥ |стоп|+edge). Инверсия RR прикрыта именно TP2.
     PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER: float = 0.10   # санити, не гейт
     PROD_GATE_A_PLUS_MIN_RR_TP2: float = 1.45     # live
-    PROD_GATE_A_PLUS_MIN_RR_TP2_PAPER: float = 1.15   # spot 0.2% paper
 
     # Grade A: setup_score >= 62, confidence >= 58
     PROD_GATE_A_MIN_SETUP: float = 65.0
@@ -768,7 +815,6 @@ class Settings(BaseSettings):
     PROD_GATE_A_MIN_RR_TP1: float = 0.90          # live
     PROD_GATE_A_MIN_RR_TP1_PAPER: float = 0.10    # санити, не гейт (см. A+ выше)
     PROD_GATE_A_MIN_RR_TP2: float = 1.35          # live
-    PROD_GATE_A_MIN_RR_TP2_PAPER: float = 1.05    # spot 0.2% paper
 
     # Grade B: setup_score >= 58, confidence >= 60
     PROD_GATE_B_MIN_SETUP: float = 58.0
@@ -776,7 +822,6 @@ class Settings(BaseSettings):
     PROD_GATE_B_MIN_RR_TP1: float = 0.85          # live
     PROD_GATE_B_MIN_RR_TP1_PAPER: float = 0.10    # санити, не гейт (см. A+ выше)
     PROD_GATE_B_MIN_RR_TP2: float = 1.30          # live
-    PROD_GATE_B_MIN_RR_TP2_PAPER: float = 0.85    # spot 0.2% paper
     PROD_GATE_B_MIN_PRIORITY: float = 85.0
 
     # (#grade-fix-2026-07-06) Пороги грейда (по composite score = effective_confidence
@@ -822,6 +867,14 @@ class Settings(BaseSettings):
     # Верхний предохранитель на ОДНУ сделку как доля свободной маржи (1.0 = 100%,
     # как просил Капитан; поставь 0.4–0.5, если захочешь подушку под добор/2-й вход).
     DYNAMIC_MARGIN_CAP_PCT_OF_FREE: float = 1.0
+    # (#fair-share-2026-07-27) Равная доля капитала каждому символу вселенной.
+    # Прежнее правило «один готовый кандидат забирает ВСЮ свободную маржу»
+    # создавало гонку: кандидаты приходят не одновременно, первый занимал весь
+    # потолок, остальные отклонялись через blocked_total_margin_limit /
+    # required_margin_exceeds_free_margin — то есть НЕ по качеству сетапа, а
+    # потому что деньги уже кто-то забрал.
+    # Доля = потолок / число символов; ограничена реально свободной маржой.
+    DYNAMIC_MARGIN_FAIR_SHARE: bool = True
     # Регулируемое плечо для размера по динамическому бюджету (нотионал = маржа×плечо).
     # 1.0 = без плеча (как сейчас, smart leverage off). Поднимай для live-фьючерсов.
     DYNAMIC_MARGIN_LEVERAGE: float = 1.0
@@ -935,7 +988,6 @@ class Settings(BaseSettings):
     GRID_HTF_RSI_OVERHEAT: float = 72.0
     GRID_HTF_RSI_OVERSOLD: float = 28.0
     GRID_REARM: bool = True                    # после TP/SL переоткрывать новый цикл
-    GRID_SLIPPAGE_PCT: float = 0.05            # допуск проскальзывания при paper-филле, %
     GRID_TICK_INTERVAL_SEC: float = 20.0       # период фонового тика сетки
 
     # ── Адаптивность к живому рынку ───────────────────────────────────────────
@@ -1069,8 +1121,6 @@ class Settings(BaseSettings):
     LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 32.0
     LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 8.0
     ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = True
-    MIN_TREND_CONTINUATION_SCORE: float = 62.0
-    MIN_TREND_STRUCTURE_SCORE: float = 16.0
     LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 32.0
     LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 4.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
@@ -1138,7 +1188,6 @@ class Settings(BaseSettings):
     # 0.25 ≈ двойная комиссия round-trip на минимальной позиции: ниже фиксировать
     # действительно нечего, выше — гейт начинает съедать edge.
     MIN_PROTECTIVE_NET_USDT: float = 0.25
-    MIN_PROTECTIVE_R_MULT: float = 0.30
 
     # =========================
     # FEES / COST ENGINE
@@ -1160,9 +1209,6 @@ class Settings(BaseSettings):
     # =========================
     # TRAILING STOP
     # =========================
-    ENABLE_TRAILING_STOP: bool = True
-    TRAILING_AFTER_TP1: bool = True
-    TRAILING_CALLBACK_PCT: float = 0.4
 
     # =========================
     # HTX FUNDING RATE ARBITRAGE
@@ -1182,6 +1228,15 @@ class Settings(BaseSettings):
     # Min net yield PER PERIOD after estimated fees (funding_pct - fee_amortized_pct).
     # Positive means profitable; negative means fees exceed income.
     FUNDING_ARB_MIN_NET_YIELD_PCT: float = 0.005
+    # (#funding-honest-accrual-2026-07-27) Начислять funding по СРЕДНЕЙ ставке
+    # (вход+выход)/2, а не по ставке входа за весь срок. `exit_funding_rate`
+    # уже писался в базу, но в расчёте PnL не участвовал.
+    # Смещение было систематическим: движок входит на аномально высокой ставке
+    # (эффективный порог ≈60% годовых), а funding rate mean-reverts — значит
+    # фактическая средняя за срок почти всегда ниже входной. На позиции
+    # 100 USDT это 0.25–0.60 USDT завышения за сделку.
+    # False вернёт прежний (завышающий) расчёт.
+    FUNDING_ARB_HONEST_ACCRUAL: bool = True
 
     # Position sizing
     FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0
@@ -1204,7 +1259,6 @@ class Settings(BaseSettings):
     FUNDING_ARB_ASSUMED_HOLD_PERIODS: int = 10
 
     # Legacy — kept for compatibility
-    FUNDING_ARB_MIN_EDGE_PCT: float = 0.01
 
     # =========================
     # AFFILIATE / VIP

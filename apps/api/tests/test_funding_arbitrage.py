@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
@@ -111,7 +112,14 @@ def test_hedge_builder_and_paper_close_log_pnl():
         )
 
         assert closed.status == "closed"
-        assert closed.funding_collected == 0.2
+        # (#funding-honest-accrual-2026-07-27) Ставка упала 0.001 → 0.0001, и это
+        # теперь учитывается: начисление идёт по средней (вход+выход)/2, а не по
+        # ставке входа за весь срок. Прежнее значение 0.2 завышало результат на
+        # 82% — ровно тот перекос, из-за которого движок выглядел прибыльным.
+        # entry 0.001, exit 0.0001, 2 периода, notional 100:
+        #   было:  0.001  × 100 × 2 = 0.20
+        #   стало: 0.00055 × 100 × 2 = 0.11
+        assert closed.funding_collected == pytest.approx(0.11)
         assert closed.realized_pnl is not None
         assert closed.realized_pnl > 0
     finally:

@@ -557,7 +557,35 @@ class FundingArbEngine:
 
         spot_pnl = float(position.spot_qty) * (float(spot_exit_price) - float(position.spot_entry_price))
         swap_pnl = float(position.swap_qty) * (float(position.swap_entry_price) - float(swap_exit_price))
-        funding_collected = float(position.notional_usdt) * float(position.entry_funding_rate) * int(funding_periods)
+
+        # (#funding-honest-accrual-2026-07-27) Funding начислялся по ставке ВХОДА
+        # за весь срок удержания:
+        #     funding = notional × entry_funding_rate × periods
+        # `exit_funding_rate` при этом записывался в базу, но в формуле не
+        # участвовал — данные для честного расчёта были, их просто не брали.
+        #
+        # Смещение систематическое и в одну сторону:
+        #   1. эффективный порог входа ≈ 0.055%/8ч (60% годовых) — движок входит
+        #      только на аномально высокой ставке;
+        #   2. funding rate mean-reverts (наша же история P1: TRX 16.5% → −1.65%,
+        #      XRP 14.2% → 3.65% годовых);
+        #   3. значит фактическая средняя за срок почти всегда НИЖЕ входной.
+        # На позиции 100 USDT это 0.25–0.60 USDT завышения за сделку — порядок
+        # всего заявленного результата движка.
+        #
+        # Косвенное подтверждение: cross-arb (P2) начисляет carry pro-rata по
+        # ТЕКУЩЕЙ ставке и показывает −1.20; этот движок по ставке входа — +4.02.
+        # Один принцип, разный знак, разница ровно в методике учёта.
+        #
+        # Честное приближение интеграла ставки — среднее между входом и выходом
+        # (трапеция). Точный учёт требует пер-периодного начисления, как в
+        # cross-arb; это следующий шаг, здесь — снятие основного смещения.
+        entry_rate = float(position.entry_funding_rate or 0.0)
+        if bool(getattr(settings, "FUNDING_ARB_HONEST_ACCRUAL", True)) and exit_funding_rate is not None:
+            effective_rate = (entry_rate + float(exit_funding_rate)) / 2.0
+        else:
+            effective_rate = entry_rate
+        funding_collected = float(position.notional_usdt) * effective_rate * int(funding_periods)
         realized = spot_pnl + swap_pnl + funding_collected - float(position.fees_paid or 0.0)
 
         position.status = "closed"
