@@ -352,6 +352,29 @@ class GridEngine:
         if regime in ("long", "short") and not bool(getattr(settings, "GRID_DIRECTIONAL_ENABLED", False)):
             return
 
+        # (#grid-htf-veto-2026-07-27) Не строим сетку в РАЗОГНАННОМ рынке.
+        # Замер 12 циклов 25–26.07 даёт идеальное разделение по RSI:
+        #   все 3 убытка  — RSI 76.2 / 83.1 / 87.0, суммарно −2.20 (все grid_stop_loss)
+        #   все 3 прибыли — RSI 50.6 / 66.0 / 69.9, суммарно +0.15
+        # Механика: «нейтральная» сетка в тренде набирает только контр-сторону
+        # (все sell-уровни filled), цена уходит дальше — и корзина ловит стоп.
+        # Это не чоп, для которого сетка предназначена, а односторонний ход.
+        # Тот же дефект уже лечили HTF-вето у скальпа (#scalp-htf-veto) и у
+        # тренда (#trend-htf-veto) — сетка была третьим движком с той же болезнью.
+        if bool(getattr(settings, "GRID_HTF_EXTREME_VETO", True)):
+            try:
+                rsi = float(ind.get("rsi"))
+            except (TypeError, ValueError):
+                rsi = None
+            if rsi is not None:
+                hi = float(getattr(settings, "GRID_HTF_RSI_OVERHEAT", 72.0))
+                lo = float(getattr(settings, "GRID_HTF_RSI_OVERSOLD", 28.0))
+                if rsi >= hi or rsi <= lo:
+                    print(f"[GRID HTF-VETO] {symbol} open skipped: rsi={rsi:.1f} "
+                          f"outside [{lo}, {hi}] — рынок в одностороннем ходе, "
+                          f"сетка наберёт контр-сторону и поймает стоп")
+                    return
+
         v_base_qty = base_usdt / price  # базовый объём в базовой монете
         levels = gc.compute_grid(
             anchor=price, atr=atr, regime=regime,

@@ -186,6 +186,72 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
         db.close()
 
 
+@router.get("/depth-coverage", dependencies=[Depends(require_owner_action)])
+def analytics_depth_coverage(limit: int = 200):
+    """(#depth-failopen-2026-07-27) Сколько входов прошло БЕЗ данных стакана.
+
+    Depth-гейт устроен fail-open: при обрыве WS-фида вход пропускается без
+    подтверждения потоком. Это осознанный выбор (движок не должен вставать
+    из-за фида), но проверка при этом отключается МОЛЧА — а такие молчаливые
+    отключения уже дважды оказывались дорогими.
+
+    Повод для метрики: ADA #288 (26.07) — единственный вход периода с
+    `entry_depth.fresh = false`, результат −3.26 USDT, весь минус окна. В те же
+    часы гейт десятки раз блокировал ADA-шорты с OBI 0.52–0.89 против входа.
+    Одного случая мало, чтобы менять торговую логику, — поэтому здесь счётчик,
+    по которому решение можно будет принять на статистике.
+    """
+    db = SessionLocal()
+    try:
+        limit = min(max(int(limit or 200), 20), 2000)
+        signals = (
+            db.query(Signal)
+            .filter(Signal.status == "closed")
+            .order_by(Signal.id.desc())
+            .limit(limit)
+            .all()
+        )
+        verified: list[float] = []
+        unverified: list[float] = []
+        unverified_ids: list[int] = []
+        for s in signals:
+            depth = (s.plan_json or {}).get("entry_depth") or {}
+            pnl = float(s.closed_net_pnl or 0.0)
+            if depth.get("fresh") is False:
+                unverified.append(pnl)
+                if len(unverified_ids) < 30:
+                    unverified_ids.append(int(s.id))
+            elif depth:
+                verified.append(pnl)
+
+        def _stats(rows: list[float]) -> dict:
+            if not rows:
+                return {"count": 0, "net_pnl_usdt": 0.0, "avg_pnl_usdt": None, "winrate_pct": None}
+            wins = sum(1 for v in rows if v > 0)
+            return {
+                "count": len(rows),
+                "net_pnl_usdt": round(sum(rows), 6),
+                "avg_pnl_usdt": round(sum(rows) / len(rows), 6),
+                "winrate_pct": round(wins / len(rows) * 100, 1),
+            }
+
+        return {
+            "status": "ok",
+            "sample_limit": limit,
+            "with_depth_confirmation": _stats(verified),
+            "without_depth_confirmation": _stats(unverified),
+            "unverified_signal_ids": unverified_ids,
+            "note": (
+                "without_depth_confirmation — входы, где WS-фид молчал и depth-гейт "
+                "пропустил вслепую (fail-open). Если их средний результат устойчиво "
+                "хуже — есть основание не пускать вход без подтверждения потоком "
+                "или снижать по нему риск. Малая выборка решением не является."
+            ),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/mfe-mae", dependencies=[Depends(require_owner_action)])
 def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
     """(#mfe-mae-2026-07-10) MFE/MAE-профиль по символам в разрезе regime +

@@ -318,15 +318,16 @@ def test_trend_capture_band_respects_cost_floor():
     издержки съедят фиксацию, держим дальше."""
     svc = ExitPolicyService()
     old_lock = settings.BREAKEVEN_LOCK_ENABLED
-    old_floor = settings.MIN_PROTECTIVE_EXIT_PCT
+    # (#band-floor-2026-07-27) У яруса 2 теперь СВОЙ пол — проверяем именно его.
+    old_floor = settings.TREND_CAPTURE_FLOOR_PCT
     try:
         settings.BREAKEVEN_LOCK_ENABLED = False
-        settings.MIN_PROTECTIVE_EXIT_PCT = 5.0   # заведомо недостижимый пол
+        settings.TREND_CAPTURE_FLOOR_PCT = 5.0   # заведомо недостижимый пол
         d = _trend_band_call(svc, mfe=0.70, current_pct=0.50)
         assert d.exit is False
     finally:
         settings.BREAKEVEN_LOCK_ENABLED = old_lock
-        settings.MIN_PROTECTIVE_EXIT_PCT = old_floor
+        settings.TREND_CAPTURE_FLOOR_PCT = old_floor
 
 
 def test_protective_gates_are_reachable_for_real_mfe():

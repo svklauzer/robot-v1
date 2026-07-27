@@ -423,8 +423,15 @@ class ExitPolicyService:
                     and drawdown_from_mfe >= mfe * band_give
                 ):
                     band_pct = self._achievable_pct(mfe * (1.0 - band_give), current_pct)
-                    # Гейты: фиксируем только то, что реально платит за издержки.
-                    if band_pct >= max(net_safe_pct, min_protective_exit_pct):
+                    # (#band-floor-2026-07-27) У яруса 2 СВОЙ пол, ниже общего.
+                    # Общий MIN_PROTECTIVE_EXIT_PCT задаёт порог вооружения
+                    # mfe >= floor/(1-give) = 0.533%, а медиана MFE в бою — 0.489%:
+                    # полоса оказывалась пустой и ярус не срабатывал ни разу.
+                    band_floor = max(
+                        net_safe_pct,
+                        float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30)),
+                    )
+                    if band_pct >= band_floor:
                         est_net = self._estimated_net_usdt(
                             band_pct, position_notional_usdt, fee_rate=fee_rate
                         )

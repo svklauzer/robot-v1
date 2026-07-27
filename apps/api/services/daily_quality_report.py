@@ -74,6 +74,15 @@ class DailyQualityReportService:
             }
 
         net_pnl = round(sum(float(s.closed_net_pnl or 0) for s in closed), 4)
+        # (#report-honest-pnl-2026-07-27) Отчёт питался только от closed_net_pnl и
+        # показывал прибыль, которой не было: за 72ч 27.07 выходило +5.60 USDT,
+        # тогда как честно (без фантомного филла #281) это −0.94. Владелец видел
+        # зелёную цифру рядом с красным validation-гейтом, который уже судил по
+        # честному PnL. Считаем то же, что и гейт.
+        from services.phantom_fill import summarize as _summarize_phantom
+
+        phantom = _summarize_phantom(closed)
+        net_pnl_honest = round(net_pnl + phantom["phantom_fill_delta_usdt"], 4)
         wins = sum(1 for s in closed if float(s.closed_net_pnl or 0) > 0)
         losses = total - wins
         failed_setup = sum(1 for s in closed if s.closed_reason == "failed_setup_exit")
@@ -92,6 +101,9 @@ class DailyQualityReportService:
             "window_hours": self.hours,
             "closed_count": total,
             "net_pnl_usdt": net_pnl,
+            "net_pnl_honest_usdt": net_pnl_honest,
+            "phantom_fill_count": phantom["phantom_fill_count"],
+            "phantom_fill_overstatement_usdt": phantom["phantom_fill_overstatement_usdt"],
             "win_count": wins,
             "loss_count": losses,
             "winrate_pct": round(wins / total * 100, 1),
@@ -99,7 +111,7 @@ class DailyQualityReportService:
             "failed_setup_share_pct": round(failed_setup / total * 100, 1),
             "positive_then_negative_count": pos_then_neg,
             "positive_then_negative_share_pct": round(pos_then_neg / total * 100, 1),
-            "avg_net_pnl_usdt": round(net_pnl / total, 4),
+            "avg_net_pnl_usdt": round(net_pnl_honest / total, 4),
             "reasons": dict(sorted(reasons.items(), key=lambda x: -x[1])),
         }
 
@@ -202,8 +214,16 @@ class DailyQualityReportService:
         if ptn is not None and ptn > 25:
             issues.append(f"positive_then_negative share {ptn:.1f}% > 25% threshold")
 
-        if trading.get("net_pnl_usdt", 0) < 0 and (trading.get("closed_count") or 0) >= 5:
-            issues.append(f"negative net PnL in window: {trading['net_pnl_usdt']} USDT")
+        # (#report-honest-pnl-2026-07-27) Судим по честному PnL — иначе фантомный
+        # филл в окне маскирует убыточный период зелёной цифрой.
+        _honest = trading.get("net_pnl_honest_usdt", trading.get("net_pnl_usdt", 0))
+        if _honest < 0 and (trading.get("closed_count") or 0) >= 5:
+            issues.append(f"negative net PnL in window (honest fills): {_honest} USDT")
+        if (trading.get("phantom_fill_count") or 0) > 0:
+            issues.append(
+                f"window contains {trading['phantom_fill_count']} phantom-fill outcomes "
+                f"overstating PnL by {trading['phantom_fill_overstatement_usdt']} USDT"
+            )
 
         tg_sla = telegram.get("sla_pct")
         if tg_sla is not None and tg_sla < 99.0:

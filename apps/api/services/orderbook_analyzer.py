@@ -118,7 +118,19 @@ class OrderBookAnalyzer:
         не шортим в доминирующие покупки, не лонгуем в доминирующие продажи.
         cvd_block_ratio=0 (дефолт) → CVD на входе выключен (обратная совместимость)."""
         if not sig.fresh:
-            return True, "no_depth_data"
+            # (#depth-failopen-2026-07-27) Fail-open сохранён намеренно: движок не
+            # должен вставать из-за обрыва WS-фида. Но это МОЛЧАЛИВОЕ отключение
+            # проверки, а такие уже дважды оказывались дорогими (market_limits →
+            # min_amount, htx precision). Пометка `unverified` нужна, чтобы вход
+            # без подтверждения потоком был отличим в телеметрии.
+            #
+            # Повод: ADA #288 (26.07) — единственный вход периода с fresh=false,
+            # результат −3.26 USDT (stop_loss), то есть весь минус окна. В те же
+            # часы depth-гейт десятки раз блокировал ADA-шорты с obi 0.52–0.89
+            # ПРОТИВ входа. Данные были и они были против — просто в момент входа
+            # фид молчал. Одного случая мало для смены торговой логики, поэтому
+            # сейчас только метка; решение — после накопления статистики.
+            return True, "no_depth_data:unverified"
         if sig.spread_pct is not None and sig.spread_pct > max_spread_pct:
             return False, f"depth_spread_too_wide:{sig.spread_pct:.3f}>{max_spread_pct}"
         s = str(side).lower()
