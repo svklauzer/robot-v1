@@ -93,6 +93,46 @@ def test_backend_exposes_honest_pnl_fields_the_ui_reads():
         assert "phantom_fill_count" in ui
 
 
+def test_every_egress_verdict_has_a_ui_label():
+    """(#egress-monitor-2026-07-26) Вердикты монитора решают, КУДА идти.
+
+    `exchanges_unreachable` → менять хост/прокси; `egress_down` → проблема на
+    стороне платформы, и трогать HTX_API_HOSTNAME бесполезно. Разница между
+    ними стоила нам дня разбирательств — сырой код на экране её стирает.
+    """
+    src = _read(API / "services/egress_monitor.py")
+    verdicts = set(re.findall(r'verdict = "([a-z_]+)"', src))
+    assert verdicts, "не нашёл вердиктов в мониторе — тест устарел вместе с кодом"
+
+    health = WEB / "app/health/page.tsx"
+    if not health.exists():
+        pytest.skip("нет фронтенда")
+    labels = _frontend_labels("app/health/page.tsx", "EGRESS_VERDICTS")
+
+    missing = sorted(verdicts - labels)
+    assert not missing, f"вердикт монитора без ярлыка в UI: {missing}"
+
+
+def test_network_diagnostics_are_surfaced_on_health():
+    """Обе витрины инцидента 26.07 должны быть на экране, а не только в выгрузке."""
+    health = WEB / "app/health/page.tsx"
+    if not health.exists():
+        pytest.skip("нет фронтенда")
+    ui = _read(health)
+
+    assert "/system/egress-history" in ui, "история доступности egress не выведена"
+    assert "/system/exchange-diagnostics" in ui, "постадийная диагностика не выведена"
+    assert "outage_windows" in ui, "окна недоступности — главное для тикета в поддержку"
+    assert "control_hosts" in ui, (
+        "без контрольной группы витрина не отличает проблему биржи от проблемы egress"
+    )
+    # Диагностика блокирующая (DNS+TCP+TLS+HTTP, до 8 с на хост) — она не должна
+    # попадать в 5-секундный автополлинг страницы.
+    assert "setInterval(runDiagnostics" not in ui and "runDiagnostics, 5000" not in ui, (
+        "тяжёлый зонд не должен висеть на автообновлении"
+    )
+
+
 def test_live_safety_trade_counter_is_surfaced():
     """Новый предохранитель MAX_TRADES_PER_DAY должен быть виден на Health."""
     safety = _read(API / "services/live_safety.py")

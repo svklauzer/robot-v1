@@ -59,7 +59,10 @@ export default function DashboardPage() {
   const blockers = readiness?.blockers || [];
 
   // Три книги — realized PnL по движкам (раздельные карманы, статистики не смешиваем)
-  const trendPnl = Number(analytics?.total_net_pnl_usdt ?? 0);
+  // (#phantom-fill-2026-07-25) Честный PnL: сырой total_net_pnl_usdt завышен
+  // фантомными филлами. Аналитика уже показывала честный, а главная — сырой:
+  // два экрана давали два разных числа за один и тот же период.
+  const trendPnl = Number(analytics?.total_net_pnl_honest_usdt ?? analytics?.total_net_pnl_usdt ?? 0);
   const gridPnl = Number(grid?.realized_pnl_usdt ?? 0);
   const fundingPnl = Number(funding?.realized_pnl ?? 0);
   const totalPnl = trendPnl + gridPnl + fundingPnl;
@@ -104,7 +107,7 @@ export default function DashboardPage() {
           <span className="text-xs text-emerald-100/40">движки на раздельных карманах — статистики не смешиваются</span>
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <BookCard title="Trend" href="/signals" pnl={trendPnl} sub={`${analytics?.total_signals ?? 0} сигналов · WR ${analytics?.winrate ?? 0}%`} />
+          <BookCard title="Trend" href="/signals" pnl={trendPnl} sub={`${analytics?.total_signals ?? 0} сигналов · WR ${analytics?.winrate_honest ?? analytics?.winrate ?? 0}%`} />
           <BookCard title="Grid" href="/grid" pnl={gridPnl} off={!grid} sub={grid ? `${grid?.active_cycles ?? 0} активных · ${grid?.closed_cycles ?? 0} закрыто` : "движок выкл/нет данных"} />
           <BookCard title="Funding" href="/funding" pnl={fundingPnl} off={!funding} sub={funding ? `${funding?.open_positions ?? 0} хеджей · unreal ${fmt(funding?.unrealized_pnl_estimate, 2)}` : "движок выкл/нет данных"} />
           <BookCard title="ИТОГО" pnl={totalPnl} total sub="сумма трёх книг" />
@@ -113,14 +116,25 @@ export default function DashboardPage() {
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Bot" value={bot?.status || "-"} subtitle={bot?.mode || "-"} icon={<Bot size={18} />} good={bot?.status === "running"} warn={bot?.status !== "running"} />
-        <StatCard title="Net PnL" value={`${fmt(analytics?.total_net_pnl_usdt, 2)} USDT`} subtitle={`costs ${fmt(analytics?.total_costs_usdt, 2)} USDT`} icon={<BarChart3 size={18} />} good={(analytics?.total_net_pnl_usdt ?? 0) > 0} danger={(analytics?.total_net_pnl_usdt ?? 0) < 0} />
+        <StatCard
+          title="Net PnL (честный)"
+          value={`${fmt(trendPnl, 2)} USDT`}
+          subtitle={
+            (analytics?.phantom_fill_count ?? 0) > 0
+              ? `costs ${fmt(analytics?.total_costs_usdt, 2)} · снято +${fmt(analytics?.phantom_fill_overstatement_usdt, 2)} фантомных`
+              : `costs ${fmt(analytics?.total_costs_usdt, 2)} USDT`
+          }
+          icon={<BarChart3 size={18} />}
+          good={trendPnl > 0}
+          danger={trendPnl < 0}
+        />
         <StatCard title="Readiness" value={readiness?.ready ? "READY" : "BLOCKED"} subtitle={`${blockers.length} blockers`} icon={<ShieldCheck size={18} />} good={readiness?.ready} danger={!readiness?.ready} />
         <StatCard title="Payments" value={readiness?.payments?.cash_collected ?? 0} subtitle={`paid ${readiness?.payments?.paid ?? 0}, pending ${readiness?.payments?.pending ?? 0}`} icon={<CreditCard size={18} />} good />
       </section>
 
       <section className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <MiniCard title="Signals" value={analytics?.total_signals ?? 0} link="/signals" />
-        <MiniCard title="Winrate" value={`${analytics?.winrate ?? 0}%`} link="/analytics" />
+        <MiniCard title="Winrate" value={`${analytics?.winrate_honest ?? analytics?.winrate ?? 0}%`} link="/analytics" />
         <MiniCard title="Active" value={analytics?.active_signals ?? 0} link="/positions" />
         <MiniCard title="Telegram SLA" value={`${readiness?.telegram_delivery?.sla_pct ?? 100}%`} link="/health" />
         <MiniCard title="Depth feed" value={orderbook?.enabled ? (orderbook?.stats?.freshest_age_sec != null ? `LIVE ${Number(orderbook.stats.freshest_age_sec).toFixed(1)}s` : "—") : "OFF"} link="/orderbook" />

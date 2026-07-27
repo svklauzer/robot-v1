@@ -46,7 +46,10 @@ export default function PositionsPage() {
     // Реализованный Net PnL берём из analytics/summary (вся история, источник истины),
     // а не из суммы unrealized_pnl по урезанной выборке позиций. Открытые позиции —
     // отдельно (живой unrealized), чтобы не смешивать с реализованным.
-    const realizedNet = numeric(summaryData?.total_net_pnl_usdt);
+    // (#phantom-fill-2026-07-25) Честный: сырой завышен фантомными филлами.
+    const realizedNet = numeric(
+      summaryData?.total_net_pnl_honest_usdt ?? summaryData?.total_net_pnl_usdt,
+    );
     const openUnrealized = active.reduce((sum, p) => sum + numeric(p.unrealized_pnl), 0);
 
     return {

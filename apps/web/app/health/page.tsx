@@ -10,6 +10,13 @@ export default function HealthPage() {
   const [readiness, setReadiness] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [killSwitchSmoke, setKillSwitchSmoke] = useState<any>(null);
+  // (#egress-monitor-2026-07-26) Витрина инцидента 26.07: статус-страница
+  // платформы показывала «All Systems Operational», пока инстанс не мог
+  // достучаться ни до HTX, ни до Kraken. Замеры делаются С САМОГО инстанса.
+  const [egress, setEgress] = useState<any>(null);
+  const [egressHours, setEgressHours] = useState<string>("24");
+  const [diagnostics, setDiagnostics] = useState<any>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
   const loadingRef = useRef(false);
 
   async function loadAll() {
@@ -26,6 +33,23 @@ export default function HealthPage() {
     } finally {
       loadingRef.current = false;
       setLoading(false);
+    }
+  }
+
+  // Отдельно от 5-секундного поллинга: history читает журнал целиком, гонять
+  // это каждые 5 секунд незачем — раз в минуту достаточно.
+  async function loadEgress() {
+    setEgress(await apiGet(`/system/egress-history?hours=${egressHours}`).catch(() => null));
+  }
+
+  // Строго по кнопке. Диагностика делает DNS+TCP+TLS+HTTP по всем хостам с
+  // таймаутом 8 с — на автообновлении она бы держала воркер занятым.
+  async function runDiagnostics() {
+    setDiagLoading(true);
+    try {
+      setDiagnostics(await apiGet("/system/exchange-diagnostics").catch(() => null));
+    } finally {
+      setDiagLoading(false);
     }
   }
 
@@ -57,6 +81,12 @@ export default function HealthPage() {
     const timer = setInterval(loadAll, 5000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    loadEgress();
+    const timer = setInterval(loadEgress, 60000);
+    return () => clearInterval(timer);
+  }, [egressHours]);
 
   const bot = health?.bot;
   const market = readiness?.market_connectivity || health?.market;
@@ -210,6 +240,176 @@ export default function HealthPage() {
         </Panel>
       </section>
 
+      {/* (#egress-monitor-2026-07-26) Доступность исходящей сети — замеры с
+          самого инстанса. Контрольная группа (Cloudflare/Google/Telegram)
+          отделяет «лежит биржа» от «лежит наш egress»: без неё инцидент 26.07
+          выглядел как проблема HTX, и мы бы крутили HTX_API_HOSTNAME впустую. */}
+      <section className="rounded-2xl border border-indigo-900/70 bg-indigo-950/10 p-5">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-semibold text-indigo-200">
+              <Wifi size={18} />
+              Доступность исходящей сети
+            </h2>
+            <p className="text-sm text-indigo-100/60">
+              Замеры с самого инстанса раз в минуту. Контрольная группа отделяет проблему биржи от
+              проблемы egress — статус-страница платформы этот слой не покрывает.
+            </p>
+          </div>
+          <label className="text-sm text-indigo-100/70">
+            Окно
+            <select
+              value={egressHours}
+              onChange={(e) => setEgressHours(e.target.value)}
+              className="ml-2 rounded-xl border border-indigo-800 bg-black/40 px-3 py-2 text-indigo-100 outline-none focus:border-indigo-400"
+            >
+              <option value="6">6 часов</option>
+              <option value="24">24 часа</option>
+              <option value="72">3 дня</option>
+              <option value="168">7 дней</option>
+            </select>
+          </label>
+        </div>
+
+        {egress?.status !== "ok" ? (
+          <Empty text={egress?.note || "Монитор ещё не накопил данных"} />
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MiniStat
+                label="Доступность"
+                value={`${egress.availability_pct}%`}
+                tone={egress.availability_pct >= 99.5 ? "good" : egress.availability_pct >= 95 ? "warn" : "bad"}
+              />
+              <MiniStat
+                label="Окон недоступности"
+                value={(egress.outage_windows || []).length}
+                tone={(egress.outage_windows || []).length === 0 ? "good" : "bad"}
+              />
+              <MiniStat label="Замеров" value={egress.samples} tone="good" />
+              <MiniStat
+                label="Худший DNS"
+                value={egress.worst_dns_ms != null ? `${egress.worst_dns_ms} ms` : "—"}
+                tone={(egress.worst_dns_ms ?? 0) > 2000 ? "bad" : (egress.worst_dns_ms ?? 0) > 500 ? "warn" : "good"}
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-xs">
+              {Object.entries(egress.by_verdict || {}).map(([verdict, count]) => (
+                <span
+                  key={verdict}
+                  className={`rounded-lg border px-2 py-1 ${
+                    verdict === "ok"
+                      ? "border-emerald-900/60 text-emerald-300"
+                      : "border-red-900/60 text-red-300"
+                  }`}
+                >
+                  {EGRESS_VERDICTS[verdict] || verdict}: {String(count)}
+                </span>
+              ))}
+            </div>
+
+            {(egress.outage_windows || []).length > 0 && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-indigo-100/50">
+                  Окна недоступности — готовый список для тикета
+                </h3>
+                <div className="space-y-1">
+                  {(egress.outage_windows || []).slice().reverse().slice(0, 12).map((w: any, idx: number) => (
+                    <div key={idx} className="rounded-lg border border-red-900/50 bg-black/20 px-3 py-2 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-red-200">
+                          {EGRESS_VERDICTS[w.verdict] || w.verdict}
+                          {w.ongoing && <span className="ml-2 rounded bg-red-700 px-1.5 text-xs text-white">идёт сейчас</span>}
+                        </span>
+                        <span className="text-indigo-100/70">
+                          {String(w.from).slice(11, 19)} → {String(w.to).slice(11, 19)} UTC · {w.minutes} мин
+                        </span>
+                      </div>
+                      {(w.sample || []).length > 0 && (
+                        <div className="mt-1 text-xs text-indigo-100/50">
+                          {(w.sample || []).map((s: any) => `${s.h} (${s.s}/${s.e})`).join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* (#exchange-diag-2026-07-26) Постадийный зонд DNS→TCP→TLS→HTTP. Каждая
+          стадия отвечает на свой вопрос, и вердикт формулируется в терминах
+          действия: переставить хост, поднять прокси или идти к платформе. */}
+      <section className="rounded-2xl border border-violet-900/70 bg-violet-950/10 p-5">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-violet-200">Диагностика подключения к бирже</h2>
+            <p className="text-sm text-violet-100/60">
+              Постадийно: DNS → TCP → TLS → HTTP. Публичный эндпоинт, ключи не нужны — если он молчит,
+              статус ключа значения не имеет. По кнопке: зонд занимает до 8 с на хост.
+            </p>
+          </div>
+          <button
+            onClick={runDiagnostics}
+            disabled={diagLoading}
+            className="flex items-center gap-2 rounded-xl bg-violet-700 px-4 py-2 font-semibold hover:bg-violet-600 disabled:opacity-50"
+          >
+            <Activity size={16} />
+            {diagLoading ? "Проверяю..." : "Проверить сейчас"}
+          </button>
+        </div>
+
+        {!diagnostics ? (
+          <Empty text="Нажмите «Проверить сейчас»" />
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-violet-900/60 bg-black/30 p-4">
+              <div className="text-sm text-violet-100/60">Вердикт</div>
+              <div className={`mt-1 font-semibold ${diagnostics.any_host_reachable ? "text-emerald-300" : "text-red-300"}`}>
+                {diagnostics.verdict}
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-x-6 md:grid-cols-2">
+                <InfoRow label="Рекомендуемый хост" value={diagnostics.recommended_hostname || "—"} danger={!diagnostics.recommended_hostname} />
+                <InfoRow label="Прокси настроен" value={diagnostics.proxy_configured ? "да" : "нет"} />
+                <InfoRow
+                  label="Размыкатель"
+                  value={
+                    diagnostics.circuit?.open
+                      ? `разомкнут, ещё ${diagnostics.circuit.opens_in_sec}с`
+                      : `замкнут (подряд ошибок: ${diagnostics.circuit?.consecutive_failures ?? 0})`
+                  }
+                  danger={Boolean(diagnostics.circuit?.open)}
+                />
+                <InfoRow label="Активный хост" value={diagnostics.circuit?.active_host || "—"} />
+                <InfoRow label="Проверено" value={String(diagnostics.checked_at || "").replace("T", " ")} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">Хосты биржи</h3>
+                <div className="space-y-2">
+                  {(diagnostics.hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">
+                  Контрольные хосты — живы ли они, решает, где искать
+                </h3>
+                <div className="space-y-2">
+                  {(diagnostics.control_hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-violet-100/50">{diagnostics.note}</p>
+          </div>
+        )}
+      </section>
+
       <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
         <h2 className="mb-4 flex items-center gap-2 text-xl font-semibold text-emerald-200">
           <Activity size={18} />
@@ -228,6 +428,55 @@ export default function HealthPage() {
         )}
       </section>
     </AppShell>
+  );
+}
+
+// Вердикты монитора на человеческом языке: разница между ними — это разница
+// между «писать бирже», «менять хост» и «идти к платформе».
+const EGRESS_VERDICTS: Record<string, string> = {
+  ok: "норма",
+  partial: "часть бирж недоступна",
+  exchanges_unreachable: "биржи недоступны, контрольные живы",
+  egress_down: "не работает исходящая сеть инстанса",
+};
+
+function MiniStat({ label, value, tone }: { label: string; value: any; tone: "good" | "warn" | "bad" }) {
+  const cls = tone === "good" ? "text-emerald-300" : tone === "warn" ? "text-yellow-300" : "text-red-300";
+  return (
+    <div className="rounded-xl border border-indigo-900/60 bg-black/20 p-3">
+      <div className="text-xs text-indigo-100/50">{label}</div>
+      <div className={`mt-1 text-xl font-bold ${cls}`}>{value}</div>
+    </div>
+  );
+}
+
+function DiagHost({ host }: { host: any }) {
+  const stages: [string, any][] = [
+    ["DNS", host.dns],
+    ["TCP", host.tcp],
+    ["TLS", host.tls],
+    ["HTTP", host.http],
+  ];
+  return (
+    <div className="rounded-xl border border-violet-900/50 bg-black/20 p-3">
+      <div className="font-semibold text-violet-100">{host.host}</div>
+      <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+        {stages.map(([name, stage]) => {
+          if (!stage) return <span key={name} className="rounded border border-violet-950 px-2 py-0.5 text-violet-100/30">{name} —</span>;
+          const ok = stage.ok;
+          return (
+            <span
+              key={name}
+              title={stage.error || stage.body || ""}
+              className={`rounded border px-2 py-0.5 ${ok ? "border-emerald-900/60 text-emerald-300" : "border-red-900/60 text-red-300"}`}
+            >
+              {name} {ok ? (stage.ms != null ? `${stage.ms}ms` : "ok") : stage.status || stage.error_type || "fail"}
+            </span>
+          );
+        })}
+      </div>
+      {host.verdict && <div className="mt-2 text-xs text-violet-100/60">{host.verdict}</div>}
+    </div>
   );
 }
 

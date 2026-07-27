@@ -13,6 +13,7 @@ export default function AnalyticsPage() {
   const [symbolPerf, setSymbolPerf] = useState<any>(null);
   const [validationGates, setValidationGates] = useState<any>(null);
   const [mfeMae, setMfeMae] = useState<any>(null);
+  const [depthCoverage, setDepthCoverage] = useState<any>(null);
   const [mfeWindow, setMfeWindow] = useState<string>("168");
   const [loading, setLoading] = useState(false);
 
@@ -20,7 +21,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     try {
       const mfeQs = mfeWindow === "all" ? "" : `&window_hours=${mfeWindow}`;
-      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData, depthData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
@@ -28,6 +29,8 @@ export default function AnalyticsPage() {
         apiGet("/analytics/symbol-performance?lookback=12"),
         apiGet("/analytics/validation-gates"),
         apiGet(`/analytics/mfe-mae?limit=500${mfeQs}`).catch(() => null),
+        // (#depth-failopen-2026-07-27) Эндпоинт был, витрины не было.
+        apiGet("/analytics/depth-coverage?limit=200").catch(() => null),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
@@ -36,6 +39,7 @@ export default function AnalyticsPage() {
       setSymbolPerf(symbolPerfData);
       setValidationGates(validationData);
       setMfeMae(mfeMaeData);
+      setDepthCoverage(depthData);
     } finally {
       setLoading(false);
     }
@@ -88,10 +92,40 @@ export default function AnalyticsPage() {
                 : undefined
             }
           />
-          <StatCard title="Winrate (вся история)" value={`${summary?.winrate ?? 0}%`} warn={(summary?.winrate ?? 0) < 45} good={(summary?.winrate ?? 0) >= 50} />
+          {/* (#analytics-honest-winrate-2026-07-27) Winrate тоже по честному PnL:
+              сырой засчитывал фантомный филл в победы, и карточка противоречила
+              карточке PnL слева. */}
+          <StatCard
+            title="Winrate (вся история, честный)"
+            value={`${summary?.winrate_honest ?? summary?.winrate ?? 0}%`}
+            warn={(summary?.winrate_honest ?? summary?.winrate ?? 0) < 45}
+            good={(summary?.winrate_honest ?? summary?.winrate ?? 0) >= 50}
+            note={
+              summary?.winrate_honest != null && summary?.winrate != null && summary.winrate_honest !== summary.winrate
+                ? `сырой показывал ${summary.winrate}%`
+                : undefined
+            }
+          />
           <StatCard title="Failed setup (посл. 200)" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active !== false} good={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active === false} />
           <StatCard title="Positive→Negative (посл. 200)" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
-          <StatCard title="MFE capture (посл. 200)" value={`${quality?.mfe_capture_rate ?? 0}%`} good={(quality?.mfe_capture_count ?? 0) > 0} />
+          {/* (#analytics-capture-2026-07-27) Здесь стоял `mfe_capture_rate` из
+              /signal-quality — это ДОЛЯ ЗАКРЫТИЙ по причине adaptive_mfe_capture,
+              а не доля забранного пика. Оператор читал «мы забираем N% хода», а
+              видел «N% выходов прошли через одну конкретную ветку». Зелёный цвет
+              при count > 0 добивал: любая одна сделка красила карточку в успех.
+              Теперь — настоящий capture: sum(result)/sum(MFE) по окну. */}
+          <StatCard
+            title={`Capture MFE (${mfeWindowLabel(mfeWindow)})`}
+            value={mfeMae?.overall?.capture_rate_pct != null ? `${mfeMae.overall.capture_rate_pct}%` : "—"}
+            good={(mfeMae?.overall?.capture_rate_pct ?? 0) >= 50}
+            warn={mfeMae?.overall?.capture_rate_pct != null && mfeMae.overall.capture_rate_pct < 50 && mfeMae.overall.capture_rate_pct >= 25}
+            danger={mfeMae?.overall?.capture_rate_pct != null && mfeMae.overall.capture_rate_pct < 25}
+            note={
+              mfeMae?.overall?.capture_rate_pct != null
+                ? `медиана ${mfeMae.overall.capture_rate_median_pct ?? "—"}% · n=${mfeMae.overall.capture_sample_count ?? 0} · выходов через adaptive_mfe_capture: ${quality?.mfe_capture_count ?? 0}`
+                : undefined
+            }
+          />
         </section>
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -256,6 +290,31 @@ export default function AnalyticsPage() {
           )}
         </section>
 
+        {/* (#depth-failopen-2026-07-27) Depth-гейт устроен fail-open: при обрыве
+            WS-фида вход проходит БЕЗ подтверждения потоком, и проверка отключается
+            молча. Счётчик, по которому решение можно принять на статистике. */}
+        {depthCoverage?.status === "ok" && (
+          <section className="rounded-2xl border border-sky-900/70 bg-sky-950/10 p-5">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold text-sky-200">Входы без подтверждения стаканом</h2>
+              <p className="text-sm text-sky-100/60">
+                Depth-гейт fail-open: если WS-фид молчал, вход проходит вслепую. Выборка: последние{" "}
+                {depthCoverage.sample_limit} закрытых.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <DepthBucket title="С подтверждением потоком" data={depthCoverage.with_depth_confirmation} tone="ok" />
+              <DepthBucket title="Без подтверждения (fail-open)" data={depthCoverage.without_depth_confirmation} tone="warn" />
+            </div>
+            {(depthCoverage.without_depth_confirmation?.count ?? 0) > 0 && (
+              <p className="mt-3 text-xs text-sky-100/50">
+                id: {(depthCoverage.unverified_signal_ids || []).map((v: any) => `#${v}`).join(", ")}. Малая выборка
+                решением не является — метрика копится.
+              </p>
+            )}
+          </section>
+        )}
+
         <section className="rounded-2xl border border-red-900/70 bg-red-950/20 p-5">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
@@ -331,6 +390,28 @@ const SYMBOL_REASON_LABELS: Record<string, string> = {
 function symbolReasonLabel(code: any): string {
   const key = String(code || "");
   return SYMBOL_REASON_LABELS[key] || key || "-";
+}
+
+const MFE_WINDOW_LABELS: Record<string, string> = {
+  "24": "24ч", "72": "3д", "168": "7д", "720": "30д", all: "вся история",
+};
+
+function mfeWindowLabel(value: string): string {
+  return MFE_WINDOW_LABELS[value] || `${value}ч`;
+}
+
+function DepthBucket({ title, data, tone }: { title: string; data: any; tone: "ok" | "warn" }) {
+  const border = tone === "warn" ? "border-yellow-900/60" : "border-sky-900/60";
+  const count = data?.count ?? 0;
+  return (
+    <div className={`rounded-xl border ${border} bg-black/20 p-4`}>
+      <h3 className="mb-3 font-semibold text-sky-100">{title}</h3>
+      <Metric label="Сделок" value={count} />
+      <Metric label="Net PnL" value={`${data?.net_pnl_usdt ?? 0} USDT`} warn={(data?.net_pnl_usdt ?? 0) < 0} />
+      <Metric label="Средний результат" value={data?.avg_pnl_usdt != null ? `${data.avg_pnl_usdt} USDT` : "—"} warn={(data?.avg_pnl_usdt ?? 0) < 0} />
+      <Metric label="Winrate" value={data?.winrate_pct != null ? `${data.winrate_pct}%` : "—"} />
+    </div>
+  );
 }
 
 function Panel({ title, icon, children }: { title: string; icon: any; children: any }) {

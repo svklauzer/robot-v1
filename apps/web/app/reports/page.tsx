@@ -65,8 +65,8 @@ export default function ReportsPage() {
 
   const stats = useMemo(() => {
     const closed = Number(summary?.closed_signals ?? 0);
-    const wins = Number(summary?.wins ?? 0);
-    const losses = Number(summary?.losses ?? 0);
+    const wins = Number(summary?.wins_honest ?? summary?.wins ?? 0);
+    const losses = Number(summary?.losses_honest ?? summary?.losses ?? 0);
     const total = Number(summary?.total_signals ?? 0);
 
     return {
@@ -74,11 +74,13 @@ export default function ReportsPage() {
       closed,
       wins,
       losses,
-      winrate: summary?.winrate ?? 0,
+      // (#phantom-fill-2026-07-25) Отчёт — то, что уходит наружу; в нём тем более
+      // не должно быть прибыли по ценам, которых рынок не видел.
+      winrate: summary?.winrate_honest ?? summary?.winrate ?? 0,
       resultPct: summary?.total_result_pct ?? 0,
       hours: summary?.hours ?? period,
-      netPnl: summary?.total_net_pnl_usdt ?? null,
-      avgPnl: summary?.avg_net_pnl_usdt ?? null,
+      netPnl: summary?.total_net_pnl_honest_usdt ?? summary?.total_net_pnl_usdt ?? null,
+      avgPnl: summary?.avg_net_pnl_honest_usdt ?? summary?.avg_net_pnl_usdt ?? null,
       costs: summary?.total_costs_usdt ?? null,
       active: summary?.active_signals ?? 0,
       expired: summary?.expired_signals ?? 0,

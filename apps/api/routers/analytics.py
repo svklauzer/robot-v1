@@ -6,7 +6,7 @@ from core.security import require_owner_action
 from models.bot import Bot
 from models.signal import Signal
 from services.exposure_guard import ExposureGuard
-from services.phantom_fill import summarize as summarize_phantom
+from services.phantom_fill import phantom_adjustment, summarize as summarize_phantom
 from services.validation_gates import ValidationGateService
 from services.outcome_diagnostics import OutcomeDiagnosticsService
 from services.symbol_performance_summary import SymbolPerformanceSummaryService
@@ -36,6 +36,7 @@ def _analytics_summary_data():
         queued = db.query(Signal).filter(Signal.status == "queued").count()
 
         wins = losses = 0
+        wins_honest = losses_honest = 0
         total_result_pct = total_net_pnl = total_costs = 0.0
         closed_with_money = 0
 
@@ -49,14 +50,25 @@ def _analytics_summary_data():
                 closed_with_money += 1
                 wins += 1 if net_pnl > 0 else 0
                 losses += 1 if net_pnl <= 0 else 0
+                # (#analytics-honest-winrate-2026-07-27) Победа тоже должна быть
+                # честной. Раньше winrate считался от сырого closed_net_pnl —
+                # сделка, «закрытая» по цене выше собственного максимума, попадала
+                # в победы, и карточка winrate противоречила карточке PnL рядом.
+                _, adj = phantom_adjustment(s)
+                honest_pnl = net_pnl + adj
+                wins_honest += 1 if honest_pnl > 0 else 0
+                losses_honest += 1 if honest_pnl <= 0 else 0
             else:
                 wins += 1 if result_pct > 0 else 0
                 losses += 1 if result_pct <= 0 else 0
+                wins_honest += 1 if result_pct > 0 else 0
+                losses_honest += 1 if result_pct <= 0 else 0
             if s.closed_total_cost is not None:
                 total_costs += float(s.closed_total_cost)
 
         closed_count = len(closed_signals)
         winrate = round((wins / closed_count * 100), 2) if closed_count else 0.0
+        winrate_honest = round((wins_honest / closed_count * 100), 2) if closed_count else 0.0
         avg_net_pnl = round((total_net_pnl / closed_with_money), 6) if closed_with_money else 0.0
 
         # (#phantom-fill-2026-07-25) Сводка питалась ТОЛЬКО от closed_net_pnl, а он
@@ -65,6 +77,9 @@ def _analytics_summary_data():
         # историей) и честную (для решений).
         phantom = summarize_phantom(closed_signals)
         total_net_pnl_honest = round(total_net_pnl + phantom["phantom_fill_delta_usdt"], 6)
+        avg_net_pnl_honest = (
+            round(total_net_pnl_honest / closed_with_money, 6) if closed_with_money else 0.0
+        )
 
         guard = ExposureGuard()
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
@@ -88,10 +103,14 @@ def _analytics_summary_data():
             "wins": wins,
             "losses": losses,
             "winrate": winrate,
+            "wins_honest": wins_honest,
+            "losses_honest": losses_honest,
+            "winrate_honest": winrate_honest,
             "total_result_pct": round(total_result_pct, 4),
             "total_net_pnl_usdt": round(total_net_pnl, 6),
             "total_net_pnl_honest_usdt": total_net_pnl_honest,
             "avg_net_pnl_usdt": avg_net_pnl,
+            "avg_net_pnl_honest_usdt": avg_net_pnl_honest,
             "total_costs_usdt": round(total_costs, 6),
             **{k: v for k, v in phantom.items() if k != "phantom_fill_delta_usdt"},
             "exposure": {
@@ -257,9 +276,10 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
     """(#mfe-mae-2026-07-10) MFE/MAE-профиль по символам в разрезе regime +
     дневная динамика. Заменяет ручной мониторинг по Telegram-отчётам.
 
-    capture_rate: доля пикового хода, реально забранная закрытием
-    (result_pct / mfe_pct по сделкам с MFE ≥ 0.2%) — главный индикатор
-    качества exit-политики. edge_ratio = avg_mfe / |avg_mae| — качество входов.
+    capture_rate: доля пикового хода, реально забранная закрытием — главный
+    индикатор качества exit-политики. Считается портфельно:
+    sum(result_pct) / sum(mfe_pct) по сделкам с MFE ≥ 0.2%.
+    edge_ratio = avg_mfe / |avg_mae| — качество входов.
     """
     from datetime import timedelta as _td
 
@@ -295,6 +315,13 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
             mae = _f(lifecycle.get("mae_pct"))
             if mfe is None and mae is None:
                 continue
+            # (#analytics-capture-2026-07-27) Записанный result_pct не может быть
+            # выше пика, которого сделка достигала. Фантомные филлы нарушали это
+            # и давали capture > 100% — метрика качества выходов показывала, что
+            # мы забираем больше, чем рынок дал.
+            _result = _f(s.result_pct) or 0.0
+            if mfe is not None and _result > mfe:
+                _result = mfe
             rows.append({
                 "symbol": s.symbol,
                 "regime": str(plan.get("regime") or plan.get("trade_mode") or "unknown"),
@@ -302,7 +329,7 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
                 "mfe": mfe if mfe is not None else 0.0,
                 "mae": mae if mae is not None else 0.0,
                 "missed": _f(lifecycle.get("missed_profit_pct")),
-                "result_pct": _f(s.result_pct) or 0.0,
+                "result_pct": _result,
                 "net_pnl": _f(s.closed_net_pnl) or 0.0,
                 "ptn": bool(lifecycle.get("positive_then_negative")),
                 "closed_at": s.closed_at,
@@ -317,7 +344,28 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
             missed = [r["missed"] for r in bucket_rows if r["missed"] is not None]
             avg_mfe = sum(mfes) / n
             avg_mae = sum(maes) / n
-            captured = [r["result_pct"] / r["mfe"] for r in bucket_rows if r["mfe"] >= 0.2]
+
+            # (#analytics-capture-2026-07-27) Было среднее ОТНОШЕНИЙ
+            # result_pct/mfe_pct — метрика ломалась на выбросах: сделка с
+            # mfe 0.29% и результатом −1.04% даёт −356% и в одиночку топит бакет.
+            # На боевых 14 сделках это уводило capture с честных 34.3% до 13.0%,
+            # а в бакетах символ×режим (n=1..3) делало метрику нечитаемой.
+            # Портфельная доля sum(result)/sum(mfe) отвечает на нужный вопрос:
+            # какую часть суммарного предложенного хода мы реально забрали.
+            eligible = [r for r in bucket_rows if r["mfe"] >= 0.2]
+            mfe_sum = sum(r["mfe"] for r in eligible)
+            capture_pct = (
+                round(sum(r["result_pct"] for r in eligible) / mfe_sum * 100, 2)
+                if eligible and mfe_sum > 0
+                else None
+            )
+            # Медиана рядом — устойчива к выбросам и показывает типичную сделку,
+            # а не вклад в общий результат. Расхождение с портфельной = перекос
+            # выборки (несколько сделок делают всю картину).
+            ratios = sorted(r["result_pct"] / r["mfe"] for r in eligible)
+            capture_median_pct = (
+                round(ratios[len(ratios) // 2] * 100, 2) if ratios else None
+            )
             return {
                 "count": n,
                 "avg_mfe_pct": round(avg_mfe, 4),
@@ -326,7 +374,9 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
                 "worst_mae_pct": round(min(maes), 4),
                 "avg_missed_pct": round(sum(missed) / len(missed), 4) if missed else None,
                 "edge_ratio": round(avg_mfe / abs(avg_mae), 3) if avg_mae < 0 else None,
-                "capture_rate_pct": round(sum(captured) / len(captured) * 100, 2) if captured else None,
+                "capture_rate_pct": capture_pct,
+                "capture_rate_median_pct": capture_median_pct,
+                "capture_sample_count": len(eligible),
                 "net_pnl_usdt": round(sum(r["net_pnl"] for r in bucket_rows), 6),
                 "ptn_rate_pct": round(sum(1 for r in bucket_rows if r["ptn"]) / n * 100, 2),
             }
@@ -365,10 +415,17 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
             if agg:
                 daily.append({"date": day, **agg})
 
+        # (#analytics-capture-2026-07-27) Сводный capture по всей выборке —
+        # ровно та цифра, которая должна стоять на верхней карточке дашборда.
+        # Раньше там висел `mfe_capture_rate` из /signal-quality, а это ДОЛЯ
+        # ЗАКРЫТИЙ по причине `adaptive_mfe_capture`, а не доля забранного пика.
+        overall = _agg(rows) or {}
+
         return {
             "status": "ok",
             "sample_count": len(rows),
             "window_hours": window_hours,
+            "overall": overall,
             "by_regime": regime_items,
             "by_symbol_regime": symbol_regime_items,
             "daily": daily[-30:],
