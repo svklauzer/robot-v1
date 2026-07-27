@@ -13,10 +13,18 @@ def ml_outcomes_summary():
 
 
 @router.get("/exit-replay", dependencies=[Depends(require_owner_action)])
-def ml_exit_replay(limit: int = 2000):
-    """(#audit-traj) Offline A/B exit-параметров по траекториям закрытых сделок."""
-    from services.exit_replay import build as build_exit_replay
-    return build_exit_replay(limit=limit)
+def ml_exit_replay(limit: int = 2000, profile: str = "trend"):
+    """(#audit-traj) Offline A/B exit-параметров по траекториям закрытых сделок.
+
+    (#backtest-trend-2026-07-27) Профиль по умолчанию — `trend`. Раньше эндпоинт
+    умел только scalp/range и молча пропускал трендовый контур, то есть основную
+    массу сделок и ровно то место, где сидит потолок прибыли.
+    """
+    from services.exit_replay import build as build_scalp, build_trend
+
+    if str(profile).lower() == "scalp":
+        return build_scalp(limit=limit)
+    return build_trend(limit=limit)
 
 
 @router.post("/outcomes/backfill", dependencies=[Depends(require_owner_action)])

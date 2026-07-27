@@ -1,15 +1,32 @@
 """Offline A/B exit-параметров по записанным траекториям сделок (#audit-traj).
 
-Прогоняет варианты scalp-exit конфига (arm / giveback / time-stop) по
-lifecycle.traj из trade_outcomes.jsonl и отвечает result-based: какой набор
-параметров дал бы лучший суммарный результат на РЕАЛЬНЫХ траекториях.
+Прогоняет варианты exit-конфига по lifecycle.traj из trade_outcomes.jsonl и
+отвечает result-based: какой набор параметров дал бы лучший суммарный результат
+на РЕАЛЬНЫХ траекториях.
+
+Два профиля ведения — у них разные лестницы выхода и разные параметры:
+
+  * `scalp`  — arm / giveback / time-stop (исторический путь);
+  * `trend`  — (#backtest-trend-2026-07-27) полная лестница: безубыток-замок →
+    полоса захвата (ярус 2) → ride-трейл, плюс сквозной порог
+    `MIN_PROTECTIVE_EXIT_PCT`.
+
+Почему добавлен trend. Раньше `build()` брал только `trade_mode in (scalp,
+range)` — то есть молча пропускал ВЕСЬ трендовый контур. На боевой выборке
+#264–282 это 16 сделок из 18. Инструмент, созданный искать течь в выходах, не
+видел 89% выходов; при этом именно там обнаружился потолок прибыли: десять
+победителей подряд закрылись в полосе +0.05…+0.10% при пиках до 1.54%.
 
 Инварианты честности:
   - replay может закрыть сделку только РАНЬШЕ фактического закрытия; если
     правило не сработало — берём фактический final_result_pct (как и было);
+  - выход книжится по ТЕКУЩЕЙ точке траектории, а не по защитному уровню:
+    стоп не исполняется лучше рынка (тот же инвариант, что и #phantom-fill);
   - издержки у всех вариантов одинаковы (ровно один выход) → сравнение по
     gross-% корректно, комиссии сокращаются;
-  - сделки без траектории (старые логи) пропускаются и честно считаются.
+  - сделки без траектории (старые логи) пропускаются и честно считаются;
+  - перебор по сотне вариантов на ~300 сделках легко рождает красивый мусор,
+    поэтому лидер проверяется на двух половинах выборки — см. `_split_check`.
 
 Только чтение датасета. На торговлю не влияет.
 """
@@ -93,6 +110,109 @@ def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
     return final_pct, "actual_close"
 
 
+def _replay_trend_one(
+    traj: list,
+    final_pct: float,
+    *,
+    be_arm: float,
+    be_floor: float,
+    band_arm: float,
+    band_give: float,
+    band_floor: float,
+    ride_arm: float,
+    ride_trail: float,
+    min_protective: float,
+) -> tuple[float, str]:
+    """(#backtest-trend-2026-07-27) Трендовая лестница выхода по траектории.
+
+    Порядок ярусов повторяет `exit_policy`: чем выше добрался MFE, тем более
+    щедрая ветка ведёт сделку.
+
+      ярус 3 (ride)  mfe ≥ ride_arm   → трейл на доле пика
+      ярус 2 (band)  mfe ≥ band_arm   → выход, отдав долю пика, но не ниже пола
+      ярус 1 (BE)    mfe ≥ be_arm     → стоп в безубыток+floor
+
+    Ключевая деталь — `min_protective`. Защитные ветки не срабатывают, если
+    результат ниже этого порога, и сделка проваливается на безубыток. Именно
+    так порог 1.80% превращал пик 1.38% в фиксацию +0.07%: до 1.80 сделка не
+    дотягивала, ярусы 2–3 молчали, оставался замок. Поэтому параметр входит в
+    перебор — его влияние надо видеть, а не предполагать.
+
+    Выход книжится по ТЕКУЩЕЙ точке (`pct`), а не по защитному уровню: стоп не
+    исполняется лучше рынка.
+    """
+    mfe = 0.0
+    for point in traj:
+        try:
+            pct = float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        mfe = max(mfe, pct)
+
+        if mfe >= ride_arm:
+            protect = mfe * (1.0 - ride_trail)
+            if pct <= protect and pct >= min_protective:
+                return pct, "replay_trend_trail"
+        elif mfe >= band_arm:
+            if (mfe - pct) >= mfe * band_give and pct >= max(band_floor, min_protective):
+                return pct, "replay_capture_band"
+
+        # Замок безубытка — последний рубеж; срабатывает, когда цена вернулась
+        # к входу. Порогом min_protective НЕ гейтится: это стоп, а не фиксация.
+        if mfe >= be_arm and pct <= be_floor:
+            return pct, "replay_breakeven"
+
+    return final_pct, "actual_close"
+
+
+def _split_check(trades: list[dict], run, best_key: dict, keyfn) -> dict:
+    """Лидер обязан выигрывать на обеих половинах выборки, а не только в сумме.
+
+    Перебор сотни вариантов по нескольким сотням сделок почти гарантированно
+    находит комбинацию, которая обслуживает пару удачных исходов. Дешёвая
+    защита — разрезать выборку хронологически пополам и посмотреть, остаётся
+    ли лидер лидером в каждой половине отдельно.
+    """
+    half = len(trades) // 2
+    if half < 10:
+        return {
+            "checked": False,
+            "reason": f"в половине меньше 10 сделок ({half}) — разбиение бессмысленно",
+        }
+
+    out = {}
+    for name, subset in (("first_half", trades[:half]), ("second_half", trades[half:])):
+        ranked = sorted(run(subset), key=lambda v: v["total_pct"], reverse=True)
+        pos = next((i for i, v in enumerate(ranked) if keyfn(v) == keyfn(best_key)), None)
+        out[name] = {
+            "leader_rank": (pos + 1) if pos is not None else None,
+            "leader_total_pct": next(
+                (v["total_pct"] for v in ranked if keyfn(v) == keyfn(best_key)), None
+            ),
+            "half_best_total_pct": ranked[0]["total_pct"] if ranked else None,
+            "trades": len(subset),
+        }
+
+    # Порог: лидер обязан попасть в верхнюю четверть вариантов на КАЖДОЙ
+    # половине. Прежнее правило `max(ranks) <= max(3, len(ranks))` было
+    # бессмысленным — на сетке из трёх вариантов оно засчитывало последнее
+    # место как устойчивость. Тест это и поймал.
+    n_variants = max(len(run(trades[:half]) or []), 1)
+    top_quarter = max(1, -(-n_variants // 4))
+    ranks = [v["leader_rank"] for v in out.values() if v["leader_rank"]]
+    robust = bool(ranks) and len(ranks) == 2 and max(ranks) <= top_quarter
+    out["top_quarter_rank"] = top_quarter
+    out["variants_per_half"] = n_variants
+    out["checked"] = True
+    out["robust"] = robust
+    out["verdict"] = (
+        "лидер держится на обеих половинах — на подгонку не похоже"
+        if robust
+        else "лидер выигрывает только на всей выборке: вероятна подгонка, менять конфиг рано"
+    )
+    return out
+
+
 def build(limit: int = 2000) -> dict:
     from services.ml_trade_logger import MLTradeLogger
     path = MLTradeLogger().path
@@ -158,6 +278,23 @@ def build(limit: int = 2000) -> dict:
         })
     variants.sort(key=lambda v: v["total_pct"], reverse=True)
 
+    def _run_scalp(subset):
+        out = []
+        for a, g, t in product(arms, gives, time_stops):
+            tot = sum(
+                _replay_one(x["traj"], x["final_pct"], arm=a, give=g, ts_min=t,
+                            hard_mult=hard_mult)[0]
+                for x in subset
+            )
+            out.append({"arm_pct": a, "giveback_share": g, "time_stop_min": t,
+                        "total_pct": round(tot, 4)})
+        return out
+
+    def _key_scalp(v):
+        return (v["arm_pct"], v["giveback_share"], v["time_stop_min"])
+
+    split = _split_check(trades, _run_scalp, variants[0], _key_scalp)
+
     current = {
         "arm_pct": float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5)),
         "giveback_share": float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.6)),
@@ -167,6 +304,7 @@ def build(limit: int = 2000) -> dict:
 
     return {
         "status": "ok",
+        "profile": "scalp",
         "trades_replayed": len(trades),
         "skipped_no_trajectory": skipped_no_traj,
         "actual_total_pct": actual_total,
@@ -175,6 +313,7 @@ def build(limit: int = 2000) -> dict:
         "current_config": current,
         "best": variants[0],
         "worst": variants[-1],
+        "overfit_check": split,
         "variants": variants,
         "note": ("Сравнение по gross-% (издержки у вариантов одинаковы). Replay закрывает "
                  "только РАНЬШЕ факта; траектория даунсемплирована (шаг traj_step) → "
@@ -184,4 +323,155 @@ def build(limit: int = 2000) -> dict:
                  "fallback варианта = удержание до конца траектории, а не результат "
                  "текущего конфига. Прежние замеры «текущий конфиг №1» сравнивали "
                  "конфиг сам с собой и недействительны."),
+    }
+
+
+# ── ТРЕНДОВЫЙ ПРОФИЛЬ ─────────────────────────────────────────────────────────
+
+TREND_MODES = ("trend", "crt", "position", "")
+
+
+def build_trend(limit: int = 2000) -> dict:
+    """(#backtest-trend-2026-07-27) A/B трендовой лестницы выхода.
+
+    Сюда попадает основная масса сделок, и здесь же сидит потолок прибыли,
+    найденный 27.07: победители закрывались в полосе +0.05…+0.10% независимо
+    от того, был пик 0.35% или 1.54%.
+    """
+    from services.ml_trade_logger import MLTradeLogger
+
+    rows = _load_rows(Path(MLTradeLogger().path))[-int(limit):]
+
+    trades: list[dict] = []
+    skipped_no_traj = 0
+    phantom_count = 0
+    for r in rows:
+        mode = str(r.get("trade_mode") or "").lower()
+        if mode in ("scalp", "range") or mode not in TREND_MODES:
+            continue
+        final_pct = r.get("result_pct")
+        if final_pct is None:
+            continue
+        lc = r.get("lifecycle") or {}
+        traj = lc.get("traj")
+        if not traj or len(traj) < 3:
+            skipped_no_traj += 1
+            continue
+        honest_pct, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        phantom_count += int(is_phantom)
+        trades.append({
+            "traj": traj,
+            "final_pct": honest_pct,
+            "booked_pct": float(final_pct),
+            "phantom": is_phantom,
+            "symbol": r.get("symbol"),
+            "signal_id": r.get("signal_id"),
+            "mfe_pct": lc.get("mfe_pct"),
+        })
+
+    if not trades:
+        return {
+            "status": "no_data",
+            "profile": "trend",
+            "skipped_no_trajectory": skipped_no_traj,
+            "message": ("Нет трендовых сделок с записанной траекторией. "
+                        "Траектории пишутся с момента включения TRAJ_RECORD_ENABLED."),
+        }
+
+    # Сетка держится компактной намеренно: чем больше комбинаций, тем выше шанс,
+    # что лидер обслуживает пару удачных исходов. У каждой оси — своя гипотеза.
+    be_arms = [0.35, 0.60, 1.00]        # позже взводим замок — дольше живёт сделка
+    be_floors = [0.10, 0.25]
+    band_arms = [0.30, 0.40, 0.55]
+    band_gives = [0.25, 0.35]
+    ride_trails = [0.35, 0.50]
+    # 1.80 — прежнее боевое значение, 0.40 — правка 27.07. Ось нужна, чтобы
+    # эффект правки был ИЗМЕРЕН, а не заявлен.
+    min_protectives = [0.40, 1.80]
+
+    ride_arm = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8))
+    band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
+
+    def _run(subset: list[dict]) -> list[dict]:
+        out = []
+        for be_arm, be_floor, band_arm, band_give, ride_trail, min_prot in product(
+            be_arms, be_floors, band_arms, band_gives, ride_trails, min_protectives
+        ):
+            total = 0.0
+            wins = 0
+            reasons: dict[str, int] = {}
+            for t in subset:
+                pct, reason = _replay_trend_one(
+                    t["traj"], t["final_pct"],
+                    be_arm=be_arm, be_floor=be_floor,
+                    band_arm=band_arm, band_give=band_give, band_floor=band_floor,
+                    ride_arm=ride_arm, ride_trail=ride_trail,
+                    min_protective=min_prot,
+                )
+                total += pct
+                wins += int(pct > 0)
+                reasons[reason] = reasons.get(reason, 0) + 1
+            out.append({
+                "be_arm_pct": be_arm,
+                "be_floor_pct": be_floor,
+                "band_arm_pct": band_arm,
+                "band_giveback_share": band_give,
+                "ride_trail_share": ride_trail,
+                "min_protective_pct": min_prot,
+                "total_pct": round(total, 4),
+                "avg_pct": round(total / len(subset), 4),
+                "winrate_pct": round(wins / len(subset) * 100, 1),
+                "by_reason": reasons,
+            })
+        return out
+
+    actual_total = round(sum(t["final_pct"] for t in trades), 4)
+    variants = _run(trades)
+    for v in variants:
+        v["delta_vs_actual_pct"] = round(v["total_pct"] - actual_total, 4)
+    variants.sort(key=lambda v: v["total_pct"], reverse=True)
+
+    def _key(v):
+        return (v["be_arm_pct"], v["be_floor_pct"], v["band_arm_pct"],
+                v["band_giveback_share"], v["ride_trail_share"], v["min_protective_pct"])
+
+    split = _split_check(trades, _run, variants[0], _key)
+
+    current = {
+        "be_arm_pct": float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
+        "be_floor_pct": float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+        "band_arm_pct": float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
+        "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
+        "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
+        "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+    }
+    current_row = next((v for v in variants if _key(v) == _key(current)), None)
+
+    return {
+        "status": "ok",
+        "profile": "trend",
+        "trades_replayed": len(trades),
+        "skipped_no_trajectory": skipped_no_traj,
+        "actual_total_pct": actual_total,
+        "actual_avg_pct": round(actual_total / len(trades), 4),
+        "booked_total_pct": round(sum(t["booked_pct"] for t in trades), 4),
+        "phantom_fill_trades": phantom_count,
+        "fixed": {"ride_arm_pct": ride_arm, "band_floor_pct": band_floor},
+        "current_config": current,
+        "current_rank": (variants.index(current_row) + 1) if current_row else None,
+        "current_total_pct": current_row["total_pct"] if current_row else None,
+        "variants_count": len(variants),
+        "best": variants[0],
+        "worst": variants[-1],
+        "overfit_check": split,
+        "variants": variants[:40],
+        "note": (
+            "Сравнение по gross-%: издержки у всех вариантов одинаковы (ровно один "
+            "выход), комиссии сокращаются. Выход книжится по ТЕКУЩЕЙ точке траектории "
+            "— стоп не исполняется лучше рынка. Базис actual_* честный: фантомные "
+            "филлы заменены последней точкой траектории. Ось min_protective_pct "
+            "содержит прежнее боевое 1.80 и правку 0.40 — разница между ними и есть "
+            "измеренный эффект правки 27.07. Выборка меньше 30 сделок доказательством "
+            "не является; смотрите overfit_check прежде чем что-то менять."
+        ),
     }

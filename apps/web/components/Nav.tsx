@@ -11,6 +11,7 @@ const items = [
   { href: "/signals", label: "Signals" },
   { href: "/positions", label: "Positions" },
   { href: "/analytics", label: "Analytics" },
+  { href: "/backtest", label: "Back test" },
   { href: "/reports", label: "Reports" },
   { href: "/health", label: "Health" },
   { href: "/intelligence", label: "Intelligence" },
