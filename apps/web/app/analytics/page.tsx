@@ -14,6 +14,8 @@ export default function AnalyticsPage() {
   const [validationGates, setValidationGates] = useState<any>(null);
   const [mfeMae, setMfeMae] = useState<any>(null);
   const [depthCoverage, setDepthCoverage] = useState<any>(null);
+  const [expectancy, setExpectancy] = useState<any>(null);
+  const [reasons, setReasons] = useState<any>(null);
   const [mfeWindow, setMfeWindow] = useState<string>("168");
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +23,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     try {
       const mfeQs = mfeWindow === "all" ? "" : `&window_hours=${mfeWindow}`;
-      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData, depthData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData, depthData, expectancyData, reasonsData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
@@ -31,6 +33,8 @@ export default function AnalyticsPage() {
         apiGet(`/analytics/mfe-mae?limit=500${mfeQs}`).catch(() => null),
         // (#depth-failopen-2026-07-27) Эндпоинт был, витрины не было.
         apiGet("/analytics/depth-coverage?limit=200").catch(() => null),
+        apiGet("/analytics/expectancy").catch(() => null),
+        apiGet("/analytics/reason-breakdown?limit=500").catch(() => null),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
@@ -40,6 +44,8 @@ export default function AnalyticsPage() {
       setValidationGates(validationData);
       setMfeMae(mfeMaeData);
       setDepthCoverage(depthData);
+      setExpectancy(expectancyData);
+      setReasons(reasonsData);
     } finally {
       setLoading(false);
     }
@@ -50,6 +56,20 @@ export default function AnalyticsPage() {
   }, [mfeWindow]);
 
   const blockers = readiness?.blockers || [];
+
+  // (#ui-cleanup-2026-07-28) Валовый результат = net + издержки. Разделение
+  // важнее любой из двух цифр по отдельности: оно отвечает, проблема в
+  // направлении или в стоимости оборота.
+  const closedCount = summary?.closed_signals ?? 0;
+  const grossPnl =
+    summary?.total_net_pnl_honest_usdt != null && summary?.total_costs_usdt != null
+      ? Number(summary.total_net_pnl_honest_usdt) + Number(summary.total_costs_usdt)
+      : null;
+  const grossPerTrade = grossPnl != null && closedCount ? grossPnl / closedCount : null;
+  const costPerTrade =
+    summary?.total_costs_usdt != null && closedCount
+      ? Number(summary.total_costs_usdt) / closedCount
+      : null;
 
   return (
     <AppShell>
@@ -143,14 +163,45 @@ export default function AnalyticsPage() {
             </div>
           </Panel>
 
-          <Panel title="Telegram delivery 24h" icon={<Activity size={18} />}>
-            <Metric label="SLA" value={`${readiness?.telegram_delivery?.sla_pct ?? 100}%`} />
-            <Metric label="VIP SLA" value={`${readiness?.telegram_delivery?.vip_sla_pct ?? 100}%`} />
-            <Metric label="Sent" value={readiness?.telegram_delivery?.sent ?? 0} />
-            <Metric label="VIP queued" value={readiness?.telegram_delivery?.vip_queued ?? 0} />
-            <Metric label="Failed" value={readiness?.telegram_delivery?.failed ?? 0} />
-            {readiness?.telegram_delivery?.last_error && (
-              <p className="mt-3 text-xs text-red-200">{readiness.telegram_delivery.last_error}</p>
+          {/* (#ui-cleanup-2026-07-28) Здесь была панель Telegram delivery 24h:
+              пять строк, из которых SLA держится на 100% всё время наблюдений.
+              Метрика, которая не меняется, ничего не сообщает — а место на
+              странице занимает. Доставка живёт на /health, где ей и положено
+              быть рядом с остальным техническим состоянием.
+
+              На её месте — экономика оборота. Именно она оказалась главной:
+              валовый результат +40.56, комиссии −142.20, net −101.64. */}
+          <Panel title="Экономика оборота" icon={<Activity size={18} />}>
+            <Metric
+              label="Валовый результат"
+              value={`${grossPnl != null ? grossPnl.toFixed(2) : "—"} USDT`}
+              good={(grossPnl ?? 0) > 0}
+            />
+            <Metric
+              label="Комиссии"
+              value={`−${(summary?.total_costs_usdt ?? 0).toFixed(2)} USDT`}
+              warn
+            />
+            <Metric
+              label="Net (честный)"
+              value={`${(summary?.total_net_pnl_honest_usdt ?? 0).toFixed(2)} USDT`}
+              warn={(summary?.total_net_pnl_honest_usdt ?? 0) < 0}
+            />
+            <Metric
+              label="Валовое на сделку"
+              value={grossPerTrade != null ? `${grossPerTrade.toFixed(3)} USDT` : "—"}
+              good={(grossPerTrade ?? 0) > 0}
+            />
+            <Metric
+              label="Издержки на сделку"
+              value={costPerTrade != null ? `${costPerTrade.toFixed(3)} USDT` : "—"}
+              warn
+            />
+            {grossPerTrade != null && costPerTrade != null && grossPerTrade > 0 && (
+              <p className="mt-3 text-xs text-yellow-200/80">
+                Направление угадывается в плюс, но оборот стоит в{" "}
+                {(costPerTrade / grossPerTrade).toFixed(1)}× дороже, чем приносит.
+              </p>
             )}
           </Panel>
 
@@ -181,17 +232,74 @@ export default function AnalyticsPage() {
           </Panel>
         </section>
 
+        {/* (#ui-cleanup-2026-07-28) Здесь был «Reason breakdown» — плитки со
+            СЧЁТЧИКАМИ закрытий по причинам. Число закрытий ни на что не отвечает:
+            stop_loss 91 раз и tp2_reached 20 раз выглядят как «стопов больше»,
+            хотя первое это −206.73, а второе +66.39. Считать надо деньги.
+
+            На их месте — причины закрытий по вкладу в результат: сразу видно,
+            какая ветка кормит, а какая ест. Именно так и нашлось, что
+            breakeven_lock даёт 45 сделок при 2 победах. */}
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
-          <h2 className="mb-4 text-xl font-semibold text-emerald-200">Reason breakdown</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            {Object.entries(quality?.by_reason || {}).map(([reason, count]) => (
-              <div key={reason} className="rounded-xl border border-emerald-950 bg-black/20 p-4">
-                <div className="text-sm text-emerald-100/50">{reason}</div>
-                <div className="mt-1 text-2xl font-bold text-emerald-200">{String(count)}</div>
-              </div>
+          <h2 className="mb-1 text-xl font-semibold text-emerald-200">Куда уходят деньги</h2>
+          <p className="mb-4 text-sm text-emerald-100/50">
+            Причины закрытий по вкладу в net PnL. Выборка: последние{" "}
+            {reasons?.sample_closed_signals ?? "—"} закрытых.
+          </p>
+          <div className="space-y-1">
+            {(reasons?.items || []).map((r: any) => (
+              <ReasonRow key={r.reason} item={r} scale={reasonScale(reasons)} />
             ))}
           </div>
         </section>
+
+        {/* (#expectancy-2026-07-27) Ожидание на сделку — критерий, по которому
+            теперь понижаются символы. Win-rate рядом справочно: 67% побед при
+            payoff 0.11 это убыточная система, и гвард по win-rate такое
+            пропускал. */}
+        {expectancy?.status === "ok" && (
+          <section className="rounded-2xl border border-violet-900/70 bg-violet-950/10 p-5">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold text-violet-200">Ожидание на сделку</h2>
+              <p className="text-sm text-violet-100/60">
+                Сколько приносит одна средняя сделка после комиссий и проскальзывания.
+                Единственное число, по которому осмысленно сравнивать символы и сетапы.
+              </p>
+            </div>
+
+            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MiniStat
+                label="Ожидание"
+                value={`${expectancy.overall?.expectancy_usdt ?? 0} USDT`}
+                tone={(expectancy.overall?.expectancy_usdt ?? 0) > 0 ? "good" : "bad"}
+              />
+              <MiniStat
+                label="Payoff"
+                value={expectancy.overall?.payoff_ratio ?? "—"}
+                tone={(expectancy.overall?.payoff_ratio ?? 0) >= 1 ? "good" : "bad"}
+              />
+              <MiniStat
+                label="Winrate"
+                value={`${expectancy.overall?.winrate_pct ?? 0}%`}
+                tone="neutral"
+              />
+              <MiniStat
+                label="Издержки к ходу"
+                value={`${expectancy.overall?.cost_share_of_gross_pct ?? "—"}%`}
+                tone={(expectancy.overall?.cost_share_of_gross_pct ?? 0) > 100 ? "bad" : "warn"}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ExpectancyList title="По символам" items={expectancy.by_symbol} keyName="symbol" />
+              <ExpectancyList
+                title="По причинам входа"
+                items={expectancy.by_entry_reason}
+                keyName="entry_reason"
+              />
+            </div>
+          </section>
+        )}
 
         <section className="rounded-2xl border border-yellow-900/70 bg-yellow-950/10 p-5">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -398,6 +506,93 @@ const MFE_WINDOW_LABELS: Record<string, string> = {
 
 function mfeWindowLabel(value: string): string {
   return MFE_WINDOW_LABELS[value] || `${value}ч`;
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: any; tone: "good" | "warn" | "bad" | "neutral" }) {
+  const cls =
+    tone === "good" ? "text-emerald-300"
+      : tone === "warn" ? "text-yellow-300"
+        : tone === "bad" ? "text-red-300"
+          : "text-emerald-100/80";
+  return (
+    <div className="rounded-xl border border-violet-900/50 bg-black/20 p-3">
+      <div className="text-xs text-violet-100/50">{label}</div>
+      <div className={`mt-1 text-xl font-bold ${cls}`}>{value}</div>
+    </div>
+  );
+}
+
+// Масштаб баров: максимум |вклада| среди причин. Бары читаются относительно
+// САМОЙ ВЕСОМОЙ причины — так видно пропорцию, а не абсолютные числа.
+function reasonScale(data: any): number {
+  let m = 1;
+  for (const r of data?.items || []) m = Math.max(m, Math.abs(r.sum_net_pnl_usdt || 0));
+  return m;
+}
+
+function ReasonRow({ item, scale }: { item: any; scale: number }) {
+  const net = Number(item.sum_net_pnl_usdt || 0);
+  const w = Math.min((Math.abs(net) / scale) * 100, 100);
+  const positive = net >= 0;
+  return (
+    <div className="grid grid-cols-1 items-center gap-2 rounded-lg border border-emerald-950/60 bg-black/20 px-3 py-2 md:grid-cols-[220px_1fr_230px]">
+      <div className="truncate text-sm font-semibold text-emerald-100">
+        {item.reason} <span className="font-normal text-emerald-100/40">×{item.count}</span>
+      </div>
+      <div className="flex h-5 items-center">
+        <div className="flex h-3 w-1/2 justify-end overflow-hidden rounded-l bg-red-950/30">
+          {!positive && <div className="h-full rounded-l bg-red-400/80" style={{ width: `${w}%` }} />}
+        </div>
+        <div className="h-5 w-px bg-emerald-100/30" />
+        <div className="flex h-3 w-1/2 overflow-hidden rounded-r bg-emerald-950/30">
+          {positive && <div className="h-full rounded-r bg-emerald-400/80" style={{ width: `${w}%` }} />}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-x-3 text-xs text-emerald-100/70">
+        <span className={positive ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
+          {net.toFixed(2)} USDT
+        </span>
+        <span>avg {item.avg_net_pnl_usdt}</span>
+        <span className={item.wins === 0 ? "text-red-300" : ""}>
+          {item.wins}W / {item.losses}L
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ExpectancyList({ title, items, keyName }: { title: string; items: any[]; keyName: string }) {
+  const rows = (items || []).filter((r) => (r.count_with_money ?? 0) > 0).slice(0, 10);
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">{title}</h3>
+      <div className="space-y-1">
+        {rows.map((r) => {
+          const exp = Number(r.expectancy_usdt ?? 0);
+          return (
+            <div
+              key={String(r[keyName])}
+              className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${
+                r.demote ? "border-red-900/60 bg-red-950/20" : "border-violet-950/60 bg-black/20"
+              }`}
+            >
+              <span className="truncate text-violet-100">
+                {String(r[keyName]).replace("/USDT", "").replace("legacy_", "")}
+                <span className="ml-1 text-violet-100/40">×{r.count}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3 text-xs">
+                <span className="text-violet-100/50">payoff {r.payoff_ratio ?? "—"}</span>
+                <span className={exp >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
+                  {exp.toFixed(3)}
+                </span>
+                {r.demote && <span className="rounded bg-red-800 px-1.5 text-[10px] text-white">понижен</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function DepthBucket({ title, data, tone }: { title: string; data: any; tone: "ok" | "warn" }) {

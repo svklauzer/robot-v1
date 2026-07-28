@@ -152,6 +152,25 @@ class RobotLoop:
             # range и crt идут одним «альт-стратегия» путём: байпас quality/production
             # гейтов + scalp-сайзинг (чтобы проходили anti-drain). Режим выхода
             # разводится отдельно через trade_mode (range→scalp, crt→trend-ride).
+            # (#kill-losers-2026-07-28) Белый список торгуемых режимов.
+            #
+            # На 287 закрытых два режима дали −105.26 при общем результате
+            # −101.64: trend_up_candidate (n=63, capture −26.4%) и
+            # trend_down_candidate (n=91). То есть ВЕСЬ убыток системы сидел во
+            # входах «по продолжению тренда». Прибыльны только разворот от
+            # поддержки (+9.02, payoff 5.63) и CRT (+3.54); скальп около нуля,
+            # но с лучшим capture в системе (37%).
+            #
+            # Отсекаем ДО прочих проверок: незачем гонять план и засорять ленту
+            # решений кандидатами режимов, которые всё равно не торгуются.
+            _regime = str(getattr(result, "regime", "") or "")
+            _allowed_regimes = {
+                r.strip() for r in str(getattr(settings, "TRADEABLE_REGIMES", "")).split(",")
+                if r.strip()
+            }
+            if _allowed_regimes and _regime and _regime not in _allowed_regimes:
+                continue
+
             is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
 
             # Range-шорт включается своим флагом RANGE_ALLOW_SHORT и не зависит

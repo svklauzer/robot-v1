@@ -121,8 +121,22 @@ class GridEngine:
 
     # ── публичный тик ─────────────────────────────────────────────────────────
     def tick_all(self) -> dict:
-        if not self.store.is_enabled():
-            return {"enabled": False, "ticked": 0}
+        # (#kill-losers-2026-07-28) Конфиговый стоп-кран поверх рантайм-флага.
+        #
+        # `store.is_enabled()` живёт в персистентном состоянии и переключается из
+        # UI — то есть выключить сетку правкой конфига было НЕЛЬЗЯ, деплой не
+        # менял ничего. При этом сетка за 185 закрытых циклов дала −5.74 USDT и
+        # не имела ни одного периода устойчивого плюса.
+        #
+        # Новые циклы не открываются, но `tick` продолжает обслуживать уже
+        # открытые: TP, стоп и выходы должны работать, иначе маржа запирается
+        # в неуправляемых корзинах. Это осознанная разница между «выключить» и
+        # «бросить».
+        if not bool(getattr(settings, "GRID_KILL_SWITCH_ENABLED", False)):
+            if not self.store.is_enabled():
+                return {"enabled": False, "ticked": 0}
+        elif not self.store.cycles:
+            return {"enabled": False, "ticked": 0, "kill_switch": True}
         # (#grid-drain) Тикаем ОБЪЕДИНЕНИЕ: настроенные символы + символы с активными
         # циклами. Иначе при сужении GRID_SYMBOLS де-листнутые циклы осиротеют (не
         # тикаются → нет TP/SL/флипа/выхода, маржа заперта). Тик их обслужит, а
@@ -362,6 +376,10 @@ class GridEngine:
 
     # ── открытие нового цикла ─────────────────────────────────────────────────
     def _maybe_open(self, symbol: str, price: float, *, bid=None, ask=None):
+        # (#kill-losers-2026-07-28) При стоп-кране новых корзин не открываем —
+        # только доводим до конца уже открытые (см. tick_all).
+        if bool(getattr(settings, "GRID_KILL_SWITCH_ENABLED", False)):
+            return
         # карман маржи: есть ли место хотя бы под базовый ордер
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         base_usdt = float(getattr(settings, "GRID_BASE_ORDER_USDT", 20.0))

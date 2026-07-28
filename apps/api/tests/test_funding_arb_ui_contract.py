@@ -44,7 +44,18 @@ def test_payments_owner_page_exposes_revenue_dashboard_contract():
     assert "Trial→Paid" in page
 
 
-def test_owner_health_and_analytics_surface_vip_delivery_sla():
+def test_vip_delivery_sla_is_surfaced_exactly_once():
+    """(#ui-cleanup-2026-07-28) SLA доставки живёт на /health — и только там.
+
+    Раньше контракт требовал дублирования на /analytics. Дублирование метрики
+    не добавляет информации, а место занимает: SLA держится на 100% всё время
+    наблюдений, то есть не меняется и ничего не сообщает. Аналитика отвечает на
+    вопрос «сколько мы зарабатываем», доставка — на «работает ли канал», и это
+    разные экраны.
+
+    Требование «показать хотя бы где-то» осталось: без него метрика тихо
+    исчезнет при следующей уборке.
+    """
     health = (ROOT / "apps/web/app/health/page.tsx").read_text()
     analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
 
@@ -53,9 +64,26 @@ def test_owner_health_and_analytics_surface_vip_delivery_sla():
     assert "vip_sla_pct" in health
     assert "VIP queued" in health
     assert "vip_queued" in health
-    assert "VIP SLA" in analytics
-    assert "vip_sla_pct" in analytics
-    assert "VIP queued" in analytics
+
+    assert "vip_sla_pct" not in analytics, (
+        "SLA доставки продублирован на аналитике — метрика на 100% без движения"
+    )
+
+
+def test_analytics_shows_turnover_economics_instead():
+    """На месте убранной панели — то, что оказалось главным.
+
+    Валовый результат +40.56 против комиссий −142.20: система угадывает
+    направление в плюс и платит за оборот втрое больше, чем берёт. Разделение
+    валового и издержек важнее любой из двух цифр по отдельности — оно
+    отвечает, проблема в направлении или в стоимости оборота.
+    """
+    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+
+    assert "Экономика оборота" in analytics
+    assert "Валовое на сделку" in analytics
+    assert "Издержки на сделку" in analytics
+    assert "total_costs_usdt" in analytics
 
 
 def test_analytics_page_surfaces_symbol_profitability_guard():

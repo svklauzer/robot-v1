@@ -51,9 +51,49 @@ def test_before_tp1_failed_setup_does_not_fire_before_absolute_mfe_and_age():
 
 def test_before_tp1_armed_breakeven_lock_fires_on_real_loss():
     """(#leak-be-lock-2026-07-09) Вооружённая сделка (MFE>=arm) в реальном минусе
-    (глубже hard floor) обязана закрыться breakeven_lock, не дожидаясь flow."""
+    (глубже hard floor) обязана закрыться breakeven_lock, не дожидаясь flow.
+
+    (#kill-losers-2026-07-28) Ветка ВЫКЛЮЧЕНА по умолчанию — на 287 закрытых она
+    дала 45 сделок, 2 победы, −30.24 USDT. Тест сохранён и включает флаг явно:
+    механика ветки не сломана, отключено её применение. Поведение при
+    выключенном флаге проверяется отдельно ниже.
+    """
     svc = ExitPolicyService()
 
+    old = settings.BREAKEVEN_LOCK_ENABLED
+    try:
+        settings.BREAKEVEN_LOCK_ENABLED = True
+        decision = svc.before_tp1_decision(
+            side="long",
+            entry_price=100.0,
+            current_price=99.6,
+            stop_price=98.0,
+            mfe_pct=0.7,
+            signal_age_sec=None,
+            symbol=None,
+        )
+    finally:
+        settings.BREAKEVEN_LOCK_ENABLED = old
+
+    assert decision.exit is True
+    assert decision.reason == "breakeven_lock"
+
+
+def test_breakeven_lock_is_off_by_default_after_the_measurement():
+    """(#kill-losers-2026-07-28) Замер решил судьбу ветки — фиксируем решение.
+
+        breakeven_lock:  45 сделок,  побед 2,  net −30.24,  avg −0.67
+
+    Замок взводился на MFE 0.35%, ставил стоп в безубыток+0.10% и закрывал
+    сделку до того, как до неё добирались ветки, которые реально зарабатывают
+    (tp2 +66.39, ride-трейл +53.18, post-TP1 +21.26 — суммарно +152.5 на 57
+    сделках). Он не защищал прибыль, он отбирал сделки у прибыльных веток.
+
+    Обратное включение должно быть осознанным и пересчитанным.
+    """
+    assert settings.BREAKEVEN_LOCK_ENABLED is False
+
+    svc = ExitPolicyService()
     decision = svc.before_tp1_decision(
         side="long",
         entry_price=100.0,
@@ -64,8 +104,9 @@ def test_before_tp1_armed_breakeven_lock_fires_on_real_loss():
         symbol=None,
     )
 
-    assert decision.exit is True
-    assert decision.reason == "breakeven_lock"
+    assert decision.reason != "breakeven_lock", (
+        "выключенный замок всё ещё закрывает сделки"
+    )
 
 
 def test_before_tp1_failed_setup_exit_triggers_after_strict_age_and_real_mfe():
@@ -365,19 +406,30 @@ def test_breakeven_lock_covers_the_band_below_trend_capture_arm():
     svc = ExitPolicyService()
     # MFE внутри полосы: band вооружиться не может, замок обязан отработать.
     mfe = (float(settings.BREAKEVEN_LOCK_ARM_PCT) + band_arm_effective) / 2
-    d = svc.before_tp1_decision(
-        side="long",
-        entry_price=100.0,
-        current_price=100.05,          # откат к полу замка
-        stop_price=99.0,
-        tp1_price=102.0,
-        mfe_pct=mfe,
-        trade_mode="trend",
-        position_notional_usdt=500.0,
-        market_type="swap",
-        symbol=None,
-        flow_against=False,            # тонкий стакан: поток НЕ подтверждает
-    )
+
+    # (#kill-losers-2026-07-28) Замок выключен по итогам замера, поэтому здесь
+    # он включается явно: проверяется механика полосы, а не то, применяем ли мы
+    # её в бою. Цена отключения известна и принята — сделки в этой полосе теперь
+    # доходят до стопа или до трейла.
+    old = settings.BREAKEVEN_LOCK_ENABLED
+    try:
+        settings.BREAKEVEN_LOCK_ENABLED = True
+        d = svc.before_tp1_decision(
+            side="long",
+            entry_price=100.0,
+            current_price=100.05,          # откат к полу замка
+            stop_price=99.0,
+            tp1_price=102.0,
+            mfe_pct=mfe,
+            trade_mode="trend",
+            position_notional_usdt=500.0,
+            market_type="swap",
+            symbol=None,
+            flow_against=False,            # тонкий стакан: поток НЕ подтверждает
+        )
+    finally:
+        settings.BREAKEVEN_LOCK_ENABLED = old
+
     assert d.exit is True, "в полосе между замком и band не осталось механизма фиксации"
     assert d.reason == "breakeven_lock"
 

@@ -108,7 +108,22 @@ export default function DashboardPage() {
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <BookCard title="Trend" href="/signals" pnl={trendPnl} sub={`${analytics?.total_signals ?? 0} сигналов · WR ${analytics?.winrate_honest ?? analytics?.winrate ?? 0}%`} />
-          <BookCard title="Grid" href="/grid" pnl={gridPnl} off={!grid} sub={grid ? `${grid?.active_cycles ?? 0} активных · ${grid?.closed_cycles ?? 0} закрыто` : "движок выкл/нет данных"} />
+          {/* (#kill-losers-2026-07-28) Сетка остановлена: 185 закрытых циклов,
+              realized −5.74, ни одного периода устойчивого плюса. Открытые
+              корзины доводятся до TP/стопа, новые не создаются. Карточка
+              приглушена — иначе выключенный движок выглядит как работающий,
+              просто без сделок. */}
+          <BookCard
+            title="Grid"
+            href="/grid"
+            pnl={gridPnl}
+            off={!grid || (grid?.active_cycles ?? 0) === 0}
+            sub={
+              grid
+                ? `остановлен · ${grid?.closed_cycles ?? 0} циклов в истории`
+                : "движок выкл/нет данных"
+            }
+          />
           <BookCard title="Funding" href="/funding" pnl={fundingPnl} off={!funding} sub={funding ? `${funding?.open_positions ?? 0} хеджей · unreal ${fmt(funding?.unrealized_pnl_estimate, 2)}` : "движок выкл/нет данных"} />
           <BookCard title="ИТОГО" pnl={totalPnl} total sub="сумма трёх книг" />
         </div>
