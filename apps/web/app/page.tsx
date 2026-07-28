@@ -108,19 +108,17 @@ export default function DashboardPage() {
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <BookCard title="Trend" href="/signals" pnl={trendPnl} sub={`${analytics?.total_signals ?? 0} сигналов · WR ${analytics?.winrate_honest ?? analytics?.winrate ?? 0}%`} />
-          {/* (#kill-losers-2026-07-28) Сетка остановлена: 185 закрытых циклов,
-              realized −5.74, ни одного периода устойчивого плюса. Открытые
-              корзины доводятся до TP/стопа, новые не создаются. Карточка
-              приглушена — иначе выключенный движок выглядит как работающий,
-              просто без сделок. */}
+          {/* (#grid-neutral-churn-2026-07-28) Сетка снова работает: причина
+              −5.74 была в холостом обороте (neutral-корзина переворачивалась
+              при любом направленном регайме), а не в проигранных сделках. */}
           <BookCard
             title="Grid"
             href="/grid"
             pnl={gridPnl}
-            off={!grid || (grid?.active_cycles ?? 0) === 0}
+            off={!grid}
             sub={
               grid
-                ? `остановлен · ${grid?.closed_cycles ?? 0} циклов в истории`
+                ? `${grid?.active_cycles ?? 0} активных · ${grid?.closed_cycles ?? 0} закрыто`
                 : "движок выкл/нет данных"
             }
           />

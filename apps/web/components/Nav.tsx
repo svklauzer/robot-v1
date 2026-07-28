@@ -23,10 +23,10 @@ const GROUPS: { title: string; items: Item[] }[] = [
       { href: "/positions", label: "Позиции" },
       { href: "/intelligence", label: "Решения" },
       { href: "/funding", label: "Funding Arb" },
-      // Отключены по замеру 28.07: grid −5.74 на 185 циклах,
-      // cross-arb 10 убытков из 10 закрытий.
-      { href: "/grid", label: "Grid", off: "выключен" },
-      { href: "/venues", label: "Venues", off: "cross-arb выкл" },
+      // (#regimes-back-on-2026-07-28) Снова живые: причины убытков найдены и
+      // исправлены в логике, а не заглушены выключателем.
+      { href: "/grid", label: "Grid" },
+      { href: "/venues", label: "Venues" },
     ],
   },
   {

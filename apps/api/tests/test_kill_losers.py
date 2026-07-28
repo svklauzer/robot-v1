@@ -17,66 +17,81 @@ from __future__ import annotations
 from core.config import settings
 
 
-# ── Режимы входа ─────────────────────────────────────────────────────────────
+# ── Режимы и контуры: включены обратно ───────────────────────────────────────
+#
+# (#regimes-back-on-2026-07-28) Отключение по ретроспективному PnL было той
+# самой подгонкой, о которой предупреждал walk-forward: он сказал «подбор НЕ
+# бьёт текущий конфиг вне выборки», а конфиг тут же выбрали по результату на
+# всей истории. Двойной стандарт.
+#
+# Главное: −101.64 получены системой, которой больше нет. Починены две
+# блокировки, снят замок безубытка, выровнены пороги сторон, срезана частота.
+# Судить старые режимы по старым числам — судить другую систему.
 
-def test_losing_regimes_are_not_tradeable():
-    """Весь убыток системы сидел в двух режимах.
-
-        trend_up_candidate    n=63  net −55.72  capture −26.4%
-        trend_down_candidate  n=91  net −49.54  capture  13.5%
-        ───────────────────────────────────────────────────────
-        итого                       net −105.26   при общем −101.64
-    """
-    allowed = {r.strip() for r in settings.TRADEABLE_REGIMES.split(",") if r.strip()}
-
-    assert "trend_up_candidate" not in allowed
-    assert "trend_down_candidate" not in allowed
-    assert "range" not in allowed, "range: n=25, net −7.05, capture −46.1%"
-
-
-def test_profitable_regimes_survive():
-    """Отключаем убыточное, а не всё подряд."""
-    allowed = {r.strip() for r in settings.TRADEABLE_REGIMES.split(",") if r.strip()}
-
-    assert "reversal_long_candidate" in allowed, "n=13, net +9.02, payoff 5.63"
-    assert "crt" in allowed, "n=40, net +3.54"
-    # Скальп около нуля (−1.89 на 55), но у него лучший capture в системе (37%):
-    # его проблема — издержки оборота, а не направление.
-    assert "scalp" in allowed
-
-
-def test_allowlist_is_not_empty():
-    """Пустой список означал бы «торговать всё» — ровно наоборот замыслу."""
+def test_regime_allowlist_is_a_mechanism_not_a_verdict():
+    """Пустой список = фильтр выключен. Механизм остаётся для будущих данных."""
     allowed = [r.strip() for r in settings.TRADEABLE_REGIMES.split(",") if r.strip()]
-    assert allowed, "пустой TRADEABLE_REGIMES отключает фильтр целиком"
+    assert allowed == [], (
+        "режимы снова отключены по истории — это подгонка, пока нет данных "
+        "под новой логикой"
+    )
 
 
-# ── Контуры ──────────────────────────────────────────────────────────────────
+def test_all_entry_engines_are_enabled():
+    """Дефолты приведены к боевой реальности: конфиг обязан описывать систему."""
+    assert settings.ENABLE_RANGE_STRATEGY is True
+    assert settings.ENABLE_CRT_STRATEGY is True
+    assert settings.ENABLE_SCALP_STRATEGY is True
 
-def test_cross_arb_is_off_after_ten_losses_out_of_ten():
-    """10 закрытых позиций — 10 убытков, суммарно −1.50.
 
-    Round-trip 0.20 USDT на позицию 100, carry за срок удержания 0.006–0.18.
-    Спред разворачивается раньше, чем окупаются комиссии.
+def test_cross_arb_is_back_with_a_carry_floor():
+    """10 убытков из 10 — но причина была в ВЫХОДЕ, а не в экономике входа.
+
+    Round-trip 0.20 USDT фиксирован, carry за срок удержания набирал 0.006–0.18.
+    Выход по развороту спреда срабатывал раньше окупаемости. Теперь разворот
+    прекращает накопление, но не платит комиссию дважды.
     """
-    assert settings.CROSS_FARB_ENABLED is False
+    assert settings.CROSS_FARB_ENABLED is True
+    assert settings.CROSS_FARB_CARRY_FLOOR_ENABLED is True
 
 
-def test_grid_kill_switch_overrides_runtime_flag():
-    """Сетку нельзя было выключить конфигом: состояние живёт в grid_store.
+def test_grid_is_back_with_the_churn_fixed():
+    """185 циклов, −5.74 — и это был холостой оборот, а не проигранные сделки.
 
-    185 закрытых циклов, realized −5.74, ни одного периода устойчивого плюса.
+    Neutral-корзина переворачивалась при ЛЮБОМ направленном регайме, а он есть
+    почти всегда: десятки циклов закрыты с realized РОВНО 0.0. Открылась,
+    перевернулась, закрылась, заняв маржу.
     """
-    assert settings.GRID_KILL_SWITCH_ENABLED is True
+    assert settings.GRID_KILL_SWITCH_ENABLED is False
+    assert settings.GRID_NEUTRAL_FLIP_NEEDS_BREAKOUT is True, (
+        "у двусторонней корзины нет направления, которому можно быть "
+        "противоположной — её ломает выход из диапазона, а не наличие тренда"
+    )
+    assert settings.GRID_OPEN_NEEDS_RANGE is True, (
+        "без этого корзина откроется в пробое и повиснет замороженной"
+    )
 
 
-def test_turnover_is_actually_capped_now():
-    """Лимит 12 не связывал никогда — фактически 6.2 сделки в сутки.
+def test_breakeven_lock_stays_off_and_this_is_not_curve_fitting():
+    """Единственное, что осталось выключенным — и по другой причине.
 
-    43 сделки в неделю против 12.9 у эталонного копи-трейдера с тем же win-rate.
+        breakeven_lock:  45 сделок, побед 2, net −30.24
+
+    Это не отбор по результату, а свойство МЕХАНИЗМА: ветка по построению
+    выходит около безубытка, поэтому крупной победы дать не может в принципе —
+    только обрезать её. 43 убытка из 45 подтверждают устройство, а не удачу
+    выборки.
+    """
+    assert settings.BREAKEVEN_LOCK_ENABLED is False
+
+
+def test_turnover_cap_stays():
+    """Частота — главный рычаг: издержки 0.495 против валового 0.141 на сделку.
+
+    Она и держит риск от возврата всех режимов: даже если новые сетапы окажутся
+    не лучше старых, платить за них система будет втрое меньше.
     """
     assert settings.MAX_TRADES_PER_DAY == 3
-    assert settings.MAX_TRADES_PER_DAY > 0, "0 отключает предохранитель"
 
 
 # ── Регрессы на найденные баги ───────────────────────────────────────────────

@@ -83,6 +83,21 @@ def entry_allowed(item: dict, history_row: dict | None) -> tuple[bool, str]:
 
 def exit_reason(position: dict, item: dict, now_ts: float) -> str | None:
     """Выход: сжатие carry ниже порога / разворот / максимальный возраст."""
+    # (#cross-farb-max-hold-order-2026-07-28) Возраст проверяется ПЕРВЫМ.
+    #
+    # Раньше он стоял последним, а `spread_flipped` возвращался раньше — то
+    # есть `max_hold_reached` был недостижим ровно тогда, когда он нужен: при
+    # развёрнутом спреде. Пока выход по флипу срабатывал сразу, это не било;
+    # с полом по carry («не выходим, пока carry не покроет комиссии») это
+    # превратилось бы в вечное удержание. Жёсткий предел на то и жёсткий, что
+    # проверяется до мягких условий.
+    max_hold_days = float(getattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 14.0))
+    # НЕ `or now_ts`: opened_ts=0.0 falsy — возраст обнулялся бы.
+    _opened_raw = position.get("opened_ts")
+    opened_ts = float(_opened_raw) if _opened_raw is not None else now_ts
+    if now_ts - opened_ts > max_hold_days * 86400:
+        return "max_hold_reached"
+
     spread = item.get("spread") or {}
     _, ann_signed = signed_carry_pct(spread, str(position.get("direction")))
     close_ann = float(getattr(settings, "CROSS_FARB_CLOSE_ANN_PCT", 3.0))
@@ -90,12 +105,6 @@ def exit_reason(position: dict, item: dict, now_ts: float) -> str | None:
         return "spread_flipped"
     if ann_signed < close_ann:
         return f"spread_compressed:{ann_signed:.2f}<{close_ann}"
-    max_hold_days = float(getattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 14.0))
-    # НЕ `or now_ts`: opened_ts=0.0 falsy — возраст обнулялся бы.
-    _opened_raw = position.get("opened_ts")
-    opened_ts = float(_opened_raw) if _opened_raw is not None else now_ts
-    if now_ts - opened_ts > max_hold_days * 86400:
-        return "max_hold_reached"
     return None
 
 
@@ -183,8 +192,43 @@ class CrossFundingArbEngine:
             # ~0.002/час отрицательного carry, перезаход — 0.20 комиссий.
             # max_hold закрывает сразу (это не шум), остальное — N шагов подряд.
             reason = exit_reason(pos, item, now)
+
+            # (#cross-farb-carry-floor-2026-07-28) Не выходим в убыток по одному
+            # лишь развороту спреда.
+            #
+            # Десять закрытых позиций — десять убытков, все по spread_flipped /
+            # spread_compressed:
+            #
+            #   −0.20 −0.19 −0.21 −0.18 −0.08 −0.06 −0.12 −0.16 −0.17 −0.13
+            #
+            # Ни одного положительного исхода — и это не невезение. Round-trip
+            # 0.20 USDT на позицию 100 фиксирован, а накопленный carry за срок
+            # удержания составлял 0.006–0.18. Мы выходили РАНЬШЕ, чем позиция
+            # успевала окупить собственное открытие: сигнал выхода срабатывал
+            # по спреду, а спред разворачивается быстрее, чем набегает carry.
+            #
+            # Подтверждение выхода тремя шагами (#cross-farb-exit-confirm) лечило
+            # шум одного снапшота, но не эту причину: три шумных шага подряд
+            # тоже наступают раньше окупаемости.
+            #
+            # Условие простое: разворот спреда — повод ПРЕКРАТИТЬ накопление, но
+            # не повод заплатить комиссию дважды. Держим, пока carry не покроет
+            # round-trip, либо пока не сработает жёсткий предел (max_hold или
+            # расхождение базиса — это уже риск, а не недобор дохода).
+            carry_floor_on = bool(getattr(settings, "CROSS_FARB_CARRY_FLOOR_ENABLED", True))
+            fees = float(pos.get("fees_round_trip_usdt") or 0.0)
+            accrued = float(pos.get("funding_accrued_usdt") or 0.0)
+            carry_covers_fees = accrued >= fees
+
             if reason == "max_hold_reached":
                 do_close = True
+            elif reason and carry_floor_on and not carry_covers_fees:
+                # Ждём окупаемости. Счётчик подтверждений НЕ сбрасываем: если
+                # спред так и не вернётся, позиция закроется по max_hold — это
+                # предусмотренный выход, а не зависание.
+                pos["exit_streak_reason"] = f"{reason}|held_until_carry_covers_fees"
+                pos["carry_vs_fees_usdt"] = round(accrued - fees, 6)
+                do_close = False
             elif reason:
                 pos["exit_streak"] = int(pos.get("exit_streak") or 0) + 1
                 pos["exit_streak_reason"] = reason

@@ -95,6 +95,10 @@ def test_engine_full_cycle(tmp_path, monkeypatch):
     from core.config import settings
     # Классический цикл проверяем без подтверждения выхода (1 шаг).
     monkeypatch.setattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 1, raising=False)
+    # (#cross-farb-carry-floor-2026-07-28) Тест проверяет МЕХАНИКУ цикла
+    # (вход → начисление → закрытие), а не окупаемость. Пол по carry —
+    # отдельное правило со своими тестами ниже.
+    monkeypatch.setattr(settings, "CROSS_FARB_CARRY_FLOOR_ENABLED", False, raising=False)
     store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
     engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
     payload = {"status": "ok", "items": [_item(ann=25.0, basis=0.10)]}
@@ -154,9 +158,13 @@ def test_engine_respects_max_positions_and_symbol_list(tmp_path):
     assert r2["open_count"] == 2 and not [a for a in r2["actions"] if a["action"] == "open"]
 
 
-def test_exit_requires_confirmation_and_streak_resets(tmp_path):
+def test_exit_requires_confirmation_and_streak_resets(tmp_path, monkeypatch):
     # (#cross-farb-exit-confirm-2026-07-22) Один шумный флип НЕ закрывает
     # позицию (в бою 3 закрытия за 12ч = 3× комиссии); нужен N шагов подряд.
+    from core.config import settings
+    # Здесь проверяется счётчик подтверждений; пол по carry выключен, чтобы
+    # тест не проверял два правила сразу.
+    monkeypatch.setattr(settings, "CROSS_FARB_CARRY_FLOOR_ENABLED", False, raising=False)
     store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
     engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
     engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
@@ -181,6 +189,7 @@ def test_exit_requires_confirmation_and_streak_resets(tmp_path):
 def test_reentry_cooldown_blocks_churn(tmp_path, monkeypatch):
     from core.config import settings
     monkeypatch.setattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 1, raising=False)
+    monkeypatch.setattr(settings, "CROSS_FARB_CARRY_FLOOR_ENABLED", False, raising=False)
     store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
     engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
     engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
@@ -214,3 +223,55 @@ def test_engine_broken_state_file_fail_open(tmp_path):
         fh.write("{broken")
     store = CrossFundingArbStore(path=path)
     assert store.load()["open"] == []  # битый файл → чистое состояние, без исключений
+
+
+def test_position_is_held_until_carry_covers_the_round_trip(tmp_path, monkeypatch):
+    """(#cross-farb-carry-floor-2026-07-28) Десять закрытий — десять убытков.
+
+        −0.20 −0.19 −0.21 −0.18 −0.08 −0.06 −0.12 −0.16 −0.17 −0.13
+
+    Ни одного положительного исхода, и это не невезение: round-trip 0.20 USDT
+    на позицию 100 фиксирован, а накопленный carry составлял 0.006–0.18. Выход
+    срабатывал РАНЬШЕ, чем позиция окупала собственное открытие.
+
+    Подтверждение тремя шагами лечило шум одного снапшота, но не эту причину:
+    три шумных шага тоже наступают раньше окупаемости.
+    """
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "CROSS_FARB_EXIT_CONFIRM_STEPS", 1, raising=False)
+    store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
+    engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
+
+    engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
+    assert store.load()["open"], "позиция должна открыться"
+
+    # Спред развернулся почти сразу — carry накопить не успел.
+    engine.step({"status": "ok", "items": [_item(ann=-5.0)]}, now=1000.0 + HOUR)
+
+    state = store.load()
+    assert state["open"], "закрылись в убыток по одному лишь развороту спреда"
+    pos = state["open"][0]
+    assert pos["funding_accrued_usdt"] < pos["fees_round_trip_usdt"]
+    assert "held_until_carry_covers_fees" in str(pos.get("exit_streak_reason"))
+
+
+def test_hard_limits_still_close_regardless_of_carry(tmp_path, monkeypatch):
+    """Пол по carry не превращается в вечное удержание.
+
+    max_hold — предусмотренный выход: если спред так и не вернулся, позиция
+    закрывается независимо от окупаемости. Иначе «держим до окупаемости»
+    означало бы «держим всегда».
+    """
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 0.5, raising=False)
+    store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
+    engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
+
+    engine.step({"status": "ok", "items": [_item(ann=25.0)]}, now=1000.0)
+    engine.step({"status": "ok", "items": [_item(ann=-5.0)]}, now=1000.0 + 24 * HOUR)
+
+    state = store.load()
+    assert not state["open"], "max_hold обязан закрывать независимо от carry"
+    assert state["closed"][0]["close_reason"] == "max_hold_reached"

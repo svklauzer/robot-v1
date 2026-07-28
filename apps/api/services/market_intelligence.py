@@ -102,6 +102,32 @@ class MarketIntelligenceEngine:
 
         return getattr(ctx, key, default)
 
+    def _learning_mode(self) -> bool:
+        """(#paper-live-parity-2026-07-28) Мягкая классификация сетапов — да/нет.
+
+        Раньше это выражение было продублировано в ЧЕТЫРЁХ местах и в каждом
+        включало режим исполнения:
+
+            learning_mode = trading_mode in ("paper_signal", "paper_trade")
+                            or signal_profile in ("learning", "aggressive", "dev")
+
+        Два независимых тумблера управляли одним поведением, причём один из них
+        назван про другое: TRADING_MODE — про то, где исполняем, SIGNAL_PROFILE
+        — про то, насколько строги. Связка через `or` означала, что переход в
+        live меняет ПОРОГИ РОЖДЕНИЯ сетапов: learning требует согласия четырёх
+        ТФ при score ≥ 55/50, ветка голосования — трёх голосов при score
+        ≥ 58 / ≤ 50. Это разные системы.
+
+        Не проявлялось только потому, что SIGNAL_PROFILE=learning держал вторую
+        половину истинной в обоих режимах. Сработало бы в момент смены профиля
+        — то есть когда цена ошибки максимальна.
+
+        Paper обязан быть той же системой, что и live. Что торгуем — решает
+        TRADING_MODE; что считается сетапом — только профиль.
+        """
+        profile = str(getattr(settings, "SIGNAL_PROFILE", "learning")).lower()
+        return profile in ("learning", "aggressive", "dev")
+
     def _rsi_gate_for(self, side: str, h4, h1):
         """(#rsi-dynamic-2026-07-27) Решение RSI-гейта по контексту старших ТФ.
 
@@ -1028,14 +1054,12 @@ class MarketIntelligenceEngine:
         if self._ctx_value(h1, "volatility") == "extreme":
             return "volatile"
 
-        trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-        signal_profile = str(getattr(settings, "SIGNAL_PROFILE", "learning")).lower()
-
-        learning_mode = trading_mode in ["paper_signal", "paper_trade"] or signal_profile in [
-            "learning",
-            "aggressive",
-            "dev",
-        ]
+        # (#paper-live-parity-2026-07-28) Строгость зависит ТОЛЬКО от профиля.
+        # Раньше в условие входил и режим ИСПОЛНЕНИЯ (TRADING_MODE), то есть
+        # переключение paper → live меняло бы пороги классификации сетапов — и
+        # вся статистика, на которой мы принимаем решения, оказалась бы про
+        # другую систему. Подробности в _detect_multi_timeframe_regime.
+        learning_mode = self._learning_mode()
 
         trend_up_votes = 0
         trend_down_votes = 0
@@ -1086,6 +1110,10 @@ class MarketIntelligenceEngine:
 
         # Learning/dev: разрешаем кандидат, если 4h mixed,
         # но 1h + 15m + 5m уже дают рабочее направление.
+        # (#side-parity-2026-07-28) Единые пороги для обеих сторон.
+        _min_total = float(getattr(settings, "SETUP_MIN_TOTAL_SCORE", 55.0))
+        _trend_margin = float(getattr(settings, "SETUP_TREND_SCORE_MARGIN", 5.0))
+
         if learning_mode:
             long_learning_ok = (
                 h4_trend in ["trend_up", "mixed"]            # flat убран
@@ -1094,8 +1122,10 @@ class MarketIntelligenceEngine:
                 and m5_trend in ["trend_up", "flat", "mixed"]
                 and m15_momentum in ["bullish", "neutral"]
                 and m5_momentum in ["bullish", "neutral"]
-                and total_score >= 55
-                and trend_score >= 55
+                # (#side-parity-2026-07-28) Порог КАЧЕСТВА одинаков для обеих
+                # сторон, направление задаёт trend_score симметрично вокруг 50.
+                and total_score >= _min_total
+                and trend_score >= 50.0 + _trend_margin
             )
 
             if long_learning_ok:
@@ -1108,18 +1138,42 @@ class MarketIntelligenceEngine:
                 and m5_trend in ["trend_down", "flat", "mixed"]
                 and m15_momentum in ["bearish", "neutral"]
                 and m5_momentum in ["bearish", "neutral"]
-                and total_score >= 50
-                and trend_score <= 55
+                # (#side-parity-2026-07-28) БЫЛО: `total_score >= 50` против 55 у
+                # лонга и `trend_score <= 55` против `>= 55`.
+                #
+                # Вторая асимметрия была разрушительнее первой. Наблюдаемый
+                # trend_score по всей вселенной лежит в 25–43 (замер по скану:
+                # BTC 27.8, ETH 30.0, SOL 25.0, XRP 25.0, AVAX 29.0, TRX 43.0,
+                # ADA 35.5). То есть условие лонга `>= 55` не выполнялось почти
+                # никогда, а условие шорта `<= 55` — почти всегда. Направленный
+                # фильтр работал только в одну сторону.
+                #
+                # Результат в данных: шортов 170 против лонгов 117 (в 1.45 раза)
+                # при почти одинаковом убытке на сделку (−0.36 против −0.34).
+                # Перекос дал не худшие сделки, а БОЛЬШЕ сделок той же
+                # убыточности — ту самую частоту, которую мы режем.
+                and total_score >= _min_total
+                and trend_score <= 50.0 - _trend_margin
             )
 
             if short_learning_ok:
                 return "trend_down_candidate"
 
         # Голосование по тренду.
-        if trend_up_votes >= 3 and total_score >= 58:
+        #
+        # (#side-parity-2026-07-28) БЫЛО: лонг `total_score >= 58`, шорт
+        # `total_score <= 50`. Это не асимметрия порога — это РАЗНЫЙ СМЫСЛ
+        # одной величины: для лонга total_score работал как оценка КАЧЕСТВА,
+        # для шорта как индикатор НАПРАВЛЕНИЯ. Шорт с отличным качеством
+        # (total 80) отвергался именно за то, что он хороший.
+        #
+        # Направление определяют голоса ТФ — они для того и считаются. Качество
+        # обе стороны проходят по одному порогу.
+        _vote_min = float(getattr(settings, "SETUP_VOTING_MIN_TOTAL_SCORE", 58.0))
+        if trend_up_votes >= 3 and total_score >= _vote_min:
             return "trend_up_candidate"
 
-        if trend_down_votes >= 3 and total_score <= 50:
+        if trend_down_votes >= 3 and total_score >= _vote_min:
             return "trend_down_candidate"
 
         # Для learning не называем всё flat слишком рано.
@@ -1303,14 +1357,12 @@ class MarketIntelligenceEngine:
                 "comment": "no_candidate",
             }
 
-        trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-        signal_profile = str(getattr(settings, "SIGNAL_PROFILE", "learning")).lower()
-
-        learning_mode = trading_mode in ["paper_signal", "paper_trade"] or signal_profile in [
-            "learning",
-            "aggressive",
-            "dev",
-        ]
+        # (#paper-live-parity-2026-07-28) Строгость зависит ТОЛЬКО от профиля.
+        # Раньше в условие входил и режим ИСПОЛНЕНИЯ (TRADING_MODE), то есть
+        # переключение paper → live меняло бы пороги классификации сетапов — и
+        # вся статистика, на которой мы принимаем решения, оказалась бы про
+        # другую систему. Подробности в _detect_multi_timeframe_regime.
+        learning_mode = self._learning_mode()
 
         h4 = self._tf(contexts, "4h")
         h1 = self._tf(contexts, "1h")
@@ -1491,19 +1543,32 @@ class MarketIntelligenceEngine:
             ):
                 decision = "approve"
                 comment = "learning_trend_continuation_approved"
-            elif final_score >= 45:
-                decision = "wait"
-                comment = "learning_wait_more_confirmation"
+            # (#no-limbo-2026-07-28) Сильный сетап сам за себя. Раньше между
+            # одобрением и отказом лежала зона `wait`, и в неё проваливались
+            # рабочие сигналы: ETH в скане имел final_score 73.16 и получил
+            # `learning_wait_more_confirmation` — из-за trend_alignment 30.0
+            # против порога 32.0, разница в ДВА пункта.
+            #
+            # При этом `wait` ничего не ждал: состояние между сканами не
+            # сохраняется, каждый цикл считает всё заново. То есть это был
+            # отказ, названный ожиданием — сигнал не «дозревал», он выбрасывался.
+            #
+            # Если общая оценка выше strong-порога, одного недобора по частному
+            # критерию мало, чтобы похоронить сетап.
+            elif final_score >= float(getattr(settings, "LEARNING_SETUP_STRONG_SCORE", 70.0)):
+                decision = "approve"
+                comment = "learning_setup_strong_score"
             else:
                 decision = "reject"
                 comment = "learning_setup_too_low"
         else:
-            if final_score >= 70:
+            # (#no-limbo-2026-07-28) Та же правка на строгом профиле: зона
+            # `candidate_but_wait_confirmation` (55..70) была тем же тупиком.
+            # Либо сетап годен, либо нет — третьего состояния система не умеет
+            # обслуживать, а название создавало иллюзию, что умеет.
+            if final_score >= float(getattr(settings, "STRICT_SETUP_MIN_SCORE", 62.0)):
                 decision = "approve"
                 comment = "setup_confirmed"
-            elif final_score >= 55:
-                decision = "wait"
-                comment = "candidate_but_wait_confirmation"
             else:
                 decision = "reject"
                 comment = "setup_quality_too_low"
@@ -1677,14 +1742,12 @@ class MarketIntelligenceEngine:
         if regime in ["trend_up_candidate", "trend_down_candidate"]:
             return "none"
 
-        trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-        signal_profile = str(getattr(settings, "SIGNAL_PROFILE", "learning")).lower()
-
-        learning_mode = trading_mode in ["paper_signal", "paper_trade"] or signal_profile in [
-            "learning",
-            "aggressive",
-            "dev",
-        ]
+        # (#paper-live-parity-2026-07-28) Строгость зависит ТОЛЬКО от профиля.
+        # Раньше в условие входил и режим ИСПОЛНЕНИЯ (TRADING_MODE), то есть
+        # переключение paper → live меняло бы пороги классификации сетапов — и
+        # вся статистика, на которой мы принимаем решения, оказалась бы про
+        # другую систему. Подробности в _detect_multi_timeframe_regime.
+        learning_mode = self._learning_mode()
 
         total_score = float(scores.get("total", 0))
         trend_score = float(scores.get("trend", 0))
@@ -1734,7 +1797,11 @@ class MarketIntelligenceEngine:
             or m1_volume == "weak"
         )
 
-        if long_bias and long_volume_ok and long_waiting_entry and total_score >= 50:
+        # (#side-parity-2026-07-28) Радар: тот же порог обеим сторонам. Было 50
+        # для лонга против 47 для шорта — третья копия одного и того же
+        # перекоса, теперь уже в наблюдении.
+        _watch_min = float(getattr(settings, "RADAR_WATCH_MIN_TOTAL_SCORE", 50.0))
+        if long_bias and long_volume_ok and long_waiting_entry and total_score >= _watch_min:
             return "watch_long"
 
         short_bias = (
@@ -1763,7 +1830,7 @@ class MarketIntelligenceEngine:
             or m1_volume == "weak"
         )
 
-        if short_bias and short_volume_ok and short_waiting_entry and total_score >= 47:
+        if short_bias and short_volume_ok and short_waiting_entry and total_score >= _watch_min:
             return "watch_short"
 
         # Learning fallback: не даём системе молчать, если картина почти готова.
@@ -1861,14 +1928,12 @@ class MarketIntelligenceEngine:
         if radar_state not in ["watch_long", "watch_short"]:
             return None
 
-        trading_mode = str(getattr(settings, "TRADING_MODE", "paper_signal")).lower()
-        signal_profile = str(getattr(settings, "SIGNAL_PROFILE", "learning")).lower()
-
-        learning_mode = trading_mode in ["paper_signal", "paper_trade"] or signal_profile in [
-            "learning",
-            "aggressive",
-            "dev",
-        ]
+        # (#paper-live-parity-2026-07-28) Строгость зависит ТОЛЬКО от профиля.
+        # Раньше в условие входил и режим ИСПОЛНЕНИЯ (TRADING_MODE), то есть
+        # переключение paper → live меняло бы пороги классификации сетапов — и
+        # вся статистика, на которой мы принимаем решения, оказалась бы про
+        # другую систему. Подробности в _detect_multi_timeframe_regime.
+        learning_mode = self._learning_mode()
 
         h4 = self._tf(contexts, "4h")
         h1 = self._tf(contexts, "1h")

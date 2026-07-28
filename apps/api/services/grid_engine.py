@@ -207,8 +207,28 @@ class GridEngine:
         # (#audit-grid-neutral) Neutral-корзина в направленном рынке тоже должна
         # переворачиваться: раньше streak рос только на long<->short, и neutral-цикл
         # зависал навсегда (фронт обещал «разворот зреет 0/N», бэкенд не умел).
+        #
+        # (#grid-neutral-churn-2026-07-28) НО не по одному лишь направлению.
+        # У двусторонней корзины НЕТ направления, которому можно быть
+        # противоположным: она зарабатывает на осцилляции, а не на движении.
+        # Условие `regime_now in ("long","short")` выполняется почти всегда —
+        # EMA на 1h редко бывает ровно плоской, — поэтому корзина открывалась,
+        # набирала confirm-тики и переворачивалась, не успев ничего заработать.
+        #
+        # В истории это видно прямо: 185 закрытых циклов, и подавляющее
+        # большинство закрыто по `grid_regime_flip` с realized РОВНО 0.0.
+        # Корзина открылась, перевернулась, закрылась — заняв маржу и не сделав
+        # ни одной сделки. Это и есть те −5.74: не проигранные сделки, а
+        # холостой оборот.
+        #
+        # Предпосылка рейнджа ломается не направлением, а ВЫХОДОМ ИЗ ДИАПАЗОНА.
+        # Его мы уже измеряем: `vol_regime == "breakout"` (расстояние от EMA в
+        # единицах ATR). По нему и переворачиваем.
         if side == "neutral" and regime_now in ("long", "short"):
-            opposite = True
+            opposite = bool(
+                cyc.get("vol_regime") == "breakout"
+                or not bool(getattr(settings, "GRID_NEUTRAL_FLIP_NEEDS_BREAKOUT", True))
+            )
 
         # (#grid-flip-cooldown) тихое окно после открытия/флипа: не переворачиваемся,
         # пока не прошло GRID_FLIP_COOLDOWN_SEC. Лечит почасовую пилу на монетах у EMA
@@ -380,6 +400,26 @@ class GridEngine:
         # только доводим до конца уже открытые (см. tick_all).
         if bool(getattr(settings, "GRID_KILL_SWITCH_ENABLED", False)):
             return
+
+        # (#grid-neutral-churn-2026-07-28) Не открываемся в пробое.
+        #
+        # Без этой проверки правка флипа лечит половину болезни: корзина
+        # перестанет переворачиваться, но продолжит ОТКРЫВАТЬСЯ в момент, когда
+        # цена ушла от EMA на 2+ ATR — то есть ровно тогда, когда рейнджа нет.
+        # Дальше её заморозит vol_regime, и она повиснет пустой, заняв маржу.
+        #
+        # Открываем только там, где предпосылка сетки выполняется: цена внутри
+        # диапазона относительно своей же волатильности.
+        if bool(getattr(settings, "GRID_OPEN_NEEDS_RANGE", True)):
+            fm = self._fresh_market(symbol)
+            if fm:
+                _regime, atr, ind = fm
+                ema = float(ind.get("ema") or 0.0)
+                if ema > 0 and atr > 0:
+                    dist_atr = abs(price - ema) / atr
+                    if dist_atr >= float(getattr(settings, "GRID_BREAKOUT_ATR_DIST", 2.0)):
+                        return
+
         # карман маржи: есть ли место хотя бы под базовый ордер
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
         base_usdt = float(getattr(settings, "GRID_BASE_ORDER_USDT", 20.0))
