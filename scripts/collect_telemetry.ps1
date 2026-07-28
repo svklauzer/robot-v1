@@ -40,7 +40,25 @@ $endpoints = [ordered]@{
     "mfe_mae"           = "/analytics/mfe-mae"
     "depth_coverage"    = "/analytics/depth-coverage"
     "daily_quality_72h" = "/analytics/daily-quality-report?hours=72"
-    "exit_replay"       = "/ml/exit-replay"
+    "signal_quality"    = "/analytics/signal-quality"
+    "reason_breakdown"  = "/analytics/reason-breakdown?limit=500"
+    "symbol_perf"       = "/analytics/symbol-performance?lookback=12"
+    # (#expectancy-2026-07-27) Ожидание на сделку — то, по чему судим о символе
+    # вместо win-rate. Разрезы по символам, причинам входа и их парам.
+    "expectancy"        = "/analytics/expectancy"
+    # (#venue-expectancy-2026-07-27) Раздельно spot/swap: round-trip 0.40% против
+    # 0.10%, смешивать нельзя. Здесь же сверка booked против achievable.
+    "venue_expectancy"  = "/analytics/venue-expectancy"
+    # exit-replay теперь по профилям: trend — основная масса сделок, раньше
+    # эндпоинт её вообще не видел.
+    "exit_replay_trend" = "/ml/exit-replay?profile=trend"
+    "exit_replay_scalp" = "/ml/exit-replay?profile=scalp"
+    # (#walk-forward-2026-07-27) Out-of-sample: подбор оценён на данных, которых
+    # он не видел. exit_replay — in-sample и систематически оптимистичен.
+    "wf_trend"          = "/ml/walk-forward?regime=trend"
+    "wf_range"          = "/ml/walk-forward?regime=range"
+    "wf_scalp"          = "/ml/walk-forward?regime=scalp"
+    "wf_history"        = "/ml/walk-forward/history"
     "ml_outcomes"       = "/ml/outcomes/stats"
     "ml_status"         = "/ml/status"
     "signals"           = "/signals?limit=$SignalsLimit&offset=0"

@@ -86,6 +86,68 @@ def summarize(snap: dict) -> None:
         print(f"  без него         : n={wo.get('count')} net={wo.get('net_pnl_usdt')} "
               f"avg={wo.get('avg_pnl_usdt')}")
 
+    # (#expectancy-2026-07-27) Главный блок: win-rate без payoff бессмыслен.
+    # 67% побед при payoff 0.29 — убыточная система.
+    exp = data.get("expectancy") or {}
+    if exp.get("status") == "ok":
+        o = exp.get("overall") or {}
+        print("\n=== ОЖИДАНИЕ НА СДЕЛКУ ===")
+        print(f"  всего            : n={o.get('count')}  winrate={o.get('winrate_pct')}%  "
+              f"payoff={o.get('payoff_ratio')}")
+        print(f"  ОЖИДАНИЕ         : {o.get('expectancy_usdt')} USDT/сделка  "
+              f"(издержки {o.get('cost_share_of_gross_pct')}% от валового хода)")
+        bad = [r for r in (exp.get("by_symbol") or []) if r.get("demote")]
+        if bad:
+            print("  под понижение:")
+            for r in bad[:8]:
+                print(f"    {r.get('symbol'):12} exp={r.get('expectancy_usdt')} "
+                      f"n={r.get('count_with_money')} ptn={r.get('positive_then_negative_pct')}% "
+                      f"— {r.get('why')}")
+        reasons = [r for r in (exp.get("by_entry_reason") or [])
+                   if not str(r.get("entry_reason", "")).startswith("legacy_")]
+        if reasons:
+            print("  по причинам входа:")
+            for r in reasons[:8]:
+                print(f"    {str(r.get('entry_reason'))[:34]:34} exp={r.get('expectancy_usdt')} "
+                      f"n={r.get('count')}")
+        else:
+            print("  (!) причины входа ещё не накопились — поле пишется с 27.07")
+
+    # (#venue-expectancy-2026-07-27) Инварианты филлов. Положительный разрыв
+    # booked−achievable = запись результата лучше рынка, то есть ошибка учёта.
+    ve = data.get("venue_expectancy") or {}
+    if ve.get("status") == "ok":
+        print("\n=== ПЛОЩАДКИ И ИСПОЛНЕНИЕ ===")
+        for row in ve.get("by_market_type") or []:
+            print(f"  {row.get('market_type'):8} n={row.get('count'):<4} "
+                  f"exp={row.get('expectancy_usdt')}  "
+                  f"ср.разрыв={row.get('avg_execution_gap_pct')}%")
+        viol = ve.get("invariant_violation_count") or 0
+        mark = "  ← РАЗБИРАТЬ" if viol else ""
+        print(f"  нарушений инварианта филла: {viol}{mark}")
+
+    # (#walk-forward-2026-07-27) Единственный честный ответ на вопрос «менять ли
+    # конфиг»: подбор оценён на данных, которых он не видел.
+    print("\n=== WALK-FORWARD (out-of-sample) ===")
+    for regime in ("trend", "range", "scalp"):
+        wf = data.get(f"wf_{regime}") or {}
+        if wf.get("status") != "ok":
+            print(f"  {regime:6} — {wf.get('status') or 'нет данных'} "
+                  f"(сделок {wf.get('trades', 0)})")
+            continue
+        print(f"  {regime:6} n={wf.get('trades'):<4} edge={wf.get('oos_edge_pct')}%  "
+              f"фолдов выиграно {wf.get('folds_won')}/{wf.get('folds_scored')}  "
+              f"разных выборов {wf.get('unique_param_picks')}")
+        print(f"         → {wf.get('verdict')}")
+
+    wfh = data.get("wf_history") or {}
+    if wfh.get("status") == "ok":
+        print(f"\n  дрейф оптимума за {wfh.get('runs')} прогонов:")
+        for regime, st in (wfh.get("stability") or {}).items():
+            if st.get("runs"):
+                print(f"    {regime:6} разных выборов {st.get('distinct_picks')}/{st.get('runs')} "
+                      f"— {st.get('verdict')}")
+
 
 def export_trajectories(snap: dict) -> str:
     """Траектории закрытых сделок в формат калибровочных скриптов."""
