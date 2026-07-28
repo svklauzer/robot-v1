@@ -18,7 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.config import settings
-from services.ml_features import FEATURE_NAMES, row_to_features, row_to_label
+from services.ml_features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    is_phantom_row,
+    row_to_features,
+    row_to_label,
+)
 
 
 class MetaLabeler:
@@ -45,10 +51,61 @@ class MetaLabeler:
         rows.sort(key=lambda r: str(r.get("closed_at") or r.get("created_at") or ""))
         return rows
 
+    def _usable_rows(self, rows: list[dict]) -> tuple[list[dict], dict]:
+        """(#ml-rework-2026-07-28) Отсев данных из системы, которой больше нет.
+
+        Три причины выбросить строку — все обнаружены замером, а не гипотезой:
+
+        1. **Фантомный филл.** 13 строк из 287 записаны с результатом выше
+           достигнутого пика. Метка у них положительная там, где рынок дал
+           минус: модель училась бы, что сетап приносит +8.18 USDT.
+
+        2. **Отключённый режим.** trend_up/trend_down — 154 записи из 287.
+           Мы их больше не торгуем; предсказывать исход в мире, которого нет,
+           бессмысленно, а весов на себя они оттягивают половину.
+
+        3. **Возраст.** Exit-политика за месяц менялась несколько раз
+           (MIN_PROTECTIVE 1.80→0.40, замок безубытка выключен). Метка — это
+           исход ПОД ТОГДАШНЮЮ логику ведения; старая строка отвечает на другой
+           вопрос. Окно по времени — самый дешёвый способ не смешивать эпохи.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        allowed = {
+            r.strip() for r in str(getattr(settings, "TRADEABLE_REGIMES", "")).split(",")
+            if r.strip()
+        }
+        window_days = float(getattr(settings, "ML_TRAIN_WINDOW_DAYS", 45))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+
+        kept: list[dict] = []
+        dropped = {"phantom": 0, "regime_off": 0, "too_old": 0}
+        for r in rows:
+            if is_phantom_row(r):
+                dropped["phantom"] += 1
+                continue
+            if allowed and str(r.get("regime") or "") not in allowed:
+                dropped["regime_off"] += 1
+                continue
+            raw = str(r.get("closed_at") or r.get("created_at") or "")
+            if raw:
+                try:
+                    ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if ts < cutoff:
+                        dropped["too_old"] += 1
+                        continue
+                except ValueError:
+                    pass
+            kept.append(r)
+        return kept, dropped
+
     def _xy(self, rows: list[dict], label_kind: str):
+        min_r = float(getattr(settings, "ML_LABEL_MIN_R", 0.3))
         X, y = [], []
         for r in rows:
-            lbl = row_to_label(r, label_kind)
+            lbl = row_to_label(r, label_kind, min_r=min_r)
             if lbl is None:
                 continue
             X.append(row_to_features(r))
@@ -60,7 +117,8 @@ class MetaLabeler:
         label_kind = str(getattr(settings, "ML_LABEL_KIND", "is_win"))
         min_samples = int(getattr(settings, "ML_MIN_TRAIN_SAMPLES", 150))
 
-        rows = self._load_rows()
+        raw_rows = self._load_rows()
+        rows, dropped = self._usable_rows(raw_rows)
         X, y = self._xy(rows, label_kind)
         n = len(y)
 
@@ -69,7 +127,15 @@ class MetaLabeler:
                 "status": "insufficient_data",
                 "samples": n,
                 "needed": min_samples,
-                "message": f"Нужно ≥{min_samples} размеченных сделок для обучения (есть {n}).",
+                "rows_total": len(raw_rows),
+                "dropped": dropped,
+                "message": (
+                    f"Нужно ≥{min_samples} размеченных сделок для обучения (есть {n} "
+                    f"из {len(raw_rows)} в датасете). Отброшено: фантомных филлов "
+                    f"{dropped['phantom']}, отключённых режимов {dropped['regime_off']}, "
+                    f"старше окна {dropped['too_old']}. Это не ошибка — учить на "
+                    "исходах несуществующей логики хуже, чем не учить вовсе."
+                ),
             }
         if len(set(y)) < 2:
             return {"status": "single_class", "samples": n,
@@ -123,7 +189,18 @@ class MetaLabeler:
             "positives": int(ya.sum()),
             "win_rate": round(float(ya.mean()) * 100, 2),
             "label_kind": label_kind,
+            "label_min_r": float(getattr(settings, "ML_LABEL_MIN_R", 0.3)),
             "features": FEATURE_NAMES,
+            # (#ml-rework-2026-07-28) Версия контракта фич. Модель, обученная на
+            # другом наборе, несовместима и по длине вектора, и по смыслу —
+            # предсказывать по ней молча нельзя.
+            "feature_version": FEATURE_VERSION,
+            # Что и почему выброшено из датасета. Без этого «samples: 120»
+            # выглядит как потеря данных, хотя это отсев исходов от логики,
+            # которой больше нет.
+            "rows_total": len(raw_rows),
+            "dropped": dropped,
+            "train_window_days": float(getattr(settings, "ML_TRAIN_WINDOW_DAYS", 45)),
             "metrics": metrics,
             "model": "LogisticRegression+StandardScaler",
         }
@@ -140,6 +217,20 @@ class MetaLabeler:
             return self._model
         if not self.model_path.exists():
             return None
+
+        # (#ml-rework-2026-07-28) Модель, обученная на прежнем наборе фич,
+        # молча предсказывать не имеет права: вектор изменил и длину, и смысл
+        # позиций. Расхождение train/serve — самый тихий класс ML-багов, он не
+        # падает, а просто выдаёт правдоподобный мусор.
+        try:
+            meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
+            if int(meta.get("feature_version") or 1) != int(FEATURE_VERSION):
+                return None
+            if list(meta.get("features") or []) != FEATURE_NAMES:
+                return None
+        except Exception:  # noqa: BLE001 — нет метаданных = модель доверия не заслуживает
+            return None
+
         try:
             import joblib
             self._model = joblib.load(self.model_path)

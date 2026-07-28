@@ -206,13 +206,35 @@ class DailyQualityReportService:
 
         # ── overall status ───────────────────────────────────────────────────
         issues: list[str] = []
+
+        # (#report-sample-guard-2026-07-28) Долевые проверки требуют минимума
+        # выборки — ровно как проверка net PnL строкой ниже, у которой этот
+        # минимум был с самого начала.
+        #
+        # Без него отчёт поднимал тревогу на трёх закрытых сделках:
+        # «positive_then_negative share 33.3% > 25% threshold» — это ОДНА сделка
+        # из трёх. На таком объёме доля принимает только значения 0 / 33 / 67 /
+        # 100%, и порог 25% пробивается первой же сделкой, отдавшей плюс.
+        # Панель уходила в attention_required не по состоянию системы, а по
+        # арифметике малых чисел.
+        #
+        # Процент без размера выборки вообще не должен показываться как факт,
+        # поэтому n подставляется прямо в текст проблемы.
+        min_sample = int(getattr(settings, "DAILY_REPORT_MIN_SAMPLE", 5))
+        closed_n = int(trading.get("closed_count") or 0)
+        sample_ok = closed_n >= min_sample
+
         fss = trading.get("failed_setup_share_pct")
-        if fss is not None and fss > 35:
-            issues.append(f"failed_setup_exit share {fss:.1f}% > 35% threshold")
+        if sample_ok and fss is not None and fss > 35:
+            issues.append(
+                f"failed_setup_exit share {fss:.1f}% > 35% threshold (n={closed_n})"
+            )
 
         ptn = trading.get("positive_then_negative_share_pct")
-        if ptn is not None and ptn > 25:
-            issues.append(f"positive_then_negative share {ptn:.1f}% > 25% threshold")
+        if sample_ok and ptn is not None and ptn > 25:
+            issues.append(
+                f"positive_then_negative share {ptn:.1f}% > 25% threshold (n={closed_n})"
+            )
 
         # (#report-honest-pnl-2026-07-27) Судим по честному PnL — иначе фантомный
         # филл в окне маскирует убыточный период зелёной цифрой.
@@ -240,6 +262,12 @@ class DailyQualityReportService:
             "window_hours": self.hours,
             "status": "ok" if not issues else "attention_required",
             "issues": issues,
+            # (#report-sample-guard-2026-07-28) Витрина обязана знать, что за
+            # процентами стоит. Winrate 66.7% на трёх сделках — это «две из
+            # трёх», а не показатель качества, и подавать его как цифру рядом с
+            # остальными нельзя.
+            "sample_sufficient": sample_ok,
+            "min_sample": min_sample,
             "trading": trading,
             "active_signals": active,
             "telegram_sla": telegram,

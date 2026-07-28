@@ -184,11 +184,38 @@ export default function DashboardPage() {
             </div>
             <span className="text-xs text-emerald-100/50">24h window</span>
           </div>
+          {/* (#report-sample-guard-2026-07-28) Проценты за сутки — это проценты
+              от ЕДИНИЦ сделок. При трёх закрытиях winrate принимает только
+              значения 0 / 33 / 67 / 100%, и «66.7%» означает «две из трёх», а
+              не качество системы. Пока выборки нет, доли гасим до серого и
+              подписываем счётом — иначе панель подаёт шум как измерение. */}
+          {dailyQuality.sample_sufficient === false && (
+            <p className="mb-3 text-xs text-emerald-100/45">
+              Закрытий за окно: {dailyQuality.trading?.closed_count ?? 0} — меньше{" "}
+              {dailyQuality.min_sample ?? 5}. Доли ниже показаны справочно и в оценку
+              состояния не идут.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
-            <DailyCard label="Net PnL" value={`${fmt(dailyQuality.trading?.net_pnl_usdt, 2)} USDT`} good={(dailyQuality.trading?.net_pnl_usdt ?? 0) > 0} danger={(dailyQuality.trading?.net_pnl_usdt ?? 0) < 0} />
+            <DailyCard label="Net PnL" value={`${fmt(dailyQuality.trading?.net_pnl_honest_usdt ?? dailyQuality.trading?.net_pnl_usdt, 2)} USDT`} good={(dailyQuality.trading?.net_pnl_honest_usdt ?? dailyQuality.trading?.net_pnl_usdt ?? 0) > 0} danger={(dailyQuality.trading?.net_pnl_honest_usdt ?? dailyQuality.trading?.net_pnl_usdt ?? 0) < 0} />
             <DailyCard label="Closed" value={dailyQuality.trading?.closed_count ?? 0} />
-            <DailyCard label="Winrate" value={`${dailyQuality.trading?.winrate_pct ?? "-"}%`} good={(dailyQuality.trading?.winrate_pct ?? 0) >= 50} warn={(dailyQuality.trading?.winrate_pct ?? 100) < 45} />
-            <DailyCard label="Failed Setup" value={`${dailyQuality.trading?.failed_setup_share_pct ?? 0}%`} danger={(dailyQuality.trading?.failed_setup_share_pct ?? 0) > 35} />
+            <DailyCard
+              label="Winrate"
+              value={
+                dailyQuality.sample_sufficient === false
+                  ? `${dailyQuality.trading?.win_count ?? 0} из ${dailyQuality.trading?.closed_count ?? 0}`
+                  : `${dailyQuality.trading?.winrate_pct ?? "-"}%`
+              }
+              muted={dailyQuality.sample_sufficient === false}
+              good={dailyQuality.sample_sufficient !== false && (dailyQuality.trading?.winrate_pct ?? 0) >= 50}
+              warn={dailyQuality.sample_sufficient !== false && (dailyQuality.trading?.winrate_pct ?? 100) < 45}
+            />
+            <DailyCard
+              label="Failed Setup"
+              value={`${dailyQuality.trading?.failed_setup_share_pct ?? 0}%`}
+              muted={dailyQuality.sample_sufficient === false}
+              danger={dailyQuality.sample_sufficient !== false && (dailyQuality.trading?.failed_setup_share_pct ?? 0) > 35}
+            />
             <DailyCard label="TG SLA" value={`${dailyQuality.telegram_sla?.sla_pct ?? 100}%`} good={(dailyQuality.telegram_sla?.sla_pct ?? 100) >= 99} danger={(dailyQuality.telegram_sla?.sla_pct ?? 100) < 99} />
             <DailyCard label="Active" value={dailyQuality.active_signals?.total_active ?? 0} />
           </div>
@@ -273,8 +300,13 @@ function fmt(value: any, digits = 2) {
   return Number.isFinite(num) ? num.toFixed(digits) : "0.00";
 }
 
-function DailyCard({ label, value, good, warn, danger }: { label: string; value: any; good?: boolean; warn?: boolean; danger?: boolean }) {
-  const cls = danger ? "text-red-300" : warn ? "text-yellow-300" : good ? "text-emerald-300" : "text-emerald-200";
+function DailyCard({ label, value, good, warn, danger, muted }: { label: string; value: any; good?: boolean; warn?: boolean; danger?: boolean; muted?: boolean }) {
+  // (#report-sample-guard-2026-07-28) `muted` — доля посчитана на выборке
+  // меньше минимума. Цвет несёт смысл «хорошо/плохо», и красить им шум нельзя:
+  // зелёные 66.7% на трёх сделках читаются как достижение.
+  const cls = muted
+    ? "text-emerald-100/40"
+    : danger ? "text-red-300" : warn ? "text-yellow-300" : good ? "text-emerald-300" : "text-emerald-200";
   return (
     <div className="rounded-xl border border-emerald-950 bg-black/20 p-3">
       <div className="text-xs text-emerald-100/50">{label}</div>

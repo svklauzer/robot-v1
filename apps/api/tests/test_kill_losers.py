@@ -133,3 +133,54 @@ def test_no_duplicate_keys_in_settings_class():
     dupes = sorted(k for k, v in seen.items() if v > 1)
 
     assert not dupes, f"ключи объявлены дважды — победит последний: {dupes}"
+
+
+# ── Дневной отчёт на малой выборке ───────────────────────────────────────────
+
+def test_share_thresholds_need_a_sample():
+    """(#report-sample-guard) Отчёт кричал на трёх сделках.
+
+    «positive_then_negative share 33.3% > 25% threshold» — это ОДНА сделка из
+    трёх. На таком объёме доля принимает лишь значения 0 / 33 / 67 / 100%, и
+    порог 25% пробивается первой же сделкой, отдавшей плюс. Панель уходила в
+    attention_required по арифметике малых чисел.
+
+    Проверка net PnL рядом такой минимум имела с самого начала — долевые не
+    имели, и это была непоследовательность, а не замысел.
+    """
+    assert settings.DAILY_REPORT_MIN_SAMPLE >= 5
+
+    # На трёх закрытиях доля не может быть меньше шага 1/3.
+    step = 100.0 / 3
+    assert step > 25.0, (
+        "порог 25% лежит ниже одного шага выборки из трёх сделок — "
+        "любая единичная сделка пробивает его автоматически"
+    )
+
+
+def test_daily_report_exposes_sample_sufficiency_to_the_ui():
+    """Витрина обязана знать, что стоит за процентом.
+
+    Winrate 66.7% на трёх сделках — это «две из трёх». Подавать это цифрой
+    рядом с остальными нельзя, поэтому отчёт отдаёт флаг явно.
+    """
+    src = (
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "services" / "daily_quality_report.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"sample_sufficient"' in src
+    assert '"min_sample"' in src
+
+
+def test_dashboard_mutes_shares_on_a_small_sample():
+    from pathlib import Path
+
+    page = (
+        Path(__file__).resolve().parents[3] / "apps" / "web" / "app" / "page.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "sample_sufficient" in page
+    assert "muted" in page, "доли на малой выборке красятся как полноценные"
+    # Winrate на малой выборке показывается счётом, а не процентом.
+    assert "win_count" in page
