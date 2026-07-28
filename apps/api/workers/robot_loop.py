@@ -26,6 +26,7 @@ from services.orderbook_analyzer import OrderBookAnalyzer
 from services.orderbook_feed import ORDERBOOK_STORE
 from services.ml_trade_logger import MLTradeLogger
 from services.ml_controller import MLController
+from services.decision_event_service import DecisionEventService
 
 from models.signal import Signal
 from models.position import Position
@@ -53,6 +54,7 @@ class RobotLoop:
         self.ml_trade_logger = MLTradeLogger()
         self.ml_controller = MLController()
         self.ml_outcome_stats = MLOutcomeStatsService()
+        self.decisions = DecisionEventService()
 
         # Grade stats cache: refreshed every 20 loop iterations (~20 min)
         # to pick up new closed trades without hitting disk every 60s.
@@ -228,6 +230,11 @@ class RobotLoop:
             # строилась только от последней цены: depth-гейт решал «входить или
             # нет», но КУДА ставить цену — не влиял, и вход шёл фактически по
             # рынку при любом состоянии стакана.
+            # Считаем зону в try (сбой расчёта не должен ронять цикл), но решение
+            # по её вердикту принимаем СНАРУЖИ. Пока `continue` стоял внутри try,
+            # любое исключение в теле ветки отмены — включая отсутствующий
+            # атрибут — гасилось except'ом, вето не срабатывало, и кандидат,
+            # который зона отвергла, всё равно уходил в публикацию.
             _ez = None
             try:
                 from services.entry_zone import evaluate as _entry_zone_eval
@@ -238,18 +245,21 @@ class RobotLoop:
                     snapshot=ORDERBOOK_STORE.snapshot(symbol),
                     regime=str(result.regime or ""),
                 )
-                if not _ez.allowed:
-                    self.decisions.record(
-                        db, symbol=symbol, status="rejected",
-                        decision="entry_zone_support_too_far", action=result.action,
-                        payload=_ez.to_payload(),
-                    )
-                    db.flush()
-                    continue
-                if _ez.entry_from is not None and _ez.entry_to is not None:
-                    entry_from, entry_to = float(_ez.entry_from), float(_ez.entry_to)
-            except Exception as exc:  # noqa: BLE001 — зона не должна ронять цикл
+            except Exception as exc:  # noqa: BLE001
+                _ez = None
                 print(f"[ENTRY ZONE ERROR] {symbol}: {exc}")
+
+            if _ez is not None and not _ez.allowed:
+                self.decisions.record(
+                    db, symbol=symbol, status="rejected",
+                    decision="entry_zone_support_too_far", action=result.action,
+                    payload=_ez.to_payload(),
+                )
+                db.flush()
+                continue
+
+            if _ez is not None and _ez.entry_from is not None and _ez.entry_to is not None:
+                entry_from, entry_to = float(_ez.entry_from), float(_ez.entry_to)
 
             # ФИКС (#4): round(...,2) ломал суб-долларовые символы. Для ADA
             # (~0.166) середина зоны 0.1662 округлялась до 0.17 — это ВЫШЕ стопа
@@ -678,7 +688,7 @@ class RobotLoop:
             # исполнения (растёт с пополнениями/прибылью); в paper — RISK_EQUITY_USDT.
             try:
                 from services.live_executor import LIVE_EXECUTOR
-                _equity_usdt = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
+                _equity_usdt = LIVE_EXECUTOR.effective_equity_usdt()
             except Exception:
                 _equity_usdt = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
 
@@ -932,32 +942,31 @@ class RobotLoop:
                     "explore": True,
                     "reason": f"ml_explore_probe:{ml_eval.get('reason')}",
                 }
-            # ── Conviction sizing: ГРЕЙД × ML (#grade-ml-sync-2026-07-09)
-            # Грейд — ПУБЛИЧНАЯ ось уверенности (виден подписчикам в Telegram),
-            # поэтому эквити обязано следовать ему, как и было задумано: одинокий
-            # A/A+ забирает весь free (dyn_budget уже = free при одном кандидате),
-            # несколько кандидатов — поровну; B капается долей free
-            # (DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE). Прежний код (#grade-ml-2026-07-06)
-            # полностью игнорировал грейд при живом ml_score — B со score 0.46
-            # получал столько же эквити, сколько A, и канал врал о размере ставки.
-            # После рекалибровки грейдов (#grade-fix-2026-07-06) ладдер A/A+/B
-            # реально разлипся — ось снова информативна.
-            # ML остаётся ПРИВАТНЫМ модулятором риска: слабый score ужимает размер
-            # (в full_auto score<min вообще блокируется выше). Итог =
-            # min(grade_mult, ml_mult) — размер задаёт слабейшая ось: A не несёт
-            # полный размер против мнения ML, B не получает полный бюджет только
-            # за высокий score. ML off/нет score → чистый грейд (fail-open).
-            # Только тренд (range/scalp — свой сайзинг). Downward-only (≤1.0).
+            # ── Conviction sizing: ГРЕЙД × ML ────────────────────────────────
+            # Грейд — публичная ось уверенности (виден подписчикам): A/A+ несёт
+            # полный бюджет, B капается DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE.
+            # ML — приватный модулятор риска, но ТОЛЬКО в режимах, которым
+            # владелец дал право трогать деньги. В shadow ml_score считается и
+            # пишется в plan_json для валидации, а размер обязан остаться таким,
+            # каким его дал rule-based: иначе shadow-отчёт сравнивает предсказание
+            # с исходом сделки, размер которой это же предсказание и изменило.
+            _ml_may_size = str(ml_eval.get("mode") or "off").lower() in ("advisory", "full_auto")
             _grade_mult = 1.0 if str(grade or "").upper() in ("A", "A+") \
                 else float(getattr(settings, "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE", 0.5))
             _ml_mult = 1.0
             _ml_score = ml_eval.get("ml_score")
-            if bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True)) and _ml_score is not None:
+            if (
+                _ml_may_size
+                and bool(getattr(settings, "ML_SIZE_ALLOC_ENABLED", True))
+                and _ml_score is not None
+            ):
                 _ml_mult = 1.0 if float(_ml_score) >= float(getattr(settings, "ML_SIZE_FULL_MIN_SCORE", 0.45)) \
                     else float(getattr(settings, "ML_SIZE_LOW_MULT", 0.5))
             _conv = min(_grade_mult, _ml_mult) if not is_range else 1.0
-            # full_auto guardrails могут дополнительно масштабировать (только вниз здесь)
-            if ml_eval.get("action") == "size":
+            # full_auto guardrails и explore-проба масштабируют дополнительно
+            # (только вниз). Обе ветки существуют лишь в режимах, где ML имеет
+            # право на размер, либо это явная микро-проба на бумаге.
+            if ml_eval.get("action") == "size" and (_ml_may_size or ml_eval.get("explore")):
                 _m = float(ml_eval.get("size_multiplier", 1.0) or 1.0)
                 if _m > 0:
                     _conv *= _m
@@ -967,6 +976,8 @@ class RobotLoop:
                 "grade_mult": _grade_mult,
                 "ml_score": _ml_score,
                 "ml_mult": _ml_mult,
+                "ml_mode": str(ml_eval.get("mode") or "off"),
+                "ml_may_size": _ml_may_size,
                 "conviction": round(_conv, 4),
                 "dyn_budget_usdt": dyn_budget,
             }
@@ -1015,6 +1026,11 @@ class RobotLoop:
                     "net_rr_tp2": plan.net_rr_tp2,
                     "is_valid": plan.is_valid,
                     "reject_reason": plan.reject_reason,
+                    # Рынок сделки фиксируется в момент входа: лонг — спот,
+                    # шорт — дериватив. Сопровождение и выход читают отсюда,
+                    # чтобы позиция закрывалась там же, где открылась, и по той
+                    # же комиссии, по которой считался план.
+                    "routing": plan.routing,
                     "performance_guard": performance_adjustment,
                     # ML-слой: ml_score и решение контроллера (shadow/advisory/full_auto).
                     "ml": ml_eval,
@@ -1237,7 +1253,7 @@ class RobotLoop:
                 ready += 1
         try:
             from services.live_executor import LIVE_EXECUTOR
-            equity = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
+            equity = LIVE_EXECUTOR.effective_equity_usdt()
         except Exception:
             equity = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
         used_pct = float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))

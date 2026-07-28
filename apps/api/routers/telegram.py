@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from core.config import settings
 from core.db import SessionLocal
@@ -36,8 +36,42 @@ def _payment_id_from_payload(invoice_payload: str) -> int | None:
         return None
 
 
+def verify_telegram_webhook(
+    x_telegram_bot_api_secret_token: str | None = Header(
+        default=None, alias="X-Telegram-Bot-Api-Secret-Token"
+    ),
+) -> bool:
+    """Подлинность апдейта. Возвращает True, если запрос доказанно от Telegram.
+
+    Секрет задаётся при setWebhook(secret_token=...) и приходит обратно
+    заголовком. Настроен → несовпадение отвергаем. Не настроен → пропускаем
+    (иначе бот умрёт до настройки), но апдейт считается непроверенным, и
+    денежные ветки его не принимают.
+    """
+    expected = str(getattr(settings, "TELEGRAM_WEBHOOK_SECRET", "") or "")
+    if not expected:
+        if settings.APP_ENV == "production":
+            log_event(logger, logging.WARNING, "telegram_webhook_secret_not_configured")
+        return False
+    if x_telegram_bot_api_secret_token != expected:
+        raise HTTPException(status_code=401, detail="telegram_webhook_auth_failed")
+    return True
+
+
 @router.post("/webhook")
-async def telegram_webhook(payload: TelegramWebhookRequest):
+async def telegram_webhook(
+    payload: TelegramWebhookRequest,
+    verified: bool = Depends(verify_telegram_webhook),
+):
+    # Деньги принимаем только у доказанно телеграмного апдейта: successful_payment
+    # переводит платёж в paid и выдаёт VIP, подделать его — бесплатная подписка.
+    if payload.message and payload.message.get("successful_payment") and not verified:
+        log_event(
+            logger, logging.ERROR, "telegram_payment_update_rejected_unverified",
+            invoice_payload=(payload.message.get("successful_payment") or {}).get("invoice_payload"),
+        )
+        raise HTTPException(status_code=401, detail="telegram_webhook_secret_required")
+
     # 1) pre_checkout_query — обязателен ответ в течение 10 секунд.
     if payload.pre_checkout_query:
         pcq = payload.pre_checkout_query
@@ -139,6 +173,8 @@ async def _handle_successful_payment(message: dict) -> dict:
         payment, subscriber, activated = BillingService().confirm_payment(
             db=db, payment_id=payment_id,
             provider_event_id=charge_id, raw_payload=str(sp)[:1000],
+            charged_amount=sp.get("total_amount"),
+            charged_currency=sp.get("currency"),
         )
         db.commit()
 
@@ -243,6 +279,37 @@ async def _handle_htx_verify(data: dict) -> None:
     if chat_id:
         await SignalBroadcaster().send_message(chat_id, text, message_type="htx_trial_activated")
     log_event(logger, logging.INFO, "htx_trial_activated", uid=uid, telegram_user_id=tid)
+
+
+@router.post("/set-webhook", dependencies=[Depends(require_owner_action)])
+async def telegram_set_webhook(url: str | None = None):
+    """Регистрирует вебхук с secret_token, чтобы Telegram подписывал апдейты.
+
+    Без этого вызова денежные апдейты отвергаются как непроверенные.
+    """
+    secret = str(getattr(settings, "TELEGRAM_WEBHOOK_SECRET", "") or "")
+    if not secret:
+        raise HTTPException(status_code=400, detail="TELEGRAM_WEBHOOK_SECRET_not_configured")
+
+    target = url or f"{str(settings.NEXT_PUBLIC_API_URL).rstrip('/')}/telegram/webhook"
+    result = await TelegramPaymentsService()._call("setWebhook", {
+        "url": target,
+        "secret_token": secret,
+        "allowed_updates": ["message", "callback_query", "pre_checkout_query"],
+    })
+    log_event(logger, logging.INFO, "telegram_webhook_registered", url=target)
+    return {"status": "ok", "url": target, "result": result}
+
+
+@router.get("/webhook-info", dependencies=[Depends(require_owner_action)])
+async def telegram_webhook_info():
+    info = await TelegramPaymentsService()._call("getWebhookInfo", {})
+    return {
+        "secret_configured": bool(getattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")),
+        "url": info.get("url"),
+        "pending_update_count": info.get("pending_update_count"),
+        "last_error_message": info.get("last_error_message"),
+    }
 
 
 @router.get("/deliveries/summary", dependencies=[Depends(require_owner_action)])

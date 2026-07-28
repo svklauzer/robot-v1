@@ -276,6 +276,13 @@ class Settings(BaseSettings):
     TELEGRAM_CONNECT_TIMEOUT: float = 15.0
     TELEGRAM_READ_TIMEOUT: float = 30.0
 
+    # Общий секрет вебхука. Передаётся в setWebhook(secret_token=...), Telegram
+    # шлёт его обратно заголовком X-Telegram-Bot-Api-Secret-Token. Без него
+    # POST /telegram/webhook принимает запрос от кого угодно, а через него
+    # проходит подтверждение оплаты — то есть подписку можно активировать
+    # одним curl. Пусто → в production денежные апдейты отклоняются.
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+
     MAX_ACTIVE_SIGNALS: int = 4
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
     RISK_EQUITY_USDT: float = 950.0

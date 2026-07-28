@@ -69,7 +69,10 @@ def test_affiliate_registered_activates_free_vip_once():
 
         assert response.command == "/affiliate-registered"
         assert "HTX affiliate VIP активирован" in response.text
-        assert "https://t.me/vip" in response.text
+        # Ссылку в VIP выдаёт роутер: он запрашивает у Telegram ОДНОРАЗОВЫЙ
+        # инвайт и лишь при отказе падает на статический VIP_INVITE_LINK.
+        # Меню сообщает о необходимости инвайта флагом, текста ссылки в нём нет.
+        assert response.vip_invite_request is True
         assert subscriber.status == "active"
         assert subscriber.plan == "affiliate_htx_vip"
         assert subscriber.is_trial is True

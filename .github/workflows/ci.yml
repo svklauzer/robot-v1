@@ -67,22 +67,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # package-lock.json в репозитории нет, и Dockerfile ставит зависимости
+      # через npm install. `npm ci` требует lock-файл и падал на каждом прогоне,
+      # то есть frontend-job был красным всегда и его перестали читать.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Type check
         run: npx tsc --noEmit
-        continue-on-error: true   # frontend types may be in flux; warn only
 
       - name: Build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
         run: npm run build
-        continue-on-error: true   # warn only until frontend is stabilised

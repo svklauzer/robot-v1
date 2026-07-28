@@ -135,6 +135,22 @@ position_manage_lock = asyncio.Lock()
 logger = get_logger(__name__)
 
 
+def effective_equity_usdt() -> float:
+    """Единственный источник эквити для сайзинга и риск-лимитов.
+
+    В paper/dry_run — RISK_EQUITY_USDT, в live — реальный свободный баланс
+    счёта исполнения (TTL-кэш 30 с). До этого сайзинг и дневной стоп-лосс
+    считались от захардкоженной 1000, экспозиция — от настоящего баланса:
+    на счёте, отличном от 1000, план и предохранитель расходились с реальностью.
+    """
+    try:
+        from services.live_executor import LIVE_EXECUTOR
+
+        return float(LIVE_EXECUTOR.effective_equity_usdt())
+    except Exception:  # noqa: BLE001 — эквити не должно ронять цикл
+        return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+
+
 async def background_robot_loop():
     global robot_loop_enabled
 
@@ -154,7 +170,8 @@ async def background_robot_loop():
                 if validation_gates.get("live_blockers"):
                     log_event(logger, logging.WARNING, "robot_loop_validation_skip", **validation_gates)
                 else:
-                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+                    equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
 
                     if safety.get("blocked"):
                         db.commit()
@@ -165,7 +182,7 @@ async def background_robot_loop():
                                 db=db,
                                 bot=bot,
                                 headlines=[],
-                                balance_usdt=1000,
+                                balance_usdt=equity_usdt,
                                 daily_loss_pct=safety.get("daily_loss_pct", 0),
                                 drawdown_pct=0,
                             )
@@ -389,10 +406,13 @@ async def background_venues_spread_loop():
                 from services.venue_compare import VenueCompareService, VenueSpreadHistory
 
                 # Один свежий compare на шаг: и в историю, и в P2-движок.
-                payload = VenueCompareService().compare(use_cache=False)
+                # Ходит в две биржи синхронно — только через поток.
+                payload = await asyncio.to_thread(
+                    lambda: VenueCompareService().compare(use_cache=False)
+                )
                 logged = False
                 if payload.get("status") == "ok":
-                    logged = VenueSpreadHistory().append(payload)
+                    logged = await asyncio.to_thread(VenueSpreadHistory().append, payload)
                 best = payload.get("best_spread") or {}
                 log_event(
                     logger,
@@ -410,7 +430,7 @@ async def background_venues_spread_loop():
                     try:
                         from services.cross_funding_arb import CrossFundingArbEngine
 
-                        farb = CrossFundingArbEngine().step(payload)
+                        farb = await asyncio.to_thread(CrossFundingArbEngine().step, payload)
                         log_event(
                             logger,
                             logging.INFO,
@@ -515,17 +535,18 @@ async def background_funding_arb_loop():
 
         try:
             if settings.ENABLE_FUNDING_ARB:
-                # 1. Scan for new opportunities
-                result = monitor.scan(db)
+                # Скан, автооткрытие и оценка выходов ходят в HTX синхронно
+                # (ccxt на requests). В event loop это морозит веб-процесс на
+                # время сетевых таймаутов — уводим в поток, как сделано в
+                # scan-цикле робота и в тике сетки.
+                result = await asyncio.to_thread(monitor.scan, db)
                 candidates = [i for i in result.get("items", []) if i.get("status") == "candidate"]
 
-                # 2. Auto-open paper positions for qualifying candidates
                 auto_result = {"auto_open": False, "opened": [], "errors": []}
                 if getattr(settings, "FUNDING_ARB_AUTO_OPEN_PAPER", True) and candidates:
-                    auto_result = arb_engine.auto_open_candidates(db)
+                    auto_result = await asyncio.to_thread(arb_engine.auto_open_candidates, db)
 
-                # 3. Evaluate exits for open positions
-                exit_result = arb_engine.evaluate_exits(db)
+                exit_result = await asyncio.to_thread(arb_engine.evaluate_exits, db)
                 db.commit()
 
                 log_event(
@@ -1048,7 +1069,7 @@ def live_state():
             "spot": LIVE_EXECUTOR.free_usdt("spot"),
             "swap": LIVE_EXECUTOR.free_usdt("swap"),
         }
-        out["sizing_equity_usdt"] = LIVE_EXECUTOR.effective_equity_usdt(settings.execution_market_type)
+        out["sizing_equity_usdt"] = LIVE_EXECUTOR.effective_equity_usdt()
     return out
 
 
@@ -1368,7 +1389,8 @@ async def run_robot_once():
         if validation_gates.get("live_blockers"):
             return {"status": "skipped", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
 
-        safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=1000)
+        equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+        safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
         if safety.get("blocked"):
             db.commit()
             return {"status": "skipped", "reason": "live_safety_blocked", "live_safety": safety}
@@ -1379,7 +1401,7 @@ async def run_robot_once():
             db=db,
             bot=bot,
             headlines=[],
-            balance_usdt=1000,
+            balance_usdt=equity_usdt,
             daily_loss_pct=safety.get("daily_loss_pct", 0),
             drawdown_pct=0,
         )

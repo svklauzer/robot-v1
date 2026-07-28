@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from core.db import Base
 from models.subscriber import Subscriber
+from models.telegram_delivery import TelegramDelivery
 from services.subscription_watchdog import SubscriptionWatchdog
 
 
@@ -19,7 +20,12 @@ class FakeTelegramRouter:
 
 def _db_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(bind=engine, tables=[Subscriber.__table__])
+    # Истечение подписки ставит клиенту уведомление в очередь доставки, поэтому
+    # схема теста обязана включать telegram_deliveries — иначе падает не логика,
+    # а неполный слепок схемы.
+    Base.metadata.create_all(
+        bind=engine, tables=[Subscriber.__table__, TelegramDelivery.__table__]
+    )
     return sessionmaker(bind=engine)()
 
 

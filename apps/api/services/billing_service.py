@@ -96,16 +96,49 @@ class BillingService:
         db.flush()
         return payment
 
+    # Статусы, из которых платёж не может стать оплаченным.
+    NON_CONFIRMABLE_STATUSES = frozenset({"canceled", "cancelled", "refunded", "expired", "failed"})
+
     def confirm_payment(
         self,
         db: Session,
         payment_id: int,
         provider_event_id: str | None = None,
         raw_payload: str | None = None,
+        charged_amount: float | None = None,
+        charged_currency: str | None = None,
     ) -> tuple[Payment, Subscriber, bool]:
+        """Перевод платежа в paid и активация подписки.
+
+        `charged_amount`/`charged_currency` — то, что реально списал провайдер.
+        Переданы → сверяются с ценой тарифа; расхождение отвергается. Без сверки
+        подтверждение по одному лишь payment_id даёт подписку за произвольную
+        (в том числе нулевую) сумму.
+        """
         payment = db.query(Payment).filter(Payment.id == payment_id).first()
         if not payment:
             raise ValueError("payment_not_found")
+
+        status = str(payment.status or "").lower()
+        if status in self.NON_CONFIRMABLE_STATUSES:
+            raise ValueError(f"payment_not_confirmable:{status}")
+
+        # Повтор чужого/уже использованного события провайдера: один charge_id
+        # обязан оплатить ровно один счёт.
+        if provider_event_id:
+            clash = (
+                db.query(Payment)
+                .filter(
+                    Payment.provider_payment_id == str(provider_event_id),
+                    Payment.id != payment.id,
+                )
+                .first()
+            )
+            if clash:
+                raise ValueError("provider_event_already_used")
+
+        if charged_amount is not None or charged_currency is not None:
+            self._assert_charge_matches_plan(payment, charged_amount, charged_currency)
 
         existing_subscriber = None
         if payment.subscriber_id:
@@ -150,12 +183,43 @@ class BillingService:
         payment.paid_at = payment.paid_at or now
         payment.raw_payload = raw_payload or payment.raw_payload
         if provider_event_id:
-            payment.provider_payment_id = payment.provider_payment_id or provider_event_id
+            # Идентификатор провайдера перезаписывает заглушку, выданную при
+            # создании счёта: иначе реальный charge_id никуда не попадает и
+            # уникальный индекс (provider, provider_payment_id) не защищает от
+            # повторного проведения того же события.
+            payment.provider_payment_id = str(provider_event_id)
 
         self._mark_affiliate_paid_conversion(db, payment.telegram_user_id, subscriber)
 
         db.flush()
         return payment, subscriber, True
+
+    def _assert_charge_matches_plan(
+        self,
+        payment: Payment,
+        charged_amount: float | None,
+        charged_currency: str | None,
+    ) -> None:
+        currency = str(charged_currency or "").upper()
+
+        if currency == "XTR":
+            expected = int(settings.stars_price_for_plan(payment.plan_code))
+            if expected <= 0:
+                raise ValueError(f"plan_has_no_stars_price:{payment.plan_code}")
+            if int(charged_amount or 0) != expected:
+                raise ValueError(
+                    f"payment_amount_mismatch:got={int(charged_amount or 0)}:expected={expected}"
+                )
+            return
+
+        expected_amount = float(payment.amount or 0)
+        expected_currency = str(payment.currency or "").upper()
+        if currency and expected_currency and currency != expected_currency:
+            raise ValueError(f"payment_currency_mismatch:got={currency}:expected={expected_currency}")
+        if charged_amount is not None and abs(float(charged_amount) - expected_amount) > 1e-6:
+            raise ValueError(
+                f"payment_amount_mismatch:got={charged_amount}:expected={expected_amount}"
+            )
 
     def _as_aware(self, value: datetime | None) -> datetime | None:
         if value is None:

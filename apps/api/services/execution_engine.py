@@ -7,6 +7,7 @@ from services.htx_client import HTXClient
 from services.trade_plan import TradePlanBuilder
 from services.cost_engine import CostEngine
 from services.telegram_router import TelegramRouter
+from services.market_routing import from_payload as route_from_payload
 
 from models.order import Order
 from models.position import Position
@@ -184,7 +185,42 @@ class ExecutionEngine:
         open_side = self._open_order_side(signal.side)
         client_order_id = f"PAPER-{uuid.uuid4()}"
 
-        order_qty = self.client.amount_to_precision(signal.symbol, float(plan.qty))
+        order_qty = float(self.client.amount_to_precision(signal.symbol, float(plan.qty)))
+
+        # Ордер ОТПРАВЛЯЕМ ДО записи позиции. Порядок важен: в live отказ биржи
+        # (кэп нотионала, недостаток маржи, отклонённый символ) не должен
+        # оставлять систему с позицией, которой на бирже нет — иначе все
+        # последующие reduceOnly-выходы уходят в пустоту, а PnL книжится по
+        # несуществующей сделке.
+        route = route_from_payload(signal.plan_json, signal.symbol, signal.side)
+        live = self._submit_live(open_side, signal.symbol, order_qty, entry_price,
+                                 reduce_only=False, purpose="trend_open", route=route)
+
+        if live is not None and live.get("mode") == "live" and not live.get("ok"):
+            await self._halt_on_live_divergence(
+                signal=signal,
+                stage="open",
+                live=live,
+            )
+            return {
+                "status": "live_rejected",
+                "reason": live.get("error") or live.get("status"),
+                "order": None,
+                "position": None,
+                "plan": plan,
+                "live": live,
+            }
+
+        # Реальный филл важнее ожидаемой цены: в live средняя цена исполнения
+        # отличается от entry_price, и без неё PnL расходится с биржей с первой
+        # же сделки. В paper/dry_run поля пустые — остаётся ожидаемая цена.
+        fill_price = entry_price
+        fill_qty = order_qty
+        if live is not None and live.get("mode") == "live" and live.get("ok"):
+            if live.get("avg_price"):
+                fill_price = float(live["avg_price"])
+            if live.get("filled_qty"):
+                fill_qty = float(live["filled_qty"])
 
         order = Order(
             bot_id=bot.id,
@@ -193,22 +229,25 @@ class ExecutionEngine:
             side=open_side,
             order_type="market",
             status="filled",
-            qty=order_qty,
+            qty=fill_qty,
             price=entry_price,
-            filled_qty=order_qty,
-            avg_fill_price=entry_price,
+            filled_qty=fill_qty,
+            avg_fill_price=fill_price,
             client_order_id=client_order_id,
-            exchange_order_id=None,
+            exchange_order_id=(live or {}).get("exchange_order_id"),
         )
 
+        # Позиция несёт ТУ ЖЕ величину, что ушла на биржу: раньше Order.qty был
+        # округлён под точность инструмента, а Position.qty оставался сырым, и
+        # PnL считался по объёму, которого в сделке не было.
         position = Position(
             bot_id=bot.id,
             signal_id=signal.id,
             symbol=signal.symbol,
             side=signal.side,
-            qty=plan.qty,
-            entry_price=entry_price,
-            mark_price=entry_price,
+            qty=fill_qty,
+            entry_price=fill_price,
+            mark_price=fill_price,
             unrealized_pnl=0.0,
             status="open",
         )
@@ -217,13 +256,6 @@ class ExecutionEngine:
         self.db.add(position)
         self.db.flush()
 
-        # Live-путь (off/dry_run/live) — маршрутизация ордера открытия через ядро.
-        live = self._submit_live(open_side, signal.symbol, plan.qty, entry_price,
-                                 reduce_only=False, purpose="trend_open")
-        if live is not None:
-            order.exchange_order_id = live.get("exchange_order_id")
-            self.db.flush()
-
         return {
             "status": "opened",
             "order": order,
@@ -231,6 +263,50 @@ class ExecutionEngine:
             "plan": plan,
             "live": live,
         }
+
+    async def _halt_on_live_divergence(self, *, signal: Signal, stage: str, live: dict) -> None:
+        """Живой ордер отклонён — останавливаем робота и зовём владельца.
+
+        Молча продолжать нельзя: состояние робота и биржи разошлись, а каждая
+        следующая сделка увеличивает расхождение. Kill-switch останавливает
+        новые входы, ведение открытых позиций продолжается.
+        """
+        from core.logging import get_logger, log_event
+        import logging as _logging
+
+        log_event(
+            get_logger(__name__), _logging.ERROR, "live_order_rejected_halt",
+            signal_id=signal.id, symbol=signal.symbol, stage=stage,
+            status=live.get("status"), error=live.get("error"),
+        )
+
+        try:
+            from services.live_safety import LiveSafetyService
+
+            bot = self.db.query(Bot).filter(Bot.id == signal.bot_id).first()
+            if bot:
+                LiveSafetyService().set_kill_switch(
+                    self.db, bot, enabled=True,
+                    reason=f"live_order_rejected:{stage}:{live.get('error') or live.get('status')}",
+                )
+                self.db.flush()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LIVE HALT] kill-switch failed: {type(exc).__name__}: {exc}")
+
+        try:
+            await self.telegram.owner_alert(
+                "LIVE ORDER REJECTED — РОБОТ ОСТАНОВЛЕН",
+                (
+                    f"Signal #{signal.id} · {signal.symbol} {signal.side}\n"
+                    f"Этап: {stage}\n"
+                    f"Статус: {live.get('status')}\n"
+                    f"Ошибка: {live.get('error')}\n\n"
+                    f"Ордер на биржу не прошёл. Позиция НЕ заведена, kill-switch включён.\n"
+                    f"Проверьте баланс, LIVE_MAX_ORDER_NOTIONAL_USDT и права ключа."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LIVE HALT] owner alert failed: {type(exc).__name__}: {exc}")
 
     async def partial_close_paper_position(
         self,
@@ -269,16 +345,17 @@ class ExecutionEngine:
             # ведём как раньше (только breakeven-стоп), без частичной фиксации.
             return None
 
+        route = route_from_payload(signal.plan_json, position.symbol, position.side)
         preview = self.cost_engine.estimate(
             symbol=position.symbol,
-            market_type=settings.execution_market_type,
+            market_type=route.market_type,
             side=position.side,
             entry_price=float(position.entry_price),
             exit_price=float(exit_price),
             qty=close_qty,
             liquidity="taker",
-            holding_funding_periods=1,
-            leverage=settings.execution_leverage,
+            holding_funding_periods=1 if route.market_type != "spot" else 0,
+            leverage=route.leverage,
         )
 
         close_side = self._close_order_side(position.side)
@@ -304,7 +381,7 @@ class ExecutionEngine:
         self.db.flush()
 
         live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
-                                 reduce_only=True, purpose="tp1_partial_close")
+                                 reduce_only=True, purpose="tp1_partial_close", route=route)
         if live is not None:
             close_order.exchange_order_id = live.get("exchange_order_id")
             self.db.flush()
@@ -346,16 +423,19 @@ class ExecutionEngine:
         if not position:
             return None
 
+        # Фандинг платят только держатели контракта: на споте его нет, и
+        # закладывать буфер в стоимость спотовой сделки — завышать издержки.
+        route = route_from_payload(signal.plan_json, position.symbol, position.side)
         preview = self.cost_engine.estimate(
             symbol=position.symbol,
-            market_type=settings.execution_market_type,
+            market_type=route.market_type,
             side=position.side,
             entry_price=float(position.entry_price),
             exit_price=float(exit_price),
             qty=float(position.qty),
             liquidity="taker",
-            holding_funding_periods=1,
-            leverage=settings.execution_leverage,
+            holding_funding_periods=1 if route.market_type != "spot" else 0,
+            leverage=route.leverage,
         )
 
         close_side = self._close_order_side(position.side)
@@ -389,7 +469,7 @@ class ExecutionEngine:
 
         # Live-путь закрытия (reduceOnly) через ядро. off=пропуск, dry_run=лог.
         live = self._submit_live(close_side, position.symbol, position.qty, exit_price,
-                                 reduce_only=True, purpose="trend_close")
+                                 reduce_only=True, purpose="trend_close", route=route)
         if live is not None:
             close_order.exchange_order_id = live.get("exchange_order_id")
             self.db.flush()
@@ -411,7 +491,7 @@ class ExecutionEngine:
         return "sell" if signal_side == "long" else "buy"
 
     def _submit_live(self, side: str, symbol: str, qty: float, ref_price: float,
-                     reduce_only: bool, purpose: str) -> dict | None:
+                     reduce_only: bool, purpose: str, route=None) -> dict | None:
         """Маршрутизация ордера тренда через безопасное ядро LIVE_EXECUTOR.
 
         off → пропуск (чистая бумага, как сейчас). dry_run → логирует «что бы
@@ -423,31 +503,28 @@ class ExecutionEngine:
             from services.live_executor import LIVE_EXECUTOR
             if LIVE_EXECUTOR.effective_mode() == "off":
                 return None
+            # Символ и рынок берём из маршрута сделки: шорт уходит на
+            # контрактный BTC/USDT:USDT, лонг — на спотовый BTC/USDT. Пока
+            # спотовый символ отправлялся с market_type="swap", ccxt резолвил
+            # его в СПОТОВЫЙ рынок, и своп-логика (плечо, reduceOnly, шорт)
+            # применялась к площадке, которая её не поддерживает.
+            route = route or route_from_payload(None, symbol, side)
             res = LIVE_EXECUTOR.place_market(
-                symbol, side, float(qty),
-                market_type=settings.execution_market_type,
+                route.exchange_symbol, side, float(qty),
+                market_type=route.market_type,
                 reduce_only=reduce_only, reference_price=float(ref_price),
-                leverage=settings.execution_leverage,
-                margin_mode=getattr(settings, "TREND_MARGIN_MODE", "isolated"),
+                leverage=route.leverage,
+                margin_mode=route.margin_mode,
                 purpose=purpose,
             )
-            # (#live-paper-divergence-2026-07-26) Результат live-ордера раньше
-            # никем не проверялся: бумажная позиция открывалась независимо от
-            # того, ушёл ордер или нет. В paper/dry_run это безвредно, а в LIVE
-            # даёт ТИХИЙ рассинхрон — система считает себя в рынке, а её там нет,
-            # и все последующие reduceOnly-выходы уходят в пустоту.
-            # Реальный случай: кэп нотионала 25 против позиции 249 USDT (ADA/USDT,
-            # 26.07) — ордер отклонён, бумага этого не заметила.
             if not res.ok and LIVE_EXECUTOR.is_live():
                 from core.logging import get_logger, log_event
                 import logging as _logging
 
                 log_event(
-                    get_logger(__name__), _logging.ERROR, "live_paper_divergence",
+                    get_logger(__name__), _logging.ERROR, "live_order_not_filled",
                     symbol=symbol, side=side, qty=float(qty), purpose=purpose,
                     status=res.status, error=res.error,
-                    note="LIVE-ордер НЕ исполнен, а бумажная позиция ведётся дальше — "
-                         "состояние робота и биржи разошлись, требуется вмешательство",
                 )
             return res.as_dict()
         except Exception as exc:  # noqa: BLE001 — бумага не должна падать из-за live-слоя

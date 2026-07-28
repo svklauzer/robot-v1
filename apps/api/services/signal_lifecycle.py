@@ -1,3 +1,5 @@
+import asyncio
+
 from models.signal import Signal
 from sqlalchemy.orm.attributes import flag_modified
 from services.market_data import MarketDataService
@@ -10,6 +12,7 @@ from services.exit_policy import ExitPolicyService
 from services.ml_trade_logger import MLTradeLogger
 # from services.trade_outcome_logger import TradeOutcomeLogger
 from services.signal_freshness import SignalFreshnessService
+from services.market_routing import from_payload as route_from_payload
 
 from core.decision_codes import (
     DECISION_POSITION_OPENED,
@@ -68,6 +71,19 @@ class SignalLifecycleManager:
         self.exit_policy = ExitPolicyService()
         # self.outcome_logger = TradeOutcomeLogger()
         self.freshness = SignalFreshnessService()
+
+    def _market_type(self, signal: Signal) -> str:
+        """Рынок ЭТОЙ сделки, зафиксированный при входе."""
+        return route_from_payload(signal.plan_json, signal.symbol, signal.side).market_type
+
+    def _equity_usdt(self) -> float:
+        """Тот же источник эквити, что у сайзинга в robot_loop и у риск-лимитов."""
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+
+            return float(LIVE_EXECUTOR.effective_equity_usdt())
+        except Exception:  # noqa: BLE001
+            return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
 
     def _signal_age_sec(self, lifecycle: dict | None) -> float | None:
         if not isinstance(lifecycle, dict):
@@ -225,8 +241,15 @@ class SignalLifecycleManager:
             await self.process_signal(db, bot, signal)
 
     async def process_signal(self, db, bot: Bot, signal: Signal):
-        """Боевой путь: цена из живого снэпшота рынка."""
-        snap = self.market.snapshot(signal.symbol)
+        """Боевой путь: цена из живого снэпшота рынка.
+
+        Ведение читает у снимка ровно одно поле — last. `snapshot()` ради него
+        тянул ещё и 200 свечей 5m, то есть два блокирующих HTTP на сигнал; при
+        нескольких открытых позициях и цикле в 10 с это держало event loop
+        занятым, и uvicorn переставал отвечать на /health при деградации сети.
+        Берём лёгкий тикер и уводим вызов из петли в поток.
+        """
+        snap = await asyncio.to_thread(self.market.ticker_snapshot, signal.symbol)
         await self._process_signal_core(
             db, bot, signal,
             price=float(snap["last"]),
@@ -363,7 +386,7 @@ class SignalLifecycleManager:
                     bot=bot,
                     signal=signal,
                     entry_price=price,
-                    balance_usdt=float(settings.RISK_EQUITY_USDT),
+                    balance_usdt=self._equity_usdt(),
                 )
 
                 plan = result.get("plan")
@@ -394,6 +417,33 @@ class SignalLifecycleManager:
                             f"{signal.symbol} {signal.side}\n"
                             f"Причина: позиция по этой монете/стороне уже открыта."
                         ),
+                    )
+
+                    db.flush()
+                    return
+
+                if result.get("status") == "live_rejected":
+                    # Биржа не приняла ордер — позиции нет ни там, ни здесь.
+                    # Сигнал закрываем явно, робот уже остановлен kill-switch'ем
+                    # в ExecutionEngine; молчаливый возврат оставил бы сигнал в
+                    # published и цикл пытался бы открыть его снова и снова.
+                    signal.status = "rejected"
+                    signal.closed_reason = "live_order_rejected"
+
+                    self.decisions.record(
+                        db,
+                        symbol=signal.symbol,
+                        status="rejected",
+                        decision="live_order_rejected",
+                        action=signal.side,
+                        payload={
+                            "signal_id": signal.id,
+                            "symbol": signal.symbol,
+                            "side": signal.side,
+                            "entry_price": price,
+                            "reason": result.get("reason"),
+                            "live": result.get("live"),
+                        },
                     )
 
                     db.flush()
@@ -584,7 +634,7 @@ class SignalLifecycleManager:
                 mfe_pct=lifecycle.get("mfe_pct"),
                 max_profit_price=lifecycle.get("max_profit_price"),
                 symbol=signal.symbol,
-                market_type=settings.execution_market_type,
+                market_type=self._market_type(signal),
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
                 flow_against=_depth_flow_against(signal, side),
@@ -640,9 +690,10 @@ class SignalLifecycleManager:
                 # Гарантирует нулевой убыток если цена откатится после TP1.
                 _be_position = self._get_open_position_for_signal(db, signal)
                 _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
-                # (#audit-cost-model) fee-буфер безубытка — по ставке рынка ИСПОЛНЕНИЯ
-                # (swap 0.05%, спот 0.2%), а не жёстко SPOT_TAKER_FEE.
-                _be_rate, _ = self.exit_policy._fee_rate(signal.symbol, settings.execution_market_type)
+                # Буфер безубытка — по ставке рынка ЭТОЙ сделки: спот 0.2%,
+                # своп 0.05%. Общая ставка на все сделки сдвигала бы безубыток
+                # лонгов на четверть нужного расстояния.
+                _be_rate, _ = self.exit_policy._fee_rate(signal.symbol, self._market_type(signal))
                 _be_fee = float(_be_rate) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
                 if side == "long":
                     _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
@@ -733,7 +784,7 @@ class SignalLifecycleManager:
                 tp2_price=tp2,
                 lifecycle=lifecycle,
                 symbol=signal.symbol,
-                market_type=settings.execution_market_type,
+                market_type=self._market_type(signal),
                 signal_age_sec=self._signal_age_sec(lifecycle),
             )
 

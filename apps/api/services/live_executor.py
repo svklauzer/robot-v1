@@ -183,15 +183,63 @@ class LiveExecutor:
         return self.free_usdt(getattr(settings, "execution_market_type", "spot"))
 
     def effective_equity_usdt(self, market_type: str | None = None) -> float:
-        """Эквити для сайзинга/экспозиции. В LIVE — РЕАЛЬНЫЙ свободный баланс
-        соответствующего счёта (растёт с пополнениями владельца и прибылью). В
-        paper/dry_run/off — конфиг RISK_EQUITY_USDT (бумага не меняется).
-        Fallback на RISK_EQUITY_USDT, если баланс недоступен."""
+        """Эквити для сайзинга и экспозиции.
+
+        paper/dry_run/off → RISK_EQUITY_USDT: бумажный капитал не меняется.
+
+        live → реальные свободные USDT. Счёт зависит от рынка: лонги живут на
+        споте, шорты на деривативе, и это РАЗНЫЕ счета HTX. Когда market_type
+        не задан, считаем общий капитал робота — сумму обоих счетов, иначе
+        половина денег невидима для сайзинга и система занижает размер.
+        Fallback на RISK_EQUITY_USDT, если баланс недоступен.
+        """
         fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
             return fallback
-        free = self.free_usdt(market_type or getattr(settings, "execution_market_type", "spot"))
-        return float(free) if free is not None and free > 0 else fallback
+
+        if market_type:
+            free = self.free_usdt(market_type)
+            return float(free) if free is not None and free > 0 else fallback
+
+        total = 0.0
+        seen = False
+        accounts = ["spot"]
+        if bool(getattr(settings, "ENABLE_FUTURES", False)):
+            accounts.append("swap")
+        for account in accounts:
+            free = self.free_usdt(account)
+            if free is not None:
+                total += float(free)
+                seen = True
+        return total if seen and total > 0 else fallback
+
+    # ── единицы объёма ──────────────────────────────────────────────────────────
+    def _to_exchange_amount(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:
+        """Объём в единицах биржи для этого рынка.
+
+        Спот принимает монеты. Linear-своп HTX принимает КОНТРАКТЫ: 1 контракт
+        ADA-USDT = 10 ADA, поэтому объём в монетах, отправленный как есть,
+        открыл бы позицию в 10 раз больше расчётной. Если размер контракта
+        неизвестен, ордер не отправляем: угадывать здесь нельзя — ошибка
+        измеряется кратностью позиции, а не процентами.
+        """
+        meta = {"submitted_unit": "base", "contract_size": None, "base_amount": amount}
+        if str(market_type).lower() not in ("swap", "future", "futures", "linear"):
+            return amount, meta
+
+        getter = getattr(self.client, "contract_size", None)
+        size = getter(symbol) if callable(getter) else None
+        if not size or size <= 0:
+            raise ValueError(f"contract_size_unknown:{symbol}")
+
+        contracts = amount / float(size)
+        try:
+            contracts = float(self.client.amount_to_precision(symbol, contracts))
+        except Exception:  # noqa: BLE001
+            pass
+
+        meta.update({"submitted_unit": "contracts", "contract_size": float(size)})
+        return contracts, meta
 
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
@@ -245,6 +293,30 @@ class LiveExecutor:
 
         # LIVE: плечо/режим маржи → отправка (одна попытка) → сверка → подтверждение
         self._ensure_leverage(symbol, market_type, leverage, margin_mode)
+
+        # Перевод объёма в единицы рынка. Ошибка здесь означала бы позицию
+        # кратно больше расчётной, поэтому неизвестный размер контракта —
+        # отказ, а не отправка «как есть».
+        try:
+            send_amount, unit_meta = self._to_exchange_amount(symbol, amount, market_type)
+        except ValueError as exc:
+            log_event(logger, logging.ERROR, "live_order_unit_unresolved",
+                      symbol=symbol, market_type=market_type, error=str(exc))
+            return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                               client_order_id=client_id, error=str(exc), **base)
+
+        if send_amount <= 0:
+            log_event(logger, logging.ERROR, "live_order_amount_below_one_contract",
+                      symbol=symbol, base_amount=amount, contract_size=unit_meta.get("contract_size"))
+            return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                               client_order_id=client_id,
+                               error="amount_below_min_contract", **base)
+
+        if unit_meta["submitted_unit"] == "contracts":
+            log_event(logger, logging.INFO, "live_order_amount_in_contracts",
+                      symbol=symbol, base_amount=amount,
+                      contract_size=unit_meta["contract_size"], contracts=send_amount)
+
         params: dict[str, Any] = {"clientOrderId": client_id}
         if market_type:
             params["defaultType"] = market_type
@@ -252,7 +324,7 @@ class LiveExecutor:
             params["reduceOnly"] = True
 
         try:
-            order = self.client.create_order_once(symbol, "market", side, amount, None, params)
+            order = self.client.create_order_once(symbol, "market", side, send_amount, None, params)
         except Exception as exc:  # noqa: BLE001 — НЕОДНОЗНАЧНО: мог пройти. Сверяем.
             log_event(logger, logging.ERROR, "live_create_ambiguous", symbol=symbol,
                       client_order_id=client_id, error=str(exc))
@@ -264,10 +336,18 @@ class LiveExecutor:
 
         order = self._await_fill(symbol, order, client_id)
         status = (order or {}).get("status", "open")
-        filled = float((order or {}).get("filled") or 0.0)
+        filled_raw = float((order or {}).get("filled") or 0.0)
         avg = (order or {}).get("average") or (order or {}).get("price") or reference_price
+
+        # Биржа отчиталась в тех же единицах, в которых приняла ордер. Наружу
+        # отдаём объём в БАЗОВОЙ монете: учёт позиции, PnL и все проверки
+        # системы живут в монетах, и смешивать их с контрактами нельзя.
+        contract_size = unit_meta.get("contract_size")
+        filled = filled_raw * float(contract_size) if contract_size else filled_raw
+
         log_event(logger, logging.INFO, "live_order_done", symbol=symbol, side=side,
-                  status=status, filled=filled, avg=avg, client_order_id=client_id,
+                  status=status, filled_base=filled, filled_raw=filled_raw,
+                  unit=unit_meta["submitted_unit"], avg=avg, client_order_id=client_id,
                   exchange_order_id=(order or {}).get("id"))
         return OrderResult(ok=status in ("closed", "filled"), mode="live", sent=True,
                            status=status, client_order_id=client_id,

@@ -21,10 +21,22 @@ def test_background_loops_emit_structured_log_events():
 
 
 def test_robot_loop_has_single_sleep_interval():
-    main = (ROOT / "apps/api/main.py").read_text()
-    robot_loop = main.split("async def background_robot_loop():", 1)[1].split("def initialize_database_schema", 1)[0]
+    """В теле цикла ровно одна пауза, и её задаёт SCAN_INTERVAL_SEC.
 
-    assert robot_loop.count("await asyncio.sleep(60)") == 1
+    Два `sleep` в теле — это удвоенный период сканирования, который никак себя
+    не проявляет, кроме вдвое меньшего числа сделок. Литерал 60 здесь больше не
+    ищем: интервал давно вынесен в настройку, и проверка на константу тихо
+    отвалилась вместе с ней.
+    """
+    main = (ROOT / "apps/api/main.py").read_text()
+    # Режем строго до СЛЕДУЮЩЕЙ функции: за scan-циклом идут остальные воркеры,
+    # и слишком широкий срез считает их паузы как свои.
+    robot_loop = main.split("async def background_robot_loop():", 1)[1].split("\nasync def ", 1)[0]
+
+    body = robot_loop.split("while robot_loop_enabled:", 1)[1]
+
+    assert body.count("await asyncio.sleep(") == 1, "в теле scan-цикла должна быть ровно одна пауза"
+    assert "SCAN_INTERVAL_SEC" in body, "период сканирования должен приходить из настройки"
 
 
 def test_robot_loop_checks_validation_gates_before_live_safety():

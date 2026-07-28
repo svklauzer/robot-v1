@@ -391,6 +391,26 @@ class HTXClient:
                       error_type=type(e).__name__, error=str(e))
             return float(amount)
 
+    def contract_size(self, symbol: str) -> float | None:
+        """Сколько базовой монеты в одном контракте. None — рынок не контрактный
+        или метаданные недоступны.
+
+        Для linear-свопов HTX объём ордера измеряется в КОНТРАКТАХ, а не в
+        монетах: 1 контракт ADA-USDT = 10 ADA. Отправить сюда объём в монетах —
+        значит открыть позицию в contract_size раз больше задуманной.
+        """
+        try:
+            markets = self.load_markets()
+            market = markets.get(symbol) or self.exchange.market(symbol)
+            if not market or not market.get("contract"):
+                return None
+            size = market.get("contractSize")
+            return float(size) if size else None
+        except Exception as e:  # noqa: BLE001
+            log_event(logger, logging.WARNING, "htx_contract_size_unavailable",
+                      symbol=symbol, error=str(e))
+            return None
+
     def market_limits(self, symbol: str) -> dict:
         try:
             markets = self.load_markets()

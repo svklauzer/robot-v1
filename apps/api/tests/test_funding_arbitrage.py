@@ -144,10 +144,20 @@ def test_live_open_uses_one_htx_client_for_spot_and_swap_orders():
     old_enabled = settings.ENABLE_FUNDING_ARB
     old_futures = settings.ENABLE_FUTURES
     old_live = settings.ENABLE_LIVE_ORDERS
+    old_exec_mode = settings.LIVE_EXECUTION_MODE
+    old_cap = settings.LIVE_MAX_ORDER_NOTIONAL_USDT
     try:
+        # Тест про маршрутизацию ног хеджа, а не про предохранитель размера:
+        # дефолтный кэп 25 USDT отклонил бы обе ноги на 100 и оставил список
+        # ордеров пустым.
+        settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 1000.0
         settings.ENABLE_FUNDING_ARB = True
         settings.ENABLE_FUTURES = True
         settings.ENABLE_LIVE_ORDERS = True
+        # Одного ENABLE_LIVE_ORDERS мало: LIVE_EXECUTION_MODE по умолчанию
+        # dry_run, и ядро исполнения возвращает синтетический ack, не трогая
+        # клиента. Без этой строки тест проверял пустой список ордеров.
+        settings.LIVE_EXECUTION_MODE = "live"
         opportunity = FundingArbOpportunity(
             symbol="BTC/USDT",
             spot_symbol="BTC/USDT",
@@ -162,17 +172,46 @@ def test_live_open_uses_one_htx_client_for_spot_and_swap_orders():
         )
         db.add(opportunity)
         db.flush()
-        fake_client = FakeLiveHTXFundingClient()
 
-        position = FundingArbEngine(client=fake_client).open_hedge(db, opportunity.id, notional_usdt=100, mode="live")
+        # Обе ноги уходят через общее ядро исполнения (LIVE_EXECUTOR), а не
+        # через клиента, переданного в движок: клиент остался только для чтения
+        # рыночных данных. Перехватываем ядро — это и есть реальный путь ордера.
+        from services.live_executor import LIVE_EXECUTOR, OrderResult
+
+        sent: list[dict] = []
+
+        def _capture(symbol, side, amount, **kwargs):
+            sent.append({"symbol": symbol, "side": side, "amount": amount,
+                         "market_type": kwargs.get("market_type")})
+            return OrderResult(
+                ok=True, mode="live", sent=True, status="filled", symbol=symbol,
+                side=side, requested_qty=amount, market_type=kwargs.get("market_type", ""),
+                reduce_only=bool(kwargs.get("reduce_only")), filled_qty=amount,
+                avg_price=kwargs.get("reference_price"),
+            )
+
+        original = LIVE_EXECUTOR.place_market
+        LIVE_EXECUTOR.place_market = _capture
+        try:
+            position = FundingArbEngine(client=FakeLiveHTXFundingClient()).open_hedge(
+                db, opportunity.id, notional_usdt=100, mode="live"
+            )
+        finally:
+            LIVE_EXECUTOR.place_market = original
 
         assert position.mode == "live"
-        assert [order["symbol"] for order in fake_client.orders] == ["BTC/USDT", "BTC/USDT:USDT"]
-        assert [order["side"] for order in fake_client.orders] == ["buy", "sell"]
+        # Спотовая нога — спотовым символом, своп-нога — контрактным (`:USDT`).
+        # Перепутанный символ увёл бы своп-ордер на спот, где нет ни шорта, ни
+        # плеча, а хедж превратился бы в двойную покупку.
+        assert [order["symbol"] for order in sent] == ["BTC/USDT", "BTC/USDT:USDT"]
+        assert [order["side"] for order in sent] == ["buy", "sell"]
+        assert [order["market_type"] for order in sent] == ["spot", "swap"]
     finally:
         settings.ENABLE_FUNDING_ARB = old_enabled
         settings.ENABLE_FUTURES = old_futures
         settings.ENABLE_LIVE_ORDERS = old_live
+        settings.LIVE_EXECUTION_MODE = old_exec_mode
+        settings.LIVE_MAX_ORDER_NOTIONAL_USDT = old_cap
         db.close()
 
 

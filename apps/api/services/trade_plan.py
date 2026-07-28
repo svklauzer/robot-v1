@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from core.config import settings
 from services.cost_engine import CostEngine
 from services.htx_client import HTXClient
+from services.market_routing import resolve as resolve_route
 
 
 @dataclass
@@ -30,6 +31,11 @@ class TradePlan:
     is_valid: bool
     reject_reason: str | None
 
+    # Куда физически идёт сделка: рынок, биржевой символ, плечо. Кладётся в
+    # Signal.plan_json и читается сопровождением/выходом, чтобы позиция
+    # закрывалась там же, где открылась.
+    routing: dict | None = None
+
 
 class TradePlanBuilder:
     def __init__(self):
@@ -52,26 +58,31 @@ class TradePlanBuilder:
     ) -> TradePlan:
         risk_pct_value = risk_pct if risk_pct is not None else settings.RISK_PER_TRADE_PCT
 
-        # (#audit-cost-model) Эффективный рынок исполнения (swap при
-        # ENABLE_FUTURES_EXECUTION), а не сырой env EXECUTION_MARKET: тот по
-        # дефолту "spot" и заставлял считать экономику плана по спот-комиссиям.
-        market_type = settings.execution_market_type
+        # Рынок определяет СТОРОНА сделки, а не общая настройка: лонг живёт на
+        # споте (0.2% taker), шорт возможен только на деривативе (0.05% + фандинг).
+        # Пока рынок был один на всех, половина сделок считалась по чужой
+        # комиссии — вчетверо мимо на споте.
+        route = resolve_route(symbol, side)
+        market_type = route.market_type
 
-        # Важно: если фьючерсы выключены, плечо принудительно = 1.
-        # Иначе spot-план может случайно рассчитать позицию как leveraged.
-        if settings.ENABLE_FUTURES or market_type == "futures":
-            leverage_value = leverage or settings.FUTURES_LEVERAGE
-        else:
+        # Плечо приходит из маршрута: на споте оно всегда 1, каким бы ни было
+        # FUTURES_LEVERAGE.
+        leverage_value = leverage if leverage is not None else route.leverage
+        if market_type == "spot":
             leverage_value = 1
 
         balance_usdt = float(balance_usdt)
         risk_usdt = balance_usdt * (float(risk_pct_value) / 100)
 
-        # Приводим цены к точности биржи ДО расчёта риска и qty.
-        entry_price = float(self.htx.price_to_precision(symbol, entry_price))
-        stop_price = float(self.htx.price_to_precision(symbol, stop_price))
-        tp1 = float(self.htx.price_to_precision(symbol, tp1))
-        tp2 = float(self.htx.price_to_precision(symbol, tp2))
+        # Точность и лимиты берём с ТОГО рынка, где сделка исполнится: у
+        # спотовой пары и её перпетуала разные шаг цены и минимальный лот, и
+        # план, построенный по спотовым, биржа отклонит на контракте.
+        exch_symbol = route.exchange_symbol
+
+        entry_price = float(self.htx.price_to_precision(exch_symbol, entry_price))
+        stop_price = float(self.htx.price_to_precision(exch_symbol, stop_price))
+        tp1 = float(self.htx.price_to_precision(exch_symbol, tp1))
+        tp2 = float(self.htx.price_to_precision(exch_symbol, tp2))
 
         entry_price = float(entry_price)
         stop_price = float(stop_price)
@@ -121,7 +132,7 @@ class TradePlanBuilder:
         qty = min(qty_by_risk, qty_by_balance, qty_by_position_cap)
 
         # Приводим qty к точности биржи.
-        qty = float(self.htx.amount_to_precision(symbol, qty))
+        qty = float(self.htx.amount_to_precision(exch_symbol, qty))
         qty = float(qty)
 
         if qty <= 0:
@@ -141,7 +152,7 @@ class TradePlanBuilder:
         entry_notional = entry_price * qty
         required_margin = entry_notional / leverage_value if leverage_value > 0 else entry_notional
 
-        limits = self.htx.market_limits(symbol)
+        limits = self.htx.market_limits(exch_symbol)
         min_amount = limits.get("min_amount")
         min_cost = limits.get("min_cost")
 
@@ -339,6 +350,7 @@ class TradePlanBuilder:
 
             is_valid=is_valid,
             reject_reason=reject_reason,
+            routing=route.as_dict(),
         )
 
     def _invalid_plan(

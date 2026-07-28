@@ -2,11 +2,17 @@ from services.market_connectivity import MarketConnectivityService
 
 
 class FakeMarket:
+    """Двойник MarketDataService.
+
+    Проба коннекта использует ticker_snapshot (один вызов), а не snapshot с
+    200 свечами. Фикстура повторяет ровно тот метод, который зовёт сервис.
+    """
+
     def __init__(self, snap=None, error=None):
         self.snap = snap
         self.error = error
 
-    def snapshot(self, symbol: str):
+    def ticker_snapshot(self, symbol: str):
         if self.error:
             raise self.error
         return self.snap
