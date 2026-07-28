@@ -291,7 +291,20 @@ async def telegram_set_webhook(url: str | None = None):
     if not secret:
         raise HTTPException(status_code=400, detail="TELEGRAM_WEBHOOK_SECRET_not_configured")
 
-    target = url or f"{str(settings.NEXT_PUBLIC_API_URL).rstrip('/')}/telegram/webhook"
+    base = str(url or getattr(settings, "PUBLIC_API_URL", "") or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(
+            status_code=400,
+            detail="pass ?url=https://<api-host>/telegram/webhook or set PUBLIC_API_URL",
+        )
+
+    target = base if base.endswith("/telegram/webhook") else f"{base}/telegram/webhook"
+
+    # Telegram принимает только https и не пустит адрес, до которого не дойдёт.
+    # Проверяем здесь, иначе ошибка всплывёт молча — вебхук останется старым.
+    if not target.startswith("https://") or "localhost" in target or "127.0.0.1" in target:
+        raise HTTPException(status_code=400, detail=f"unreachable_webhook_url:{target}")
+
     result = await TelegramPaymentsService()._call("setWebhook", {
         "url": target,
         "secret_token": secret,

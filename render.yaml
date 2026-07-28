@@ -75,6 +75,18 @@ services:
       # ── Telegram ──────────────────────────────────────────────────────────
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        value: finmt_bot
+      # ОБЯЗАТЕЛЬНО. Общий секрет вебхука: задаётся здесь и передаётся в
+      # setWebhook(secret_token=...) вызовом POST /telegram/set-webhook.
+      # Telegram возвращает его заголовком X-Telegram-Bot-Api-Secret-Token.
+      # Пока пусто — апдейт непроверенный, и successful_payment отклоняется:
+      # без этого подписку можно активировать поддельным запросом.
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      # Собственный публичный адрес — на него регистрируется вебхук.
+      - key: PUBLIC_API_URL
+        value: https://robot-api-1rgi.onrender.com
       - key: TELEGRAM_OWNER_CHAT_ID
         sync: false
       - key: TELEGRAM_FREE_SIGNALS_CHAT_ID
@@ -95,28 +107,87 @@ services:
       # из региона Singapore. Если окажется хуже — поставь api.huobi.pro.
       - key: HTX_API_HOSTNAME
         value: api-aws.huobi.pro
+      # defaultType для ccxt. Рынок КОНКРЕТНОЙ сделки выбирает market_routing
+      # (лонг → спот, шорт → контракт), эта переменная на маршрут не влияет.
       - key: HTX_MARKET_TYPE
         value: spot
+      # Боевая вселенная. Значение совпадает с тем, что работает сейчас:
+      # менять состав инструментов заодно с правкой конфига нельзя — эффект
+      # смешается с остальными изменениями. LINK/DOT добавлять отдельным шагом.
       - key: HTX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,ADA/USDT,LINK/USDT,AVAX/USDT,DOT/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT
 
       # ── Trading mode (paper для старта) ───────────────────────────────────
       - key: ROBOT_MODE
-        value: paper         # → live_shadow (Phase 3) → live (Phase 6)
+        value: paper         # → live_shadow → live
       - key: TRADING_MODE
         value: paper_trade   # → live_limited → live
       - key: ENABLE_LIVE_ORDERS
         value: "false"
+
+      # ── Рынок исполнения ──────────────────────────────────────────────────
+      # Рынок выбирает market_routing по СТОРОНЕ сделки:
+      #   лонг  → спот  (BTC/USDT,      taker 0.20%)
+      #   шорт  → контракт (BTC/USDT:USDT, taker 0.05% + фандинг)
+      # ENABLE_FUTURES_EXECUTION=true уводит на контракт и лонги тоже.
+      # false = модель «лонг держим монетой, шорт берём контрактом».
+      - key: ENABLE_FUTURES_EXECUTION
+        value: "false"
+      - key: ENABLE_SMART_LEVERAGE
+        value: "false"
+
+      # ── Движки ────────────────────────────────────────────────────────────
+      - key: ENABLE_ORDERBOOK_ENGINE
+        value: "true"
+      - key: ENABLE_CRT_STRATEGY
+        value: "true"
+      - key: ENABLE_RANGE_STRATEGY
+        value: "true"
+      - key: ENABLE_SCALP_STRATEGY
+        value: "true"
+      - key: CORR_CLUSTER_ENABLED
+        value: "true"
+      # off | shadow | advisory | full_auto. В shadow score считается и пишется
+      # рядом с сигналом, но размер позиции не трогает.
+      - key: ML_MODE
+        value: shadow
+
+      # ── Сетка ─────────────────────────────────────────────────────────────
+      - key: GRID_ENABLED
+        value: "true"
+      - key: GRID_SYMBOLS
+        value: BTC/USDT,ETH/USDT,TRX/USDT
+
+      # ── Продукт / подписки ────────────────────────────────────────────────
+      - key: AFFILIATE_FREE_VIP_DAYS
+        value: "30"
+      - key: VIP_STARS_PRICE_30
+        value: "4900"
+      - key: VIP_STARS_PRICE_90
+        value: "12900"
+      - key: VIP_INVITE_EXPIRE_HOURS
+        value: "24"
+      - key: VIP_INVITE_LINK
+        sync: false
+      - key: HTX_AFFILIATE_LINK
+        sync: false
 
       # ── Risk management ───────────────────────────────────────────────────
       - key: RISK_EQUITY_USDT
         value: "950"
       - key: RISK_PER_TRADE_PCT
         value: "0.4"
-      - key: MAX_OPEN_POSITIONS
+      # NB: MAX_OPEN_POSITIONS здесь раньше стоял, но такого поля в Settings нет
+      # и pydantic его игнорирует (extra="ignore") — переменная создавала
+      # видимость лимита, которого не существует. Реальный лимит ниже.
+      - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
         value: "5"
       - key: MAX_ACTIVE_SIGNALS
         value: "5"
+      # Предохранитель от чурна: сколько сделок разрешено открыть за 24 ч.
+      # Работал молча на дефолте 3 — теперь виден.
+      - key: MAX_TRADES_PER_DAY
+        value: "3"
       - key: MAX_DAILY_LOSS_PCT
         value: "3"
       - key: MAX_DRAWDOWN_PCT
@@ -125,8 +196,11 @@ services:
       # ── Symbol guard (calibrated v2026-06) ────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE
         value: "48.0"
+      # 48.0 = то, что работает сейчас. Подъём до 55 включит weak-множитель на
+      # заметно большем числе символов; это отдельное решение, а не побочный
+      # эффект правки конфига.
       - key: SYMBOL_PERF_REDUCE_MAX_WINRATE
-        value: "55.0"
+        value: "48.0"
       - key: SYMBOL_PERF_COOLDOWN_STREAK
         value: "3"
       - key: SYMBOL_PERF_COOLDOWN_FAILED_SETUPS
@@ -139,14 +213,19 @@ services:
         value: "76.0"
       - key: PROD_GATE_A_PLUS_MIN_CONFIDENCE
         value: "68.0"
+      # Paper-пороги RR на TP1 — санити, а не гейт: награда судится по TP2.
+      # Значения равны текущим рабочим. Их ужесточение (0.75/0.80) нельзя
+      # ставить одновременно с переходом на честную модель издержек: net_rr
+      # и так упал у лонгов вчетверо по комиссии, и два изменения сразу не
+      # дадут понять, что именно сократило поток сделок.
       - key: PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER
-        value: "0.80"
+        value: "0.10"
       - key: PROD_GATE_A_MIN_SETUP
         value: "65.0"
       - key: PROD_GATE_A_MIN_CONFIDENCE
         value: "62.0"
       - key: PROD_GATE_A_MIN_RR_TP1_PAPER
-        value: "0.75"
+        value: "0.10"
 
       # ── Live-shadow (Phase 3 — раскомментировать при переключении) ─────────
       # - key: ROBOT_MODE
@@ -193,6 +272,14 @@ services:
       # Owner-токен — ТОЛЬКО на сервере (без NEXT_PUBLIC), в клиент не попадает.
       # Должен совпадать с OWNER_API_TOKEN у robot-api.
       - key: OWNER_API_TOKEN
+        sync: false
+      # HTTP Basic перед страницами И перед /api/proxy. Прокси сам подставляет
+      # owner-токен, поэтому без этой пары любой посетитель публичного URL
+      # получает права владельца. middleware пропускает всех, если они не
+      # заданы, — держать заполненными обязательно.
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASS
         sync: false
 
   # ── Redis (Render Key Value) ────────────────────────────────────────────────

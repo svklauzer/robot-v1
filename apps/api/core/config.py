@@ -283,6 +283,11 @@ class Settings(BaseSettings):
     # одним curl. Пусто → в production денежные апдейты отклоняются.
     TELEGRAM_WEBHOOK_SECRET: str = ""
 
+    # Публичный адрес самого API. Нужен, чтобы зарегистрировать вебхук на себя.
+    # NEXT_PUBLIC_API_URL для этого не годится: на robot-api он не задан и
+    # по дефолту равен localhost — вебхук ушёл бы в никуда.
+    PUBLIC_API_URL: str = ""
+
     MAX_ACTIVE_SIGNALS: int = 4
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
     RISK_EQUITY_USDT: float = 950.0
