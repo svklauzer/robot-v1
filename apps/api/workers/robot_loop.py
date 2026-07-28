@@ -27,6 +27,7 @@ from services.orderbook_feed import ORDERBOOK_STORE
 from services.ml_trade_logger import MLTradeLogger
 from services.ml_controller import MLController
 from services.decision_event_service import DecisionEventService
+from services.decision_config import snapshot as config_snapshot
 
 from models.signal import Signal
 from models.position import Position
@@ -995,6 +996,25 @@ class RobotLoop:
                     if _pv is not None:
                         setattr(plan, _pf, round(float(_pv) * _conv, 6))
 
+            # Снимок правил, по которым эта сделка принята. Делается ПОСЛЕ всех
+            # гейтов, чтобы попали фактические пороги грейда, и ДО записи
+            # сигнала — снимок обязан описывать решение, а не более поздний
+            # конфиг.
+            _routing = plan.routing or {}
+            try:
+                _fee_rate, _ = self.lifecycle.exit_policy._fee_rate(
+                    symbol, _routing.get("market_type")
+                )
+            except Exception:  # noqa: BLE001 — снимок не должен ронять цикл
+                _fee_rate = None
+            _decision_config = config_snapshot(
+                market_type=str(_routing.get("market_type") or ""),
+                fee_rate=_fee_rate,
+                leverage=_routing.get("leverage"),
+                is_scalp=is_range,
+                gate_thresholds=(production_decision.payload or {}).get("thresholds"),
+            )
+
             sig = Signal(
                 bot_id=bot.id,
                 symbol=symbol,
@@ -1031,6 +1051,11 @@ class RobotLoop:
                     # чтобы позиция закрывалась там же, где открылась, и по той
                     # же комиссии, по которой считался план.
                     "routing": plan.routing,
+                    # Настройки, при которых сделка принята. Без них результат
+                    # неразборчив: видно ЧТО получилось и не видно ПО КАКИМ
+                    # правилам. Сделки с одним fingerprint сравнимы между собой,
+                    # с разным — нет.
+                    "config": _decision_config,
                     "performance_guard": performance_adjustment,
                     # ML-слой: ml_score и решение контроллера (shadow/advisory/full_auto).
                     "ml": ml_eval,
