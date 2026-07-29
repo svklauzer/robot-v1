@@ -187,7 +187,7 @@ services:
       # Предохранитель от чурна: сколько сделок разрешено открыть за 24 ч.
       # Работал молча на дефолте 3 — теперь виден.
       - key: MAX_TRADES_PER_DAY
-        value: "3"
+        value: "100"
       - key: MAX_DAILY_LOSS_PCT
         value: "3"
       - key: MAX_DRAWDOWN_PCT
