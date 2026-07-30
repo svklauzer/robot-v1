@@ -144,6 +144,13 @@ class ProductionEntryGate:
 
         # ── Grade B ─────────────────────────────────────────────────────────────
         if grade_value == "B":
+            if not bool(getattr(settings, "ENABLE_GRADE_B_TRADING", False)):
+                return ProductionGateDecision(
+                    allowed=False,
+                    reason="grade_b_learning_only",
+                    payload=payload,
+                )
+
             min_setup = float(getattr(settings, "PROD_GATE_B_MIN_SETUP", 58.0))
             min_confidence = float(getattr(settings, "PROD_GATE_B_MIN_CONFIDENCE", 60.0))
             # (#9-fix) grade B раньше ИГНОРИРОВАЛ paper-режим и всегда брал live

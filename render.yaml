@@ -151,6 +151,13 @@ services:
       # рядом с сигналом, но размер позиции не трогает.
       - key: ML_MODE
         value: shadow
+      # Blueprint — источник prod-env на Render. Дублируем защитные дефолты
+      # config.py явно, чтобы Apply Blueprint не вернул капитал в убыточные
+      # режимы и Grade B после ручных правок окружения.
+      - key: REGIME_EXP_SIZING_ENABLED
+        value: "true"
+      - key: ENABLE_GRADE_B_TRADING
+        value: "false"
 
       # ── Сетка ─────────────────────────────────────────────────────────────
       - key: GRID_ENABLED

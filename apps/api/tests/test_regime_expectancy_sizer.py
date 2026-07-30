@@ -47,9 +47,8 @@ class _DB:
 
 @pytest.fixture(autouse=True)
 def _clear_cache(monkeypatch):
-    # Ось выключена по умолчанию (см. REGIME_EXP_SIZING_ENABLED в config.py):
-    # причину течи чинит геометрия сделки, а не урезание размера. Здесь
-    # проверяется поведение самой оси, поэтому включаем её явно.
+    # Ось включена по умолчанию (см. REGIME_EXP_SIZING_ENABLED в config.py) как
+    # страховочный контур против режимов с отрицательным rolling expectancy.
     monkeypatch.setattr(settings, "REGIME_EXP_SIZING_ENABLED", True, raising=False)
     RegimeExpectancySizer.invalidate()
     yield
