@@ -18,6 +18,8 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
+from services.regime_expectancy_sizer import RegimeExpectancySizer
+from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
 from services.production_entry_gate import ProductionEntryGate
 from services.reentry_cooldown import ReEntryCooldownGuard
@@ -45,6 +47,13 @@ class RobotLoop:
         self.trade_plan_builder = TradePlanBuilder()
         self.exposure_guard = ExposureGuard()
         self.symbol_performance_guard = SymbolPerformanceGuard()
+        # (#regime-sizing-2026-07-30) Ось «класс входа»: symbol_performance_guard
+        # судит символ, грейд и ML — отдельную сделку, а зарабатывает ли САМ
+        # сетап, до этого не спрашивал никто.
+        self.regime_sizer = RegimeExpectancySizer()
+        # (#setup-reach-2026-07-30) Геометрия сделки из фактического разброса
+        # сетапа: цель туда, куда он доходит, стоп туда, куда шум не достаёт.
+        self.setup_reach = SetupReachService()
         self.production_gate = ProductionEntryGate()
 
         self.execution = ExecutionEngine()
@@ -278,6 +287,31 @@ class RobotLoop:
             stop = float(result.stop_price)
             tp1 = float(result.tp["tp1"])
             tp2 = float(result.tp["tp2"])
+
+            # ── Геометрия из фактического разброса сетапа ────────────────────
+            # (#setup-reach-2026-07-30) ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ: гипотеза
+            # проверена и отвергнута. Цель, обрезанная по p60 MFE, забирает
+            # мелкую прибыль чаще, но убивает хвосты (tp2 +3.55 на сделку,
+            # ride-trail +2.99), на которых держится вся система: −14.28 →
+            # −19.53 USDT на 82 сделках, хуже базы на всех 15 комбинациях
+            # квантилей. Вызов оставлен для повторной проверки на большей
+            # выборке и ради поля `setup_reach` в плане. Разбор, включая
+            # ошибку первого измерения, — в services/setup_reach.py.
+            _reach = self.setup_reach.profile(
+                db, getattr(result, "regime", None), bot_id=bot.id
+            )
+            stop, tp1, tp2, _reach_report = apply_setup_geometry(
+                side=result.action,
+                entry_price=entry_price,
+                stop_price=stop,
+                tp1=tp1,
+                tp2=tp2,
+                profile=_reach,
+            )
+            if _reach_report.get("applied"):
+                stop = float(self._round_price(symbol, stop))
+                tp1 = float(self._round_price(symbol, tp1))
+                tp2 = float(self._round_price(symbol, tp2))
 
             signal_payload = {
                 "action": result.action,
@@ -972,6 +1006,28 @@ class RobotLoop:
                 if _m > 0:
                     _conv *= _m
             _conv = max(0.0, min(_conv, 1.0))
+
+            # ── Ось режима: размер от фактического ожидания сетапа ────────────
+            # (#regime-sizing-2026-07-30) Грейд и ML судят об ОТДЕЛЬНОЙ сделке.
+            # Ни один из них не отвечает на вопрос, зарабатывает ли этот КЛАСС
+            # входов вообще: на 302 закрытых весь минус системы сидел в
+            # trend_up_candidate (−0.169 R на сделку, устойчиво на обеих
+            # половинах выборки), и при этом именно он нёс самый большой размер.
+            #
+            # Множитель перемножается, а не берётся минимумом: «плохой режим» и
+            # «слабый грейд» — независимые основания уменьшить ставку, и их
+            # совпадение обязано резать сильнее каждого по отдельности.
+            #
+            # Ось применяется и к is_range-режимам, которые обходят грейд/ML:
+            # scalp по этим же данным отрицателен (−0.124 R) и без неё остался
+            # бы единственным нерегулируемым классом.
+            _regime_sizing = self.regime_sizer.evaluate(
+                db, getattr(result, "regime", None), bot_id=bot.id
+            )
+            _regime_mult = float(_regime_sizing.multiplier or 1.0)
+            if _regime_mult != 1.0:
+                _conv = max(0.0, min(_conv * _regime_mult, 1.0))
+
             _sizing_debug = {
                 "grade": str(grade or ""),
                 "grade_mult": _grade_mult,
@@ -979,6 +1035,8 @@ class RobotLoop:
                 "ml_mult": _ml_mult,
                 "ml_mode": str(ml_eval.get("mode") or "off"),
                 "ml_may_size": _ml_may_size,
+                "regime_mult": _regime_mult,
+                "regime_expectancy": _regime_sizing.as_dict(),
                 "conviction": round(_conv, 4),
                 "dyn_budget_usdt": dyn_budget,
             }
@@ -1069,6 +1127,12 @@ class RobotLoop:
                     # или перенесена к опоре в книге, и почему. Нужно, чтобы
                     # сравнивать expected fill с achievable fill постфактум.
                     "entry_zone_plan": _ez.to_payload() if _ez is not None else None,
+                    # (#setup-reach-2026-07-30) Откуда взялись стоп и цель: из
+                    # формулы стратегии или из измеренного разброса сетапа, и
+                    # насколько уровни сдвинулись. Без этого поля постфактум
+                    # нельзя отличить сделку со старой геометрией от новой, а
+                    # значит нельзя и проверить, что правка сработала.
+                    "setup_reach": _reach_report,
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в
@@ -1143,6 +1207,15 @@ class RobotLoop:
             return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp2_too_low"}
 
         return payload
+
+    def _round_price(self, symbol: str, price: float) -> float:
+        """Цена в точность биржи. Уровень, пересчитанный статистикой, обязан
+        быть выставимым ордером: иначе стоп «0.7314159» уедет при отправке, и
+        фактический риск разойдётся с тем, который посчитал план."""
+        try:
+            return float(self.trade_plan_builder.htx.price_to_precision(symbol, price))
+        except Exception:  # noqa: BLE001
+            return float(price)
 
     def _apply_symbol_performance_adjustment(self, plan, performance,
                                              extra_multiplier: float = 1.0,
