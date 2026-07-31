@@ -18,6 +18,7 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
+from services import trend_trigger
 from services.regime_expectancy_sizer import RegimeExpectancySizer
 from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
@@ -181,6 +182,33 @@ class RobotLoop:
                 if r.strip()
             }
             if _allowed_regimes and _regime and _regime not in _allowed_regimes:
+                continue
+
+            # ── Трендовый вход: состояние → событие ──────────────────────────
+            # (#trend-trigger-2026-07-30) `h4 trend_up AND h1 trend_up` держится
+            # сутками, а зона входа = `last ±0.3%`. Пока состояние истинно,
+            # движок покупает по цене очередного скана — вход оказывается
+            # случайной выборкой из распределения цен внутри тренда. Замер:
+            # −0.247R, ДИ [−0.429; −0.058], одинаково на обеих половинах.
+            # Гейт запрещает догонять уже состоявшийся импульс.
+            _trigger = trend_trigger.evaluate(
+                getattr(result, "timeframes", None),
+                regime=_regime,
+                side=result.action,
+            )
+            if not _trigger.allowed:
+                self.decisions.record(
+                    db,
+                    symbol=symbol,
+                    status="blocked",
+                    decision=_trigger.reason,
+                    action=result.action,
+                    regime=_regime,
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    payload=_trigger.as_dict(),
+                )
+                db.flush()
                 continue
 
             is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
@@ -1133,6 +1161,13 @@ class RobotLoop:
                     # нельзя отличить сделку со старой геометрией от новой, а
                     # значит нельзя и проверить, что правка сработала.
                     "setup_reach": _reach_report,
+                    # (#trend-trigger-2026-07-30) Растянутость цены от EMA20 на
+                    # момент входа. Правило нельзя проверить на старых данных —
+                    # оно меняет ВЫБОРКУ входов, а не их обработку. Поэтому
+                    # решение пишется в план: через 100 сделок можно сравнить
+                    # входы с разной extension_atr и узнать, работает ли порог,
+                    # вместо того чтобы догадываться.
+                    "trend_trigger": _trigger.as_dict(),
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в
