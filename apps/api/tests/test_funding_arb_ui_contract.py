@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_funding_arb_owner_page_wires_api_contracts():
-    page = (ROOT / "apps/web/app/funding/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/funding/page.tsx").read_text(encoding="utf-8")
 
     assert "/funding-arb/summary" in page
     assert "/funding-arb/opportunities?limit=50" in page
@@ -24,8 +24,8 @@ def test_funding_arb_owner_page_wires_api_contracts():
 
 
 def test_owner_nav_and_health_surface_funding_arbitrage():
-    nav = (ROOT / "apps/web/components/Nav.tsx").read_text()
-    health = (ROOT / "apps/web/app/health/page.tsx").read_text()
+    nav = (ROOT / "apps/web/components/Nav.tsx").read_text(encoding="utf-8")
+    health = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
 
     assert "href: \"/funding\"" in nav
     assert "Funding Arb" in nav
@@ -35,7 +35,7 @@ def test_owner_nav_and_health_surface_funding_arbitrage():
 
 
 def test_payments_owner_page_exposes_revenue_dashboard_contract():
-    page = (ROOT / "apps/web/app/payments/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/payments/page.tsx").read_text(encoding="utf-8")
 
     assert "/payments/revenue?window_days=30" in page
     assert "MRR est." in page
@@ -56,8 +56,8 @@ def test_vip_delivery_sla_is_surfaced_exactly_once():
     Требование «показать хотя бы где-то» осталось: без него метрика тихо
     исчезнет при следующей уборке.
     """
-    health = (ROOT / "apps/web/app/health/page.tsx").read_text()
-    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+    health = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
+    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text(encoding="utf-8")
 
     assert "Telegram delivery 24h" in health
     assert "VIP SLA" in health
@@ -78,7 +78,7 @@ def test_analytics_shows_turnover_economics_instead():
     валового и издержек важнее любой из двух цифр по отдельности — оно
     отвечает, проблема в направлении или в стоимости оборота.
     """
-    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+    analytics = (ROOT / "apps/web/app/analytics/page.tsx").read_text(encoding="utf-8")
 
     assert "Экономика оборота" in analytics
     assert "Валовое на сделку" in analytics
@@ -87,7 +87,7 @@ def test_analytics_shows_turnover_economics_instead():
 
 
 def test_analytics_page_surfaces_symbol_profitability_guard():
-    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text(encoding="utf-8")
 
     assert "/analytics/symbol-performance?lookback=12" in page
     assert "Per-symbol profitability guard" in page
@@ -98,7 +98,7 @@ def test_analytics_page_surfaces_symbol_profitability_guard():
 
 
 def test_analytics_page_surfaces_adaptive_mfe_capture_metrics():
-    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text(encoding="utf-8")
 
     assert "MFE capture" in page
     assert "mfe_capture_rate" in page
@@ -106,7 +106,7 @@ def test_analytics_page_surfaces_adaptive_mfe_capture_metrics():
 
 
 def test_health_page_surfaces_ml_outcome_freshness_contract():
-    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
 
     assert "Latest logged" in page
     assert "latest_logged_at" in page
@@ -116,7 +116,7 @@ def test_health_page_surfaces_ml_outcome_freshness_contract():
 
 
 def test_health_page_surfaces_exchange_reconciliation_contract():
-    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
 
     assert "Exchange reconciliation" in page
     assert "exchange_reconciliation" in page
@@ -125,7 +125,7 @@ def test_health_page_surfaces_exchange_reconciliation_contract():
 
 
 def test_health_page_exposes_kill_switch_smoke_contract():
-    page = (ROOT / "apps/web/app/health/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
 
     assert "/system/kill-switch-smoke" in page
     assert "Kill smoke" in page
@@ -133,7 +133,7 @@ def test_health_page_exposes_kill_switch_smoke_contract():
 
 
 def test_analytics_page_surfaces_validation_gates_contract():
-    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text()
+    page = (ROOT / "apps/web/app/analytics/page.tsx").read_text(encoding="utf-8")
 
     assert "/analytics/validation-gates" in page
     assert "validationGates?.closed_count" in page

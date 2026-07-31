@@ -4,7 +4,7 @@ from pathlib import Path
 
 def test_production_compose_disables_schema_auto_create_and_runs_migrations():
     compose = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
-    text = compose.read_text()
+    text = compose.read_text(encoding="utf-8")
 
     assert "api-migrate" in text
     assert "DB_AUTO_CREATE_SCHEMA" in text
@@ -16,7 +16,7 @@ def test_production_compose_disables_schema_auto_create_and_runs_migrations():
 
 def test_production_runbook_documents_migration_and_readiness_flow():
     runbook = Path(__file__).resolve().parents[3] / "docs" / "PRODUCTION_RUNBOOK_RU.md"
-    text = runbook.read_text()
+    text = runbook.read_text(encoding="utf-8")
 
     assert "DB_AUTO_CREATE_SCHEMA=false" in text
     assert "api-migrate" in text
@@ -45,7 +45,7 @@ def test_backup_restore_smoke_script_has_dry_run_contract():
 
 def test_production_runbook_documents_backup_restore_smoke():
     runbook = Path(__file__).resolve().parents[3] / "docs" / "PRODUCTION_RUNBOOK_RU.md"
-    text = runbook.read_text()
+    text = runbook.read_text(encoding="utf-8")
 
     assert "db_backup_restore_smoke.sh" in text
     assert "--dry-run" in text

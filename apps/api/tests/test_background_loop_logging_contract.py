@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_background_loops_emit_structured_log_events():
-    main = (ROOT / "apps/api/main.py").read_text()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
 
     for event in [
         "subscription_watchdog_check",
@@ -28,7 +28,7 @@ def test_robot_loop_has_single_sleep_interval():
     ищем: интервал давно вынесен в настройку, и проверка на константу тихо
     отвалилась вместе с ней.
     """
-    main = (ROOT / "apps/api/main.py").read_text()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
     # Режем строго до СЛЕДУЮЩЕЙ функции: за scan-циклом идут остальные воркеры,
     # и слишком широкий срез считает их паузы как свои.
     robot_loop = main.split("async def background_robot_loop():", 1)[1].split("\nasync def ", 1)[0]
@@ -40,7 +40,7 @@ def test_robot_loop_has_single_sleep_interval():
 
 
 def test_robot_loop_checks_validation_gates_before_live_safety():
-    main = (ROOT / "apps/api/main.py").read_text()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
     robot_loop = main.split("async def background_robot_loop():", 1)[1].split("def initialize_database_schema", 1)[0]
 
     assert robot_loop.index("ValidationGateService().live_blockers") < robot_loop.index("LiveSafetyService().enforce")
@@ -50,7 +50,7 @@ def test_robot_loop_checks_validation_gates_before_live_safety():
 
 
 def test_http_request_middleware_adds_request_ids_and_structured_logs():
-    main = (ROOT / "apps/api/main.py").read_text()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
 
     assert '@app.middleware("http")' in main
     assert 'request.headers.get("X-Request-ID") or uuid4().hex' in main

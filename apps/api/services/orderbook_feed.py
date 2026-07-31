@@ -72,8 +72,32 @@ ORDERBOOK_STORE = OrderBookStore(
 )
 
 
-def _ws_symbol(ccxt_symbol: str) -> str:
-    return ccxt_symbol.replace("/", "").replace(":USDT", "").lower()
+# Спот и перпетуал — РАЗНЫЕ книги с разной ликвидностью и разной лентой.
+# Формат символа и эндпоинт у них тоже разные:
+#   spot  wss://api-aws.huobi.pro/ws        market.btcusdt.depth.step0
+#   swap  wss://api.hbdm.com/linear-swap-ws market.BTC-USDT.depth.step0
+_WS_DEFAULTS = {
+    "spot": "wss://api-aws.huobi.pro/ws",
+    "swap": "wss://api.hbdm.com/linear-swap-ws",
+}
+
+
+def ob_market_type() -> str:
+    value = str(getattr(settings, "OB_MARKET_TYPE", "spot")).lower().strip()
+    return value if value in _WS_DEFAULTS else "spot"
+
+
+def ws_url() -> str:
+    """Явный OB_WS_URL перекрывает всё; иначе — эндпоинт по типу рынка."""
+    explicit = str(getattr(settings, "OB_WS_URL", "") or "").strip()
+    return explicit or _WS_DEFAULTS[ob_market_type()]
+
+
+def _ws_symbol(ccxt_symbol: str, market_type: str | None = None) -> str:
+    base = str(ccxt_symbol).split(":", 1)[0]
+    if (market_type or ob_market_type()) == "swap":
+        return base.replace("/", "-").upper()
+    return base.replace("/", "").lower()
 
 
 async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | None = None):
@@ -85,8 +109,9 @@ async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
         return
 
     store = store or ORDERBOOK_STORE
-    ws_url = str(getattr(settings, "OB_WS_URL", "wss://api-aws.huobi.pro/ws"))
-    sym_map = {_ws_symbol(s): s for s in symbols}
+    market_type = ob_market_type()
+    url = ws_url()
+    sym_map = {_ws_symbol(s, market_type): s for s in symbols}
     backoff = 2.0
     # Watchdog: HTX шлёт ping/данные часто; тишина дольше этого = «мёртвый» сокет
     # (бывает без close-frame → ConnectionClosedError). Проактивно реконнектимся.
@@ -96,11 +121,13 @@ async def run_htx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
 
     while enabled_fn():
         try:
-            async with websockets.connect(ws_url, ping_interval=None, max_size=2 ** 23) as ws:
+            async with websockets.connect(url, ping_interval=None, max_size=2 ** 23) as ws:
                 for wsym in sym_map:
                     await ws.send(json.dumps({"sub": f"market.{wsym}.depth.step0", "id": f"d_{wsym}"}))
                     await ws.send(json.dumps({"sub": f"market.{wsym}.trade.detail", "id": f"t_{wsym}"}))
-                log_event(logger, 20, "ob_feed_connected", url=ws_url, symbols=len(sym_map))
+                log_event(logger, 20, "ob_feed_connected", url=url,
+                          market_type=market_type, symbols=len(sym_map),
+                          example_symbol=next(iter(sym_map), None))
                 backoff = 2.0
 
                 while enabled_fn():

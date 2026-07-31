@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from core.config import settings
+from services import funding_cost
 from services.htx_client import HTXClient
 
 
@@ -85,6 +86,9 @@ class CostEngine:
         liquidity: str = "taker",
         holding_funding_periods: int = 1,
         leverage: int | None = None,
+        hold_hours: float | None = None,
+        funding_rate_pct: float | None = None,
+        venue: str | None = None,
     ) -> CostPreview:
         entry_price = float(entry_price)
         exit_price = float(exit_price)
@@ -104,14 +108,27 @@ class CostEngine:
         entry_fee = entry_notional * fee_rate_value
         exit_fee = exit_notional * fee_rate_value
 
-        slippage_buffer = entry_notional * settings.SLIPPAGE_BUFFER_PCT
-
-        if market_type == "spot":
-            funding_buffer = 0.0
-        else:
-            funding_buffer = entry_notional * settings.FUNDING_BUFFER_PCT * holding_funding_periods
+        # Проскальзывание на ОБЕИХ ногах: выход рыночным ордером проскальзывает
+        # так же, как вход. Раньше начислялось только на вход — недосчёт вдвое.
+        slippage_buffer = (entry_notional + exit_notional) * settings.SLIPPAGE_BUFFER_PCT
 
         side_value = str(side or "").lower().strip()
+
+        # Фондирование: период по времени удержания и каденции площадки, знак по
+        # направлению (ставка > 0 → лонг платит, шорт получает), ставка из
+        # наблюдений. Разбор ошибок прежней константы — в services/funding_cost.py.
+        # hold_hours=None → FUNDING_EXPECTED_HOLD_HOURS (оценка на этапе плана).
+        if hold_hours is None and holding_funding_periods not in (None, 1):
+            hold_hours = float(holding_funding_periods) * funding_cost.period_hours(venue)
+        funding_buffer = funding_cost.funding_usdt(
+            notional=entry_notional,
+            side=side_value,
+            market_type=market_type,
+            hold_hours=hold_hours,
+            rate_pct=funding_rate_pct,
+            venue=venue,
+            symbol=symbol,
+        )
 
         if side_value in ["long", "buy"]:
             gross_pnl = (exit_price - entry_price) * qty

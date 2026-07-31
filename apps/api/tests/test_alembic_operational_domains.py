@@ -23,7 +23,7 @@ def test_operational_domains_migration_is_registered_and_importable():
 
 def test_operational_domains_migration_covers_new_runtime_tables():
     path, _module = _load_migration()
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
 
     for table_name in [
         "users",

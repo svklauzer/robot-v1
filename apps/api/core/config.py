@@ -386,7 +386,10 @@ class Settings(BaseSettings):
     # по дефолту равен localhost — вебхук ушёл бы в никуда.
     PUBLIC_API_URL: str = ""
 
-    MAX_ACTIVE_SIGNALS: int = 4
+    # Снят как ограничитель. Фактический потолок параллельных позиций задают
+    # ANTI_DRAIN_MAX_OPEN_POSITIONS=5, маржа (0.70/0.13 ≈ 5) и
+    # MAX_ACTIVE_SIGNALS_PER_SYMBOL=1 × 7 символов HTX_SYMBOLS.
+    MAX_ACTIVE_SIGNALS: int = 100
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
     RISK_EQUITY_USDT: float = 950.0
     MAX_USED_MARGIN_PCT: float = 0.85
@@ -947,7 +950,13 @@ class Settings(BaseSettings):
     # (spread-гейт + OBI + стенки) и ускоритель скальп-выхода (CVD). За флагом;
     # если WS молчит — анализатор уходит в pass-through, торговля как обычно.
     ENABLE_ORDERBOOK_ENGINE: bool = False
-    OB_WS_URL: str = "wss://api-aws.huobi.pro/ws"
+    # Книга должна быть от ТОГО ЖЕ инструмента, которым торгуем: спот и перпетуал
+    # — разные книги с разной ликвидностью и разной лентой сделок. При
+    # ENABLE_FUTURES_EXECUTION=true сюда нужен swap, иначе OBI/CVD/стенки и
+    # перенос входа в entry_zone описывают чужой инструмент.
+    # Пустой OB_WS_URL → эндпоинт берётся по OB_MARKET_TYPE (см. orderbook_feed).
+    OB_MARKET_TYPE: str = "spot"
+    OB_WS_URL: str = ""
     OB_DEPTH_LEVELS: int = 10
     OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)
     # POSITION (trend/crt) едет 1.5–3%: спред — не главный фильтр, но 0.20 был
@@ -1615,7 +1624,11 @@ class Settings(BaseSettings):
     FUTURES_TAKER_FEE: float = 0.0005
     FUTURES_MAKER_FEE: float = 0.0002
     SLIPPAGE_BUFFER_PCT: float = 0.0002
-    FUNDING_BUFFER_PCT: float = 0.0003
+    FUNDING_BUFFER_PCT: float = 0.0003          # больше не используется CostEngine
+    # Фондирование считается по времени удержания и каденции площадки.
+    FUNDING_PERIOD_HOURS_DEFAULT: float = 8.0   # HTX 8ч, Kraken 1ч
+    FUNDING_EXPECTED_HOLD_HOURS: float = 1.0    # оценка на этапе плана
+    FUNDING_FALLBACK_RATE_PCT: float = 0.01     # % за период, если наблюдений нет
 
     # =========================
     # TRAILING STOP

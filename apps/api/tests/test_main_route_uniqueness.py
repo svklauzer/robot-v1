@@ -9,7 +9,7 @@ ROUTE_RE = re.compile(r'^@app\.(get|post|put|delete|patch)\("([^"]+)"')
 
 def test_main_has_no_duplicate_route_decorators():
     """Prevent unreachable FastAPI handlers after large manual merges."""
-    main = (ROOT / "apps/api/main.py").read_text().splitlines()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8").splitlines()
     routes = defaultdict(list)
 
     for line_no, line in enumerate(main, start=1):
@@ -33,8 +33,8 @@ def test_telegram_menu_is_handled_by_the_service_without_legacy_helper():
     Обработчик вебхука переехал из main.py в routers/telegram.py — проверяем
     там, иначе тест зеленеет на отсутствии кода, который просто переложили.
     """
-    main = (ROOT / "apps/api/main.py").read_text()
-    telegram_router = (ROOT / "apps/api/routers/telegram.py").read_text()
+    main = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
+    telegram_router = (ROOT / "apps/api/routers/telegram.py").read_text(encoding="utf-8")
 
     assert "def _telegram_menu_text" not in main
     assert "def _telegram_menu_text" not in telegram_router

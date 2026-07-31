@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_intelligence_memory_has_single_canonical_noisy_helpers():
-    source = (ROOT / "apps/api/services/intelligence_memory.py").read_text()
+    source = (ROOT / "apps/api/services/intelligence_memory.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
     module_level_helpers = [

@@ -290,7 +290,7 @@ def test_exit_policy_has_no_stale_exit_pct_reference():
 
     source = Path(__file__).resolve().parents[1] / "services" / "exit_policy.py"
 
-    assert re.search(r"(?<!protective_)\bexit_pct\b", source.read_text()) is None
+    assert re.search(r"(?<!protective_)\bexit_pct\b", source.read_text(encoding="utf-8")) is None
 
 
 def test_exit_policy_runtime_guard_reports_protected_pct_runtime():
