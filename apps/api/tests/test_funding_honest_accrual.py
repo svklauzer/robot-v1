@@ -11,19 +11,36 @@
 Косвенное подтверждение: cross-arb (P2) начисляет carry pro-rata по ТЕКУЩЕЙ
 ставке и показывает −1.20 USDT; этот движок по ставке входа — +4.02.
 Один принцип, разный знак, разница ровно в методике учёта.
+
+ОБНОВЛЕНО 03.08.2026 (#funding-periodic-accrual-2026-08-03)
+-----------------------------------------------------------
+Трапеция была промежуточным решением: среднее двух крайних точек равно
+интегралу только на линейном участке. Теперь carry копится пер-периодно по
+фактической ставке (services/funding_accrual.py), а трапеция осталась запасным
+путём для позиций, открытых до правки, — у них ledger'а нет и взяться ему
+неоткуда.
+
+Проверки ниже сохранены: запасной путь тоже обязан считать правильно. Но
+формула больше не дублируется в тесте — вызывается рабочая функция, иначе тест
+проверял бы собственную копию логики, а не код.
 """
 import pytest
 
 from core.config import settings
+from services.funding_accrual import collected_usdt
 
 
 def _funding(notional, entry_rate, exit_rate, periods, honest):
-    """Формула начисления из close_paper."""
-    if honest and exit_rate is not None:
-        rate = (entry_rate + exit_rate) / 2.0
-    else:
-        rate = entry_rate
-    return notional * rate * periods
+    """Запасной путь начисления — тот самый, что сработает на старой позиции."""
+    value, _method = collected_usdt(
+        None,
+        notional=notional,
+        entry_rate=entry_rate,
+        exit_rate=exit_rate,
+        periods=periods,
+        honest_trapezoid=honest,
+    )
+    return value
 
 
 def test_falling_rate_is_no_longer_overstated():
@@ -65,16 +82,42 @@ def test_flag_can_restore_previous_behaviour():
     assert _funding(100.0, 0.06, 0.01, 10, honest=False) == pytest.approx(0.06 * 100 * 10)
 
 
-def test_close_paper_uses_the_honest_rate():
-    """Регресс на само место правки: формула обязана читать exit_funding_rate."""
+def test_measured_carry_wins_over_any_estimate():
+    """Главное правило: если carry измерен — оценки не применяются.
+
+    Трапеция ближе к правде, чем ставка входа, но обе остаются приближениями.
+    Ledger — факт, и он обязан иметь приоритет.
+    """
+    from services import funding_accrual as fa
+
+    ledger = fa.accrue(fa.empty_ledger(0.0, 0.055), notional=100.0,
+                       current_rate=0.010, now_ts=10 * 8 * 3600.0)
+    measured, method = collected_usdt({"accrual": ledger}, notional=100.0,
+                                      entry_rate=0.055, exit_rate=0.010, periods=10)
+
+    assert method == "per_period"
+    trapezoid = _funding(100.0, 0.055, 0.010, 10, honest=True)
+    assert measured != pytest.approx(trapezoid)
+
+
+def test_close_paper_delegates_instead_of_computing_carry_itself():
+    """Регресс на место правки.
+
+    Проверяется не название переменной, а то, что расчёт carry вынесен из
+    close_paper: пока формула жила прямо здесь, она дважды разъезжалась с
+    реальностью незаметно. Плюс прямой запрет на возврат к ставке входа.
+    """
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[1] / "services" / "funding_arbitrage.py"
     text = src.read_text(encoding="utf-8")
     block = text[text.index("def close_paper"):text.index("def close_hedge")]
 
-    assert "FUNDING_ARB_HONEST_ACCRUAL" in block
-    assert "exit_funding_rate" in block and "effective_rate" in block
+    assert "collected_usdt" in block, "close_paper обязан делегировать расчёт carry"
+    assert "accrual_method" in block, "способ учёта обязан записываться в сделку"
     assert "entry_funding_rate) * int(funding_periods)" not in block, (
         "начисление снова считается только по ставке входа"
+    )
+    assert "(entry_rate + exit_rate) / 2" not in block, (
+        "трапеция вернулась в close_paper вместо запасного пути в funding_accrual"
     )
