@@ -818,11 +818,16 @@ class MarketIntelligenceEngine:
         floor_pct = float(getattr(settings, "TZ_STOP_MIN_DIST_PCT", 0.30))
         cap_pct = float(getattr(settings, "TZ_DISASTER_STOP_PCT", 5.0)) or 100.0
         clamped_pct = min(max(dist_pct, floor_pct), cap_pct)
+
+        # Пересчитываем уровень ТОЛЬКО если ограничитель действительно сработал.
+        # Иначе линия KAMA гоняется через проценты и обратно без нужды: на
+        # круглых числах это незаметно, на реальных ценах даёт дрейф в последних
+        # знаках, а уровень слома тренда должен оставаться там, где посчитан.
         if abs(clamped_pct - dist_pct) > 1e-9:
             meta["clamped"] = "floor" if clamped_pct > dist_pct else "cap"
+            level = (float(last) * (1 - clamped_pct / 100.0) if is_long
+                     else float(last) * (1 + clamped_pct / 100.0))
 
-        level = (float(last) * (1 - clamped_pct / 100.0) if is_long
-                 else float(last) * (1 + clamped_pct / 100.0))
         meta["dist_pct"] = round(clamped_pct, 4)
         return round(level, 8), meta
 

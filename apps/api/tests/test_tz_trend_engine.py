@@ -240,9 +240,12 @@ def test_sizing_anchor_uses_kama_distance(sizing):
     """Дистанция до KAMA заменила ATR как мера риска сетапа."""
     level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=105.0)
     assert meta["source"] == "kama"
-    # 105 → 99.85 это 4.905%, внутри пола и потолка.
-    assert meta["dist_pct"] == pytest.approx(4.905, abs=0.01)
-    assert level == pytest.approx(105.0 * (1 - 0.04905), rel=1e-6)
+    # KAMA 100 минус буфер 0.15% = 99.85. От цены 105 это 4.9048%.
+    assert meta["dist_pct"] == pytest.approx(4.9048, abs=1e-3)
+    # Уровень остаётся РОВНО на линии слома тренда: ограничитель не сработал,
+    # значит гонять его через проценты и обратно незачем.
+    assert level == pytest.approx(99.85, abs=1e-8)
+    assert meta["clamped"] is None
 
 
 def test_price_glued_to_kama_hits_the_floor(sizing):
