@@ -122,10 +122,53 @@ export default function MLPage() {
             <Row k="Сделок в обучении" v={model?.samples ?? "—"} />
             <Row k="Нужно минимум" v={model?.min_train_samples ?? "—"} />
             <Row k="Winrate выборки" v={model?.win_rate != null ? `${model.win_rate}%` : "—"} />
-            <Row k="Валидация AUC" v={metrics?.val_auc ?? "—"} highlight={metrics?.val_auc != null && metrics.val_auc > 0.6} />
-            <Row k="Валидация Acc" v={metrics?.val_acc ?? "—"} />
+            {/* (#ml-honest-metrics-2026-08-03) AUC подсвечивается зелёным только
+                когда он посчитан на достаточном числе положительных примеров.
+                Замер 03.08: val_auc 0.7588 при val_positives ~12 и live AUC
+                0.5702 — числа неразличимы, но зелёный цвет говорил обратное. */}
+            <Row
+              k="Валидация AUC"
+              v={
+                metrics?.val_auc != null
+                  ? `${metrics.val_auc}${metrics?.auc_is_reliable === false ? " ±0.15" : ""}`
+                  : "—"
+              }
+              highlight={metrics?.val_auc != null && metrics.val_auc > 0.6 && metrics?.auc_is_reliable === true}
+              warn={metrics?.auc_is_reliable === false}
+            />
+            {/* Точность без доли большинства бессмысленна: при 19.84%
+                положительных «всегда нет» даёт те же 0.80. */}
+            <Row
+              k="Валидация Acc"
+              v={
+                metrics?.val_acc != null
+                  ? `${metrics.val_acc}${
+                      metrics?.baseline_acc != null ? ` (большинство ${metrics.baseline_acc})` : ""
+                    }`
+                  : "—"
+              }
+              warn={metrics?.acc_beats_baseline != null && metrics.acc_beats_baseline <= 0.02}
+            />
+            <Row
+              k="Событий на признак"
+              v={
+                metrics?.events_per_feature != null
+                  ? `${metrics.events_per_feature} (${metrics.positives ?? "?"} на ${metrics.features_used ?? "?"})`
+                  : "—"
+              }
+              warn={metrics?.events_per_feature != null && metrics.events_per_feature < 10}
+            />
             <Row k="Метка" v={model?.label_kind ?? "—"} />
           </dl>
+
+          {/* Предупреждения из бэкенда — то, из-за чего цифрам выше нельзя верить. */}
+          {Array.isArray(metrics?.warnings) && metrics.warnings.length > 0 && (
+            <ul className="mt-3 space-y-1 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200/90">
+              {metrics.warnings.map((w: string, i: number) => (
+                <li key={i}>⚠ {w}</li>
+              ))}
+            </ul>
+          )}
           <button
             onClick={train}
             disabled={training}
@@ -220,11 +263,14 @@ export default function MLPage() {
   );
 }
 
-function Row({ k, v, highlight }: { k: string; v: any; highlight?: boolean }) {
+function Row({ k, v, highlight, warn }: { k: string; v: any; highlight?: boolean; warn?: boolean }) {
+  // warn важнее highlight: метрика, которой нельзя верить, не должна быть зелёной,
+  // даже если её значение формально высокое.
+  const tone = warn ? "text-amber-300" : highlight ? "font-bold text-emerald-300" : "text-emerald-50";
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-emerald-100/50">{k}</span>
-      <span className={highlight ? "font-bold text-emerald-300" : "text-emerald-50"}>{String(v)}</span>
+      <span className={tone}>{String(v)}</span>
     </div>
   );
 }

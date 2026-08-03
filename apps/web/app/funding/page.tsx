@@ -197,11 +197,32 @@ export default function FundingArbPage() {
           warn={openPositions.length > 0}
           sub={`of ${summary?.open_positions ?? "?"} total`}
         />
+        {/* (#funding-periodic-accrual-2026-08-03) Общий realized смешивает сделки,
+            посчитанные по ставке ВХОДА (завышены на 0.25–0.60 каждая), с теми,
+            где carry измерен пер-периодно. Пока measured_trades = 0, судить об
+            арбитраже не по чему — и это должно быть видно на экране, а не только
+            в JSON. */}
         <StatCard
           title="Realized P&L"
           value={`${fmt(summary?.realized_pnl)} USDT`}
-          good={(summary?.realized_pnl ?? 0) > 0}
-          warn={(summary?.realized_pnl ?? 0) < 0}
+          good={(summary?.measured_trades ?? 0) > 0 && (summary?.realized_pnl ?? 0) > 0}
+          warn={(summary?.measured_trades ?? 0) === 0}
+          sub={
+            (summary?.measured_trades ?? 0) === 0
+              ? "оценка по ставке входа — завышена"
+              : `измерено ${summary.measured_trades} сделок`
+          }
+        />
+        <StatCard
+          title="Измеренный P&L"
+          value={
+            (summary?.measured_trades ?? 0) > 0
+              ? `${fmt(summary?.measured_realized_pnl)} USDT`
+              : "нет данных"
+          }
+          good={(summary?.measured_realized_pnl ?? 0) > 0 && (summary?.measured_trades ?? 0) > 0}
+          warn={(summary?.measured_trades ?? 0) === 0}
+          sub="carry по факту, а не по ставке входа"
         />
         <StatCard
           title="Total P&L est."
@@ -478,7 +499,23 @@ function PositionCard({ item, isOpen }: { item: any; isOpen: boolean }) {
         <Metric
           label="Funding earned"
           value={item.funding_collected != null ? `${fmt(item.funding_collected)} USDT` : "—"}
-          good={(item.funding_collected ?? 0) > 0}
+          good={(item.funding_collected ?? 0) > 0 && item.accrual_method === "per_period"}
+        />
+        {/* Способ учёта carry: per_period — измерено, *_legacy — оценка по
+            ставке входа или трапеции, завышена. Без этой пометки старые и новые
+            сделки смешиваются в глазах незаметно. */}
+        <Metric
+          label="Учёт carry"
+          value={
+            item.accrual_method === "per_period"
+              ? `по факту (${fmt(item.accrued_periods)} пер.)`
+              : item.accrual_method === "trapezoid_legacy"
+              ? "трапеция (оценка)"
+              : item.accrual_method
+              ? "ставка входа (завышено)"
+              : "—"
+          }
+          good={item.accrual_method === "per_period"}
         />
         <Metric
           label="Realized"

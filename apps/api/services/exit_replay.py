@@ -216,6 +216,52 @@ def _replay_trend_one(
     return final_pct, "actual_close"
 
 
+def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float) -> dict:
+    """Воспроизводит ли модель саму себя. (#replay-fidelity-2026-08-03)
+
+    Реплей ТЕКУЩЕГО конфига на тех же сделках обязан дать примерно фактический
+    результат — это один конфиг на одних данных. Первый боевой замер:
+
+        факт            −8.5459
+        текущий конфиг  −12.3596   → разрыв 3.81 п.п. при результате 8.5
+        лидер           −8.5875    → дельта 0.04
+
+    Ошибка модели в 91 раз больше её собственного вывода. Значит «вариант X
+    лучше» сравнивало две МОДЕЛИ, а не две реальности, и менять по такому
+    сравнению конфиг нельзя.
+
+    Причина разрыва в лестнице `_replay_trend_one`: она знает безубыток, полосу
+    и трейл, но не знает стоп, tp1-partial, tp2, adaptive-трейл и flow-выходы.
+    Пока их нет, модель будет расходиться с движком систематически.
+
+    Два условия доверия, оба обязательны:
+      * разрыв мал сам по себе;
+      * разрыв МЕНЬШЕ дельты лидера — иначе достаточно найти вариант
+        поэкстремальнее, чтобы «доказать» любой вывод.
+    """
+    gap = float(current_pct) - float(actual_pct)
+    scale = abs(float(actual_pct)) or 1.0
+    best_edge = abs(float(best_pct) - float(actual_pct))
+    trustworthy = bool(abs(gap) <= max(0.5, 0.1 * scale) and best_edge > abs(gap))
+
+    return {
+        "current_replayed_pct": round(float(current_pct), 4),
+        "actual_pct": round(float(actual_pct), 4),
+        "gap_pct": round(gap, 4),
+        "gap_share_of_result": round(abs(gap) / scale, 3),
+        "best_edge_pct": round(best_edge, 4),
+        "gap_over_edge": round(abs(gap) / best_edge, 1) if best_edge > 1e-9 else None,
+        "trustworthy": trustworthy,
+        "verdict": (
+            "модель воспроизводит текущий конфиг — сравнению вариантов можно верить"
+            if trustworthy else
+            f"модель НЕ воспроизводит текущий конфиг: разрыв {abs(gap):.2f} п.п. "
+            f"против дельты лидера {best_edge:.2f}. Сначала достроить лестницу "
+            f"выходов (нет стопа, tp1/tp2, adaptive-трейла), потом сравнивать."
+        ),
+    }
+
+
 def _split_check(trades: list[dict], run, best_key: dict, keyfn) -> dict:
     """Лидер обязан выигрывать на обеих половинах выборки, а не только в сумме.
 
@@ -514,9 +560,43 @@ def build_trend(limit: int = 2000) -> dict:
     }
     current_row = next((v for v in variants if _key(v) == _key(current)), None)
 
+    # (#replay-fidelity-2026-08-03) Прежде чем сравнивать варианты, модель
+    # обязана воспроизвести САМА СЕБЯ: реплей текущего конфига на тех же
+    # сделках должен дать примерно фактический результат. Первый замер:
+    #   факт −8.5459, реплей текущего конфига −12.3596 → разрыв 3.81 п.п.
+    # при общем результате 8.5. Дельта лидера при этом −0.04. То есть разница
+    # между вариантами на два порядка меньше ошибки самой модели, и любой
+    # вывод «вариант X лучше» был бы сравнением двух моделей, а не реальностей.
+    #
+    # Причина разрыва: лестница в _replay_trend_one знает только безубыток,
+    # полосу и трейл. Реальных выходов больше — стоп, tp1-partial, tp2,
+    # adaptive-трейл, flow-выходы. Пока их нет, модель систематически
+    # расходится с движком.
+    fidelity: dict = {"checked": bool(current_row)}
+    if current_row:
+        fidelity.update(_fidelity_verdict(
+            current_pct=current_row["total_pct"],
+            actual_pct=actual_total,
+            best_pct=variants[0]["total_pct"],
+        ))
+
+    # Оси, которые НЕ повлияли ни на один вариант, — признак того, что эффект
+    # запирается другим параметром. Без этого «лидер» можно принять за ответ
+    # на вопрос, который на самом деле не задавался.
+    inert_axes = []
+    for axis in ("ride_arm_pct", "band_arm_pct", "band_giveback_share", "ride_trail_share"):
+        totals = {v["total_pct"] for v in variants if v.get(axis) is not None}
+        by_axis: dict = {}
+        for v in variants:
+            by_axis.setdefault(v[axis], set()).add(v["total_pct"])
+        if len(totals) > 1 and all(len(s) == len(totals) for s in by_axis.values()):
+            inert_axes.append(axis)
+
     return {
         "status": "ok",
         "profile": "trend",
+        "fidelity": fidelity,
+        "inert_axes": inert_axes,
         "trades_replayed": len(trades),
         "skipped_no_trajectory": skipped_no_traj,
         "actual_total_pct": actual_total,

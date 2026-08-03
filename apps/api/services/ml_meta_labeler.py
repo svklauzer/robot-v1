@@ -173,6 +173,51 @@ class MetaLabeler:
         except Exception as exc:
             metrics["val_error"] = f"{type(exc).__name__}: {exc}"
 
+        # (#ml-honest-metrics-2026-08-03) Три числа, без которых метрики выше
+        # вводят в заблуждение. Замер 03.08: val_auc 0.7588 / val_acc 0.80 при
+        # live AUC 0.5702 — расхождение объяснялось целиком тем, что ниже.
+        positives = int(ya.sum())
+        base_rate = float(1.0 - ya.mean())
+        epv = round(positives / max(len(FEATURE_NAMES), 1), 2)
+        val_positives = int(yte.sum())
+        metrics.update({
+            # Точность бессмысленна, если она равна доле большинства: модель
+            # «всегда нет» даёт столько же. При 19.84% положительных это 0.80 —
+            # ровно то, что показывалось как достижение.
+            "baseline_acc": round(base_rate, 4),
+            "acc_beats_baseline": (
+                None if metrics["val_acc"] is None
+                else round(float(metrics["val_acc"]) - base_rate, 4)
+            ),
+            # Событий на признак. Меньше 10 — модель запоминает выборку.
+            # 51 положительный на 16 признаков = 3.19.
+            "events_per_feature": epv,
+            "features_used": len(FEATURE_NAMES),
+            "positives": positives,
+            # Положительных В ВАЛИДАЦИИ. AUC на десятке событий имеет
+            # доверительный интервал порядка ±0.15 — то есть 0.76 и 0.57
+            # неразличимы, и «валидация лучше боя» может быть просто шумом.
+            "val_positives": val_positives,
+            "auc_is_reliable": bool(val_positives >= 30),
+        })
+        warnings = []
+        if epv < 10:
+            warnings.append(
+                f"events_per_feature={epv} (<10): признаков больше, чем выдерживает "
+                f"{positives} положительных примеров — переобучение по построению"
+            )
+        if val_positives < 30:
+            warnings.append(
+                f"val_positives={val_positives} (<30): доверительный интервал AUC "
+                f"порядка ±0.15, число не отличимо от случайного"
+            )
+        if metrics.get("acc_beats_baseline") is not None and metrics["acc_beats_baseline"] <= 0.02:
+            warnings.append(
+                f"val_acc не превышает долю большинства ({base_rate:.2%}) — "
+                f"метрика ничего не измеряет, смотрите AUC"
+            )
+        metrics["warnings"] = warnings
+
         # финальная модель — на ВСЕХ данных (после валидации)
         model = _make().fit(Xa, ya)
 

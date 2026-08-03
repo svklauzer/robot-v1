@@ -127,6 +127,42 @@ def test_build_trend_runs_end_to_end(tmp_path, monkeypatch):
     assert "ride_arm_pct" not in out["fixed"]
     assert out["axes"]["ride_arm_pct"]
     assert "band_corridor_width" in out["best"]
+    assert "fidelity" in out
+    assert "inert_axes" in out
+
+
+# ── доверие к модели ────────────────────────────────────────────────────────
+# (#replay-fidelity-2026-08-03) Первый боевой замер: факт −8.5459, реплей
+# ТЕКУЩЕГО конфига −12.3596. Разрыв 3.81 п.п. при результате 8.5, а дельта
+# лидера — 0.04. Ошибка модели на два порядка больше её выводов, то есть
+# «вариант X лучше» сравнивало две модели, а не две реальности.
+
+def test_fidelity_flags_a_model_that_cannot_reproduce_itself():
+    from services.exit_replay import _fidelity_verdict
+
+    bad = _fidelity_verdict(current_pct=-12.3596, actual_pct=-8.5459, best_pct=-8.5875)
+    assert bad["trustworthy"] is False
+    assert bad["gap_pct"] == pytest.approx(-3.8137, abs=1e-3)
+    # Разрыв модели в 91 раз больше её собственной дельты.
+    assert bad["gap_over_edge"] > 50
+
+
+def test_fidelity_accepts_a_model_that_matches_reality():
+    from services.exit_replay import _fidelity_verdict
+
+    good = _fidelity_verdict(current_pct=-8.60, actual_pct=-8.55, best_pct=-7.00)
+    assert good["trustworthy"] is True
+
+
+def test_a_big_edge_does_not_excuse_a_big_gap():
+    """Большая дельта лидера не оправдывает расхождение модели с фактом.
+
+    Иначе достаточно найти вариант поэкстремальнее, чтобы «доказать» вывод.
+    """
+    from services.exit_replay import _fidelity_verdict
+
+    out = _fidelity_verdict(current_pct=-30.0, actual_pct=-8.55, best_pct=20.0)
+    assert out["trustworthy"] is False
 
 
 def test_the_bias_favoured_whichever_variant_changed_more():
