@@ -167,6 +167,28 @@ class MLTradeLogger:
                 "traj_step": lifecycle.get("traj_step"),
             },
 
+            # (#gates-in-export-2026-08-03) Вердикты гейтов входа. Раньше они
+            # жили ТОЛЬКО в signal.plan_json в базе, а в выгрузку не попадали —
+            # то есть накопить по ним статистику было нельзя в принципе, сколько
+            # ни ждать. Обнаружилось при первой же попытке откалибровать пороги
+            # ТЗ: scripts/tz_calibrate.py нашёл 0 записей на 101 строке.
+            #
+            # Это ровно то, ради чего гейты и делались в режиме наблюдения:
+            # посчитать, что каждое условие отсекло бы, и чем те сделки
+            # закончились. Без этих полей режим наблюдения бессмысленен.
+            "gates": {
+                "tz_shadow": plan.get("tz_shadow"),
+                "trend_trigger": plan.get("trend_trigger"),
+                "setup_reach": plan.get("setup_reach"),
+                # Причина входа: без неё разворот от поддержки и пробой лежат
+                # в одной куче «trend», и разрез результата по сетапу невозможен.
+                "entry_reason": plan.get("entry_reason"),
+                # Отпечаток конфига на момент входа — чтобы сделки до и после
+                # правок не смешивались в одной статистике незаметно.
+                "config_fingerprint": ((plan.get("config") or {}).get("fingerprint")
+                                       if isinstance(plan.get("config"), dict) else None),
+            },
+
             "labels": {
                 "is_win": bool(closed_net_pnl is not None and float(closed_net_pnl) > 0),
                 "is_loss": bool(closed_net_pnl is not None and float(closed_net_pnl) < 0),

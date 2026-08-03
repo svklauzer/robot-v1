@@ -35,10 +35,19 @@ def _load(path: Path) -> list[dict]:
 
 
 def _shadow_of(row: dict) -> dict | None:
-    plan = row.get("plan") or row.get("plan_json") or {}
-    shadow = plan.get("tz_shadow") if isinstance(plan, dict) else None
-    if not isinstance(shadow, dict):
-        shadow = row.get("tz_shadow")
+    """Вердикт полосы из выгрузки.
+
+    Основное место — `gates.tz_shadow` (#gates-in-export-2026-08-03). До этой
+    правки гейты в выгрузку не писались вовсе, поэтому скрипт находил ноль
+    записей на сотне строк. Остальные варианты оставлены для совместимости с
+    ручными выгрузками из базы, где структура плана другая.
+    """
+    for container in (row.get("gates"), row.get("plan"), row.get("plan_json")):
+        if isinstance(container, dict):
+            shadow = container.get("tz_shadow")
+            if isinstance(shadow, dict):
+                return shadow if shadow.get("evaluated") else None
+    shadow = row.get("tz_shadow")
     return shadow if isinstance(shadow, dict) and shadow.get("evaluated") else None
 
 
@@ -91,11 +100,31 @@ def main() -> None:
             continue
         pairs.append((shadow, pnl))
 
+    with_gates = sum(1 for r in rows if isinstance(r.get("gates"), dict))
+    trend_rows = sum(
+        1 for r in rows
+        if str(r.get("trade_mode") or "").lower() in ("trend", "crt", "position")
+    )
+
     print(f"Строк в выгрузке: {len(rows)}")
+    print(f"  из них с блоком gates: {with_gates}")
+    print(f"  из них трендовых (полоса считается только там): {trend_rows}")
     print(f"С посчитанной tz_shadow и известным итогом: {len(pairs)}")
+
     if not pairs:
-        print("\nНечего калибровать. Полоса считается только для трендовых режимов —")
-        print("если сделок мало, значит мало и оценок. Ждём накопления.")
+        print()
+        if with_gates == 0:
+            print("Ни в одной строке нет блока `gates` — значит выгрузка сделана ДО")
+            print("правки #gates-in-export-2026-08-03. Раньше вердикты гейтов жили")
+            print("только в signal.plan_json в базе и в журнал не попадали, поэтому")
+            print("калибровочных данных не появилось бы никогда, сколько ни ждать.")
+            print("Нужны НОВЫЕ закрытия после деплоя правки.")
+        elif trend_rows == 0:
+            print("Блок gates есть, но трендовых сделок в выгрузке нет.")
+            print("Полоса считается только для trend_up/trend_down — ждём таких закрытий.")
+        else:
+            print("Трендовые сделки есть, но tz_shadow у них не посчитан:")
+            print("проверь, что индикаторы (ADX/StochRSI/OBV) отдаются в timeframes.")
         return
 
     if len(pairs) < args.min_sample:

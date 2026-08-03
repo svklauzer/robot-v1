@@ -26,6 +26,7 @@ htx_client.create_* напрямую в живом режиме — только
 from __future__ import annotations
 
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -236,10 +237,62 @@ class LiveExecutor:
         try:
             contracts = float(self.client.amount_to_precision(symbol, contracts))
         except Exception:  # noqa: BLE001
-            pass
+            # (#contract-quantize-2026-08-03) Прежде здесь стояло `pass`, и
+            # дробное число контрактов уходило на биржу как есть. Биржа их не
+            # принимает — но значение было ПОЛОЖИТЕЛЬНЫМ, поэтому предохранитель
+            # `send_amount <= 0` в place_market не срабатывал, и ордер уезжал
+            # только чтобы вернуться отказом. Именно так выглядит объём меньше
+            # одного контракта: 0.0004 BTC = 0.4 контракта.
+            #
+            # Округляем ВНИЗ сами: своп торгуется целыми контрактами, а вниз —
+            # потому что превысить план опаснее, чем недобрать.
+            contracts = float(math.floor(contracts))
 
         meta.update({"submitted_unit": "contracts", "contract_size": float(size)})
         return contracts, meta
+
+    def quantize_base(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:
+        """Сколько базовой монеты биржа РЕАЛЬНО примет. (#contract-quantize-2026-08-03)
+
+        Зачем отдельный публичный метод. Биржа принимает своп только целыми
+        контрактами, и шаг у BTC грубый: 1 контракт = 0.001 BTC ≈ 64 USDT при
+        цене 63650. На позицию ~190 USDT это ТРИ шага, и остаток отбрасывается:
+
+            план 0.002979 BTC (189.6 USDT) → 2 контракта = 0.002 BTC (127.3 USDT)
+
+        Пока бумага книжила план, а live отправлял округлённое, бумажная позиция
+        по BTC была на 49% крупнее той, что биржа вообще способна открыть. Это
+        расхождение не в комиссиях и не в проскальзывании — в размере позиции,
+        то есть бумажный PnL по BTC несопоставим с live по построению.
+
+        У ETH шаг мельче (0.01 ≈ 19 USDT), там расхождение 1.8% — поэтому баг и
+        не бросался в глаза: он виден только на дорогих монетах.
+
+        Возвращает (объём_в_базовой_монете, meta). Ноль означает, что позиция
+        меньше одного контракта — такую сделку открывать нечем.
+        """
+        amount = float(amount)
+        try:
+            exchange_amount, meta = self._to_exchange_amount(symbol, amount, market_type)
+        except ValueError as exc:
+            return amount, {"submitted_unit": "unknown", "contract_size": None,
+                            "base_amount": amount, "error": str(exc)}
+
+        size = meta.get("contract_size")
+        if not size:
+            return exchange_amount, meta
+
+        achievable = float(exchange_amount) * float(size)
+        meta = dict(meta)
+        meta.update({
+            "requested_base": amount,
+            "achievable_base": achievable,
+            "contracts": float(exchange_amount),
+            "shortfall_pct": (
+                round((amount - achievable) / amount * 100, 3) if amount > 0 else 0.0
+            ),
+        })
+        return achievable, meta
 
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,

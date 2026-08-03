@@ -185,14 +185,34 @@ class ExecutionEngine:
         open_side = self._open_order_side(signal.side)
         client_order_id = f"PAPER-{uuid.uuid4()}"
 
-        order_qty = float(self.client.amount_to_precision(signal.symbol, float(plan.qty)))
+        # (#contract-quantize-2026-08-03) Округляем объём по МАРШРУТУ сделки, а
+        # не по базовому символу. Прежняя строка звала amount_to_precision с
+        # `signal.symbol` = "BTC/USDT", но ccxt при defaultType=swap резолвит
+        # его в контрактный BTC/USDT:USDT, где точность = 1 контракт. Базовые
+        # 0.002979 BTC округлялись в ноль → исключение → фолбэк возвращал объём
+        # нетронутым. В логах это лилось как htx_amount_precision_fallback.
+        #
+        # Хуже шума было следствие: live отправлял 2 контракта (0.002 BTC), а
+        # бумага книжила план 0.002979 BTC — на 49% больше. Расхождение не в
+        # издержках, а в РАЗМЕРЕ позиции, то есть бумажный BTC несопоставим с
+        # live по построению. Теперь обе ветки берут один и тот же объём.
+        route = route_from_payload(signal.plan_json, signal.symbol, signal.side)
+        order_qty, qty_meta = self._quantize_qty(route, float(plan.qty))
+        if order_qty <= 0:
+            return {
+                "status": "rejected",
+                "reason": "qty_below_one_contract",
+                "order": None,
+                "position": None,
+                "plan": plan,
+                "qty_meta": qty_meta,
+            }
 
         # Ордер ОТПРАВЛЯЕМ ДО записи позиции. Порядок важен: в live отказ биржи
         # (кэп нотионала, недостаток маржи, отклонённый символ) не должен
         # оставлять систему с позицией, которой на бирже нет — иначе все
         # последующие reduceOnly-выходы уходят в пустоту, а PnL книжится по
         # несуществующей сделке.
-        route = route_from_payload(signal.plan_json, signal.symbol, signal.side)
         live = self._submit_live(open_side, signal.symbol, order_qty, entry_price,
                                  reduce_only=False, purpose="trend_open", route=route)
 
@@ -489,6 +509,34 @@ class ExecutionEngine:
 
     def _close_order_side(self, signal_side: str) -> str:
         return "sell" if signal_side == "long" else "buy"
+
+    def _quantize_qty(self, route, qty: float) -> tuple[float, dict]:
+        """Объём, который биржа реально примет, в базовой монете.
+
+        (#contract-quantize-2026-08-03) Единая точка для бумаги и live: если
+        округлять их порознь, они разъезжаются молча. Спот проходит через
+        обычную точность, своп — через размер контракта.
+
+        Ошибка live-слоя не должна ронять бумажный поток, поэтому при любом
+        сбое возвращаем исходный объём: это прежнее поведение, а не новое.
+        """
+        meta: dict = {"source": "raw"}
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+
+            quantized, meta = LIVE_EXECUTOR.quantize_base(
+                route.exchange_symbol, float(qty), route.market_type
+            )
+            meta = dict(meta)
+            meta["source"] = "quantize_base"
+            if quantized > 0:
+                return float(quantized), meta
+            # Ноль контрактов — сделка меньше минимального шага биржи. Это не
+            # повод отправлять «что получится»: пусть отказ будет явным.
+            return 0.0, meta
+        except Exception as exc:  # noqa: BLE001
+            meta = {"source": "raw", "error": f"{type(exc).__name__}: {exc}"}
+            return float(qty), meta
 
     def _submit_live(self, side: str, symbol: str, qty: float, ref_price: float,
                      reduce_only: bool, purpose: str, route=None) -> dict | None:
