@@ -243,6 +243,17 @@ def run_export(path: str, rates: dict, settings, long_market: str) -> list[dict]
     return changes
 
 
+def _db_hint(settings) -> str:
+    """Куда скрипт пытался подключиться — без пароля."""
+    try:
+        import re
+
+        url = str(getattr(settings, "database_url", "") or "")
+        return re.sub(r"//[^@/]*@", "//***@", url) or "(DATABASE_URL не задан)"
+    except Exception:  # noqa: BLE001
+        return "(не удалось прочитать DATABASE_URL)"
+
+
 def run_db(rates: dict, settings, *, apply: bool, revert: bool, long_market: str) -> list[dict]:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api"))
     from core.db import SessionLocal  # type: ignore
@@ -251,6 +262,31 @@ def run_db(rates: dict, settings, *, apply: bool, revert: bool, long_market: str
 
     db = SessionLocal()
     try:
+        # Подключение проверяем отдельно: на русской Windows libpq отдаёт текст
+        # ошибки в cp1251, psycopg2 читает его как UTF-8 и падает на
+        # UnicodeDecodeError — настоящая причина при этом теряется.
+        try:
+            from sqlalchemy import text
+
+            db.execute(text("SELECT 1"))
+        except UnicodeDecodeError:
+            print(
+                "Не удалось подключиться к БД, а текст ошибки libpq не читается "
+                "(кириллица в cp1251 против UTF-8).\n"
+                f"  DSN: {_db_hint(settings)}\n"
+                "  Чтобы увидеть настоящую причину: $env:PGCLIENTENCODING = \"UTF8\"\n"
+                "  Частая причина — внутренний хост Render в .env: он резолвится "
+                "только внутри Render.\n"
+                "  Варианты: внешний DATABASE_URL из дашборда, запуск из шелла "
+                "сервиса на Render, либо работа по выгрузке через --from-export.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Не удалось подключиться к БД: {exc}\n  DSN: {_db_hint(settings)}",
+                  file=sys.stderr)
+            raise SystemExit(2)
+
         signals = (
             db.query(Signal)
             .filter(Signal.status == "closed", Signal.closed_net_pnl.isnot(None))

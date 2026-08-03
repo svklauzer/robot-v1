@@ -401,6 +401,20 @@ class Settings(BaseSettings):
     # в кластере. CORR_CLUSTER_SYMBOLS пусто → весь портфель = один кластер.
     CORR_CLUSTER_ENABLED: bool = True
     CORR_CLUSTER_MAX_SAME_DIR: int = 2
+    # (#engine-slots-2026-08-03) Лимит направления считается ВНУТРИ движка.
+    # Замер 03.08: на медвежьем рынке trend_down дал 60% ленты решений и занимал
+    # оба шортовых слота первым; CRT блокировался `cluster_direction_cap` в 24
+    # случаях из 44 при ожидании +0.134R против −0.012R у trend_down. Дефицитный
+    # слот доставался худшему режиму по очереди прихода, а не по ожиданию.
+    CORR_CLUSTER_PER_ENGINE: bool = True
+    # Портфельный потолок — не для дележа слотов, а чтобы одновременная просадка
+    # осталась в пределах дневного лимита: 5 × RISK_PER_TRADE_PCT(0.4) = 2%
+    # эквити против MAX_DAILY_LOSS_PCT=3. Совпадает с ANTI_DRAIN_MAX_OPEN_POSITIONS.
+    CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR: int = 5
+    # Карантин после стопа — за повтор СВОЕГО сетапа. Тренд-продолжение и свип
+    # CRT это разные гипотезы; запрещать проверку одной из-за провала другой
+    # на том же символе нечем обосновать.
+    REENTRY_COOLDOWN_PER_ENGINE: bool = True
     CORR_CLUSTER_SYMBOLS: str = ""  # "" → вся вселенная один кластер
 
     # (#leak-cost-bleed) Минимальный модельный TP1-нетто после издержек (USDT).

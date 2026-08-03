@@ -773,6 +773,18 @@ class RobotLoop:
                     {s.strip().upper() for s in str(getattr(settings, "CORR_CLUSTER_SYMBOLS", "")).split(",") if s.strip()}
                     or None
                 ),
+                # (#engine-slots-2026-08-03) Лимит направления считается ВНУТРИ
+                # движка. Иначе занятый слот одного закрывает вход другому: на
+                # медвежьем рынке trend_down забирал оба шортовых слота первым, и
+                # CRT блокировался в 24 случаях из 44 при лучшем ожидании.
+                engine=(
+                    ExposureGuard.engine_of_regime(str(getattr(result, "regime", "") or ""))
+                    if bool(getattr(settings, "CORR_CLUSTER_PER_ENGINE", True)) else None
+                ),
+                portfolio_max_same_direction=(
+                    int(getattr(settings, "CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR", 5))
+                    if bool(getattr(settings, "CORR_CLUSTER_ENABLED", True)) else 0
+                ),
             )
 
             if bool(getattr(settings, "ANTI_DRAIN_ENABLED", True)):
@@ -923,6 +935,12 @@ class RobotLoop:
                     current_priority_score=float(production_decision.payload.get("priority_score", 0) or 0),
                     current_setup_score=float(result.setup_quality.get("final_score", 0) if result.setup_quality else 0),
                     current_rr_tp2=float(plan.net_rr_tp2 or 0),
+                    # Карантин — за повтор СВОЕГО сетапа, не за чужой стоп по
+                    # тому же символу (#engine-slots-2026-08-03).
+                    engine=(
+                        ExposureGuard.engine_of_regime(str(getattr(result, "regime", "") or ""))
+                        if bool(getattr(settings, "REENTRY_COOLDOWN_PER_ENGINE", True)) else None
+                    ),
                     # (#reentry-adverse-price-2026-07-25) цена нужна, чтобы не
                     # перезаходить дороже собственного выхода внутри чурн-зоны.
                     entry_price=float(getattr(plan, "entry_price", 0) or 0) or None,

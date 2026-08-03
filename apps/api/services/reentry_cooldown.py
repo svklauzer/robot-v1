@@ -163,8 +163,13 @@ class ReEntryCooldownGuard:
         current_setup_score: float,
         current_rr_tp2: float,
         entry_price: float | None = None,
+        engine: str | None = None,
     ) -> ReEntryCooldownDecision:
-        last_signal = (
+        # (#engine-slots-2026-08-03) Карантин — за ПОВТОР СВОЕГО сетапа, а не за
+        # чужой убыток на том же символе. Тренд-продолжение и свип CRT — разные
+        # гипотезы; наказывать CRT за стоп тренда по BTC значит запрещать проверку
+        # одной идеи из-за провала другой. engine=None → прежнее поведение.
+        query = (
             db.query(Signal)
             .filter(
                 Signal.bot_id == bot_id,
@@ -173,8 +178,17 @@ class ReEntryCooldownGuard:
                 Signal.status == "closed",
             )
             .order_by(Signal.closed_at.desc().nullslast(), Signal.id.desc())
-            .first()
         )
+        if engine is None:
+            last_signal = query.first()
+        else:
+            from services.exposure_guard import ExposureGuard
+
+            last_signal = next(
+                (s for s in query.limit(40).all()
+                 if ExposureGuard.engine_of(s) == engine),
+                None,
+            )
 
         if not last_signal:
             return ReEntryCooldownDecision(
