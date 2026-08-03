@@ -1,5 +1,16 @@
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
+
+# Тест исполняет .sh — без bash он не про код, а про среду. На Windows без
+# git-bash он падал в каждом прогоне и приучал смотреть на красное как на норму.
+# В CI (Linux) bash есть, контракт скрипта проверяется там.
+requires_bash = pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="нужен bash: тест проверяет контракт .sh-скрипта, а не поведение кода",
+)
 
 
 def test_production_compose_disables_schema_auto_create_and_runs_migrations():
@@ -24,6 +35,7 @@ def test_production_runbook_documents_migration_and_readiness_flow():
     assert "Base.metadata.create_all" in text
 
 
+@requires_bash
 def test_backup_restore_smoke_script_has_dry_run_contract():
     root = Path(__file__).resolve().parents[3]
     script = root / "scripts" / "db_backup_restore_smoke.sh"
