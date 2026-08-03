@@ -40,13 +40,23 @@ def test_backup_restore_smoke_script_has_dry_run_contract():
     root = Path(__file__).resolve().parents[3]
     script = root / "scripts" / "db_backup_restore_smoke.sh"
 
+    # check=False намеренно: при check=True падение выглядит как
+    # CalledProcessError без текста, и причина (нет pg_dump в PATH, CRLF в
+    # скрипте, отсутствующая переменная) остаётся невидимой. Здесь она
+    # печатается прямо в сообщении теста.
     result = subprocess.run(
         ["bash", str(script), "--dry-run"],
         cwd=root,
-        check=True,
+        check=False,
         text=True,
         capture_output=True,
     )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"скрипт вернул {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}"
+        )
 
     assert "pg_dump" in result.stdout
     assert "createdb" in result.stdout

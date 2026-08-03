@@ -38,10 +38,17 @@ def _item(symbol="AVAX/USDT", ann=20.0, direction="short_htx_long_kraken", basis
     }
 
 
-def _hist_row(symbol="AVAX/USDT", avg=19.0, stability=95.0, direction="short_htx_long_kraken"):
+def _hist_row(symbol="AVAX/USDT", avg=19.0, stability=95.0,
+              direction="short_htx_long_kraken", conservative=18.0):
+    # (#cross-farb-conservative-2026-08-03) Гейт входа судит по нижнему квантилю
+    # наблюдений, а не по мгновенному спреду. Тесты ниже проверяют МЕХАНИКУ
+    # цикла (вход → начисление → закрытие), поэтому фикстура даёт заведомо
+    # проходную консервативную ставку. Сам гейт проверяется отдельно —
+    # tests/test_cross_farb_conservative_gate.py.
     return {
         "symbol": symbol,
         "avg_spread_ann_pct": avg,
+        "conservative_ann_pct": conservative,
         "direction_stability_pct": stability,
         "dominant_direction": direction,
     }
