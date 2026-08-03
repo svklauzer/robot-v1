@@ -276,8 +276,14 @@ class FundingMonitorService:
 
 class HedgeBuilder:
     def build(self, opportunity: FundingArbOpportunity, notional_usdt: float | None = None) -> dict:
+        # (#arb-capital-2026-08-03) Размер от фактического капитала, а не от
+        # константы. Раньше при любом депозите открывалось ровно 100: на малом
+        # счёте это половина денег, на крупном — простой. Явно переданный
+        # notional_usdt (ручное открытие через API) имеет приоритет.
+        from services.arb_capital import funding_arb_notional
+
         notional = min(
-            float(notional_usdt or settings.FUNDING_ARB_DEFAULT_NOTIONAL_USDT),
+            float(notional_usdt or funding_arb_notional()),
             settings.FUNDING_ARB_MAX_NOTIONAL_USDT,
         )
         spot_qty = notional / float(opportunity.spot_price)

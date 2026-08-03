@@ -59,6 +59,13 @@ def round_trip_fees_usdt(notional: float) -> float:
     return round(float(notional) * (htx_taker + kraken_taker) * 2, 6)
 
 
+def cross_farb_notional_for_report() -> float:
+    """Размер, который движок взял бы прямо сейчас — для /venues/cross-arb."""
+    from services.arb_capital import cross_farb_notional
+
+    return cross_farb_notional()
+
+
 def payback_days(ann_pct: float, notional: float | None = None) -> float | None:
     """За сколько дней carry по ставке `ann_pct` окупит round-trip комиссии.
 
@@ -67,7 +74,11 @@ def payback_days(ann_pct: float, notional: float | None = None) -> float | None:
     """
     if ann_pct is None or abs(ann_pct) <= 1e-9:
         return None
-    notional = float(notional or getattr(settings, "CROSS_FARB_NOTIONAL_USDT", 100.0))
+    if notional is None:
+        from services.arb_capital import cross_farb_notional
+
+        notional = cross_farb_notional()
+    notional = float(notional)
     fees = round_trip_fees_usdt(notional)
     carry_per_day = notional * (abs(float(ann_pct)) / 100.0) / 365.0
     if carry_per_day <= 0:
@@ -361,7 +372,12 @@ class CrossFundingArbEngine:
                 allowed, why = entry_allowed(item, hist_rows.get(item["symbol"]))
                 if not allowed:
                     continue
-                notional = float(getattr(settings, "CROSS_FARB_NOTIONAL_USDT", 100.0))
+                # (#arb-capital-2026-08-03) Доля капитала на момент открытия,
+                # а не константа: одна настройка работает и на бумажных 950,
+                # и на реальном балансе в live.
+                from services.arb_capital import cross_farb_notional
+
+                notional = cross_farb_notional()
                 spread = item["spread"]
                 pos = {
                     "id": uuid.uuid4().hex[:12],
@@ -421,7 +437,9 @@ class CrossFundingArbEngine:
                 "min_stability_pct": float(getattr(settings, "CROSS_FARB_MIN_STABILITY_PCT", 80.0)),
                 "close_ann_pct": float(getattr(settings, "CROSS_FARB_CLOSE_ANN_PCT", 3.0)),
                 "max_hold_days": float(getattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 14.0)),
-                "notional_usdt": float(getattr(settings, "CROSS_FARB_NOTIONAL_USDT", 100.0)),
+                "notional_usdt": cross_farb_notional_for_report(),
+                "notional_share_pct": round(
+                    float(getattr(settings, "CROSS_FARB_NOTIONAL_PCT", 0.105)) * 100, 2),
                 "max_positions": int(getattr(settings, "CROSS_FARB_MAX_POSITIONS", 2)),
             },
             "open": open_positions,

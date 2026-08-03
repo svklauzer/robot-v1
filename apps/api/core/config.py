@@ -1690,7 +1690,17 @@ class Settings(BaseSettings):
     FUNDING_ARB_HONEST_ACCRUAL: bool = True
 
     # Position sizing
-    FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0
+    FUNDING_ARB_DEFAULT_NOTIONAL_USDT: float = 100.0   # legacy, ручное открытие
+    # (#arb-capital-2026-08-03) Размер от ФАКТИЧЕСКОГО капитала. Раньше движок
+    # брал константу 100 при любом депозите: на малом счёте это половина денег,
+    # на крупном — простой. Доля 0.105 при эквити 950 даёт те же ~100, то есть
+    # механизм меняется, а поведение — нет; поднимать долю нужно осознанно.
+    #
+    # ВНИМАНИЕ: позиция занимает ~2 × нотионал капитала (спотовая нога
+    # фондируется целиком, плеча на ней нет). Две позиции по 10% нотионала —
+    # это ~40% депозита, а не 20%.
+    FUNDING_ARB_NOTIONAL_PCT: float = 0.105
+    FUNDING_ARB_MIN_NOTIONAL_USDT: float = 20.0
     FUNDING_ARB_MAX_NOTIONAL_USDT: float = 500.0
     FUNDING_ARB_MAX_OPEN_HEDGES: int = 2         # max concurrent paper/live positions
     # Live: доля МЕНЬШЕГО свободного остатка (spot/swap), которую можно занять под
@@ -1905,7 +1915,13 @@ class Settings(BaseSettings):
     CROSS_FARB_ENABLED: bool = True
     CROSS_FARB_CARRY_FLOOR_ENABLED: bool = True
     CROSS_FARB_SYMBOLS: str = "AVAX/USDT,XRP/USDT,TRX/USDT,SOL/USDT"  # без ARB (шум) и BTC/ETH (тонкий спред)
-    CROSS_FARB_NOTIONAL_USDT: float = 100.0     # консервативный нотионал ноги
+    CROSS_FARB_NOTIONAL_USDT: float = 100.0     # legacy, оставлен для отчётов
+    # (#arb-capital-2026-08-03) Доля капитала вместо константы. Обе ноги —
+    # свопы на разных площадках, маржа считается на каждой отдельно, поэтому
+    # позиция занимает ~2 × нотионал.
+    CROSS_FARB_NOTIONAL_PCT: float = 0.105
+    CROSS_FARB_MIN_NOTIONAL_USDT: float = 20.0
+    CROSS_FARB_MAX_NOTIONAL_USDT: float = 500.0
     CROSS_FARB_MAX_POSITIONS: int = 2
     CROSS_FARB_MIN_ANN_PCT: float = 12.0        # вход: |спред| ≥ … % годовых
     CROSS_FARB_MIN_STABILITY_PCT: float = 80.0  # вход: устойчивость направления за lookback
