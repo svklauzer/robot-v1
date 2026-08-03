@@ -130,8 +130,12 @@ def test_engine_full_cycle(tmp_path, monkeypatch):
     pos = store.load()["open"][0]
     expected_carry = accrue_funding_usdt(pos["notional_usdt"], 25.0 / (24 * 365), 2.0)
     assert pos["funding_accrued_usdt"] == pytest.approx(expected_carry, abs=1e-6)
-    # Базис сжался 0.10 → 0.06 → +0.04 в нашу пользу.
-    assert pos["unrealized_basis_usdt"] == pytest.approx(0.04)
+    # Базис сжался 0.10 → 0.06 → 0.04% в нашу пользу. В деньгах это доля от
+    # фактического нотионала, а не от прежней константы 100.
+    notional = pos["notional_usdt"]
+    assert pos["unrealized_basis_usdt"] == pytest.approx(
+        basis_pnl_usdt(notional, 0.10, 0.06, "short_htx_long_kraken")
+    )
 
     # Шаг 3 (+1 час): спред сжался ниже порога → закрытие с реализацией.
     r3 = engine.step({"status": "ok", "items": [_item(ann=1.0, basis=0.02)]}, now=1000.0 + 3 * HOUR)
@@ -139,9 +143,9 @@ def test_engine_full_cycle(tmp_path, monkeypatch):
     closed = store.load()["closed"][0]
     assert "spread_compressed" in closed["close_reason"]
     expected_realized = (
-        expected_carry + accrue_funding_usdt(100.0, 1.0 / (24 * 365), 1.0)  # carry за 3-й час по новому спреду
-        + basis_pnl_usdt(100.0, 0.10, 0.02, "short_htx_long_kraken")
-        - round_trip_fees_usdt(100.0)
+        expected_carry + accrue_funding_usdt(notional, 1.0 / (24 * 365), 1.0)  # carry за 3-й час по новому спреду
+        + basis_pnl_usdt(notional, 0.10, 0.02, "short_htx_long_kraken")
+        - round_trip_fees_usdt(notional)
     )
     assert closed["realized_usdt"] == pytest.approx(expected_realized, abs=1e-6)
     assert store.load()["realized_total_usdt"] == pytest.approx(expected_realized, abs=1e-6)

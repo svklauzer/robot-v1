@@ -30,7 +30,34 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
+from services.funding_accrual import accrue, collected_usdt, empty_ledger, read_ledger
 from services.htx_client import HTXClient
+
+
+def _assumed_hold_periods() -> int:
+    """Горизонт амортизации комиссии — из ФАКТИЧЕСКОГО потолка удержания.
+
+    (#funding-hold-horizon-2026-08-03) Две настройки описывали одно и то же и
+    разошлись втрое:
+
+        FUNDING_ARB_ASSUMED_HOLD_PERIODS = 10   ← амортизация комиссии в гейте
+        FUNDING_ARB_MAX_HOLD_HOURS       = 240  ← = 30 периодов, реальный выход
+
+    Все пять закрытых позиций держались ровно 30 периодов — они упирались в
+    потолок, а не закрывались по carry. То есть гейт закладывал комиссию на
+    втрое более короткий срок, чем движок держит на самом деле: 0.5%/10 = 0.05%
+    за период вместо честных 0.0167%. Рабочий порог входа получался ≈0.055%
+    против ≈0.022%, и сделки, которые окупились бы, отсекались.
+
+    Теперь горизонт вычисляется, а не задаётся отдельно: при любой правке
+    потолка удержания амортизация едет за ним и разъехаться они не могут.
+    Явный ASSUMED_HOLD_PERIODS остаётся аварийным переопределением.
+    """
+    override = getattr(settings, "FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE", None)
+    if override:
+        return max(1, int(override))
+    max_hours = float(getattr(settings, "FUNDING_ARB_MAX_HOLD_HOURS", 240))
+    return max(1, int(max_hours / 8))
 
 
 @dataclass
@@ -113,7 +140,7 @@ class FundingMonitorService:
         fee_round_trip_pct = self._compute_fee_pct()
 
         # Net yield per period, amortizing fees over the assumed hold duration.
-        assumed_hold = int(getattr(settings, "FUNDING_ARB_ASSUMED_HOLD_PERIODS", 10))
+        assumed_hold = _assumed_hold_periods()
         fee_per_period_pct = fee_round_trip_pct / max(assumed_hold, 1)
         # Basis contributes positively if perp > spot (will converge upward when we close)
         # We conservatively weight it at 30% since convergence is not guaranteed.
@@ -292,7 +319,7 @@ class HedgeBuilder:
         income_per_period = notional * float(opportunity.funding_rate)
         break_even = round(fee_round_trip / income_per_period, 1) if income_per_period > 0 else None
 
-        assumed_hold = int(getattr(settings, "FUNDING_ARB_ASSUMED_HOLD_PERIODS", 10))
+        assumed_hold = _assumed_hold_periods()
         expected_gross = income_per_period * assumed_hold
         expected_net = expected_gross - fee_round_trip
 
@@ -433,7 +460,17 @@ class FundingArbEngine:
             swap_entry_price=opportunity.swap_price,
             entry_funding_rate=opportunity.funding_rate,
             fees_paid=hedge["estimated_round_trip_fees"],
-            raw_json={"hedge": hedge, "orders": raw_orders},
+            raw_json={
+                "hedge": hedge,
+                "orders": raw_orders,
+                # (#funding-periodic-accrual-2026-08-03) Счётчик carry заводится
+                # в момент открытия — иначе первый интервал до первого прохода
+                # цикла сопровождения выпал бы из начисления.
+                "accrual": empty_ledger(
+                    now_ts=datetime.now(timezone.utc).timestamp(),
+                    rate=float(opportunity.funding_rate or 0.0),
+                ),
+            },
         )
         db.add(position)
         db.flush()
@@ -553,7 +590,19 @@ class FundingArbEngine:
                 opened_at = opened_at.replace(tzinfo=timezone.utc)
             held_hours = ((now - opened_at).total_seconds() / 3600) if opened_at else 0
             est_periods = max(held_hours / 8, 0)
-            est_funding = float(position.notional_usdt) * float(position.entry_funding_rate) * est_periods
+
+            # (#funding-periodic-accrual-2026-08-03) Если ledger заполняется —
+            # показываем НАКОПЛЕННОЕ, а не проекцию по ставке входа. Иначе
+            # открытая позиция висит с завышенным плюсом, а на закрытии сумма
+            # схлопывается, и выглядит это как проскальзывание, которого не было.
+            ledger = read_ledger(position.raw_json)
+            if ledger and float(ledger.get("periods") or 0.0) > 0:
+                est_funding = float(ledger.get("accrued_usdt") or 0.0)
+                funding_basis = "per_period"
+                est_periods = float(ledger.get("periods") or 0.0)
+            else:
+                est_funding = float(position.notional_usdt) * float(position.entry_funding_rate) * est_periods
+                funding_basis = "entry_rate_projection"
 
             unrealized = spot_pnl + swap_pnl + est_funding - float(position.fees_paid or 0)
 
@@ -564,6 +613,7 @@ class FundingArbEngine:
                 "spot_pnl": round(spot_pnl, 6),
                 "swap_pnl": round(swap_pnl, 6),
                 "estimated_funding_collected": round(est_funding, 6),
+                "funding_basis": funding_basis,
                 "estimated_periods": round(est_periods, 1),
                 "held_hours": round(held_hours, 2),
                 "unrealized_pnl": round(unrealized, 6),
@@ -612,13 +662,25 @@ class FundingArbEngine:
         # Честное приближение интеграла ставки — среднее между входом и выходом
         # (трапеция). Точный учёт требует пер-периодного начисления, как в
         # cross-arb; это следующий шаг, здесь — снятие основного смещения.
+        # (#funding-periodic-accrual-2026-08-03) Трапеция заменена фактическим
+        # ledger'ом: carry копится по ТЕКУЩЕЙ ставке на каждом шаге сопровождения,
+        # как в межбиржевом арбитраже. Позиции без ledger'а (открыты до правки)
+        # считаются прежним способом, и способ пишется в результат — иначе
+        # старые и новые сделки смешаются в одной статистике незаметно.
         entry_rate = float(position.entry_funding_rate or 0.0)
-        if bool(getattr(settings, "FUNDING_ARB_HONEST_ACCRUAL", True)) and exit_funding_rate is not None:
-            effective_rate = (entry_rate + float(exit_funding_rate)) / 2.0
-        else:
-            effective_rate = entry_rate
-        funding_collected = float(position.notional_usdt) * effective_rate * int(funding_periods)
+        funding_collected, accrual_method = collected_usdt(
+            position.raw_json,
+            notional=float(position.notional_usdt),
+            entry_rate=entry_rate,
+            exit_rate=exit_funding_rate,
+            periods=int(funding_periods),
+            honest_trapezoid=bool(getattr(settings, "FUNDING_ARB_HONEST_ACCRUAL", True)),
+        )
         realized = spot_pnl + swap_pnl + funding_collected - float(position.fees_paid or 0.0)
+
+        raw = dict(position.raw_json or {})
+        raw["accrual_method"] = accrual_method
+        position.raw_json = raw
 
         position.status = "closed"
         position.spot_exit_price = spot_exit_price
@@ -687,6 +749,51 @@ class FundingArbEngine:
         held_hours = max((now - opened_at).total_seconds() / 3600, 0)
         return max(int(held_hours // 8), 1)
 
+    def _accrue_position(
+        self,
+        position: FundingArbPosition,
+        current_rate: float,
+        now_ts: float | None = None,
+    ) -> dict:
+        """Начислить carry позиции с прошлого шага. Возвращает состояние ledger'а.
+
+        Ledger живёт в `raw_json.accrual`. Позиция, открытая до этой правки, его
+        не имеет — заводим от ТЕКУЩЕГО момента, а не задним числом от открытия:
+        начислить за прошлое нечем, ставок в прошлом мы не сохраняли. Такая
+        позиция закроется с пометкой legacy, и это честнее, чем достроить ей
+        историю по одной последней ставке.
+        """
+        now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+        raw = dict(position.raw_json or {})
+        ledger = read_ledger(raw)
+
+        if ledger is None:
+            opened_at = position.opened_at
+            if opened_at is not None and opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            age_sec = (now_ts - opened_at.timestamp()) if opened_at else 0.0
+            ledger = empty_ledger(now_ts=now_ts, rate=current_rate)
+            if age_sec > 900:
+                # Позиция старше правки: часть срока учтена не будет. Метка
+                # нужна, чтобы такие сделки не попадали в чистую выборку.
+                ledger["started_mid_position"] = True
+                ledger["unmeasured_hours"] = round(age_sec / 3600.0, 2)
+        else:
+            ledger = accrue(
+                ledger,
+                notional=float(position.notional_usdt),
+                current_rate=current_rate,
+                now_ts=now_ts,
+            )
+
+        raw["accrual"] = ledger
+        position.raw_json = raw
+        return {
+            "accrued_usdt": ledger.get("accrued_usdt"),
+            "periods": ledger.get("periods"),
+            "rate_now_pct": round(current_rate * 100, 5),
+        }
+
     def evaluate_exits(self, db: Session) -> dict:
         """Evaluate open positions and auto-close paper positions that meet exit criteria."""
         positions = db.query(FundingArbPosition).filter(FundingArbPosition.status == "open").all()
@@ -699,7 +806,16 @@ class FundingArbEngine:
             try:
                 funding = self.client.fetch_funding_rate(position.swap_symbol) or {}
                 current_rate = float(funding.get("fundingRate") or funding.get("rate") or 0.0)
+
+                # (#funding-periodic-accrual-2026-08-03) Carry копится ЗДЕСЬ, по
+                # действующей ставке за фактически прошедшее время. Цикл и так
+                # ходит за ставкой на каждой итерации — начисление ничего не
+                # добавляет к нагрузке, зато к закрытию накапливается факт, а не
+                # оценка по ставке входа.
+                decision_accrual = self._accrue_position(position, current_rate)
+
                 decision = self.exit_engine.should_close(position, current_funding_rate=current_rate)
+                decision["accrual"] = decision_accrual
                 decision["position_id"] = position.id
                 decision["symbol"] = position.symbol
                 decision["current_funding_rate_pct"] = round(current_rate * 100, 4)
@@ -760,6 +876,8 @@ class FundingArbEngine:
         }
 
     def serialize_position(self, item: FundingArbPosition) -> dict:
+        raw = item.raw_json if isinstance(item.raw_json, dict) else {}
+        ledger = read_ledger(raw) or {}
         return {
             "id": item.id,
             "opportunity_id": item.opportunity_id,
@@ -780,6 +898,11 @@ class FundingArbEngine:
             "entry_funding_rate_pct": round(item.entry_funding_rate * 100, 4),
             "funding_periods": item.funding_periods,
             "funding_collected": item.funding_collected,
+            # (#funding-periodic-accrual-2026-08-03) Способ учёта — наружу, иначе
+            # в сводке нельзя отличить измеренный carry от оценённого.
+            "accrual_method": raw.get("accrual_method") or (ledger.get("method") if ledger else None),
+            "accrued_usdt": ledger.get("accrued_usdt"),
+            "accrued_periods": ledger.get("periods"),
             "fees_paid": item.fees_paid,
             "realized_pnl": item.realized_pnl,
             "opened_at": item.opened_at.isoformat() if hasattr(item.opened_at, "isoformat") else item.opened_at,
@@ -862,6 +985,23 @@ class FundingArbEngine:
             except Exception:
                 pass
 
+        # (#funding-periodic-accrual-2026-08-03) Результат разбит по способу
+        # учёта carry. Сделки до правки посчитаны по ставке входа и завышены;
+        # если сложить их с измеренными, движок будет выглядеть прибыльнее,
+        # чем он есть, и понять это по одной итоговой цифре невозможно.
+        by_method: dict[str, dict] = {}
+        for item in closed:
+            raw = item.raw_json if isinstance(item.raw_json, dict) else {}
+            method = str(raw.get("accrual_method") or "entry_rate_legacy")
+            bucket = by_method.setdefault(method, {"trades": 0, "realized_pnl": 0.0, "funding_collected": 0.0})
+            bucket["trades"] += 1
+            bucket["realized_pnl"] += float(item.realized_pnl or 0.0)
+            bucket["funding_collected"] += float(item.funding_collected or 0.0)
+        for bucket in by_method.values():
+            bucket["realized_pnl"] = round(bucket["realized_pnl"], 6)
+            bucket["funding_collected"] = round(bucket["funding_collected"], 6)
+        measured = by_method.get("per_period", {})
+
         return {
             "enabled": settings.ENABLE_FUNDING_ARB,
             "auto_open_paper": bool(getattr(settings, "FUNDING_ARB_AUTO_OPEN_PAPER", True)),
@@ -869,6 +1009,9 @@ class FundingArbEngine:
             "open_positions": len(open_positions),
             "closed_positions": len(closed),
             "realized_pnl": round(realized, 6),
+            "by_accrual_method": by_method,
+            "measured_trades": int(measured.get("trades", 0)),
+            "measured_realized_pnl": round(float(measured.get("realized_pnl", 0.0)), 6),
             "unrealized_pnl_estimate": round(unrealized_total, 6),
             "total_pnl_estimate": round(realized + unrealized_total, 6),
             "latest_opportunities": [monitor.serialize_opportunity(item) for item in latest],

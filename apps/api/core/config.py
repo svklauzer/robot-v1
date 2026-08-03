@@ -1716,8 +1716,15 @@ class Settings(BaseSettings):
     FUNDING_ARB_SCAN_INTERVAL_HOURS: int = 8
     # Automatically open paper positions when a profitable candidate is found
     FUNDING_ARB_AUTO_OPEN_PAPER: bool = True
-    # Expected hold periods for annualized return calculation (default 10 × 8h = 80h)
+    # (#funding-hold-horizon-2026-08-03) БОЛЬШЕ НЕ ЧИТАЕТСЯ НАПРЯМУЮ.
+    # Горизонт амортизации вычисляется из FUNDING_ARB_MAX_HOLD_HOURS / 8 —
+    # см. _assumed_hold_periods() в services/funding_arbitrage.py. Две настройки
+    # описывали одно удержание и разошлись втрое (10 против фактических 30),
+    # из-за чего порог входа был завышен вдвое с лишним.
+    # Оставлено для совместимости и как ориентир; аварийное переопределение —
+    # FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE.
     FUNDING_ARB_ASSUMED_HOLD_PERIODS: int = 10
+    FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE: int = 0
 
     # Legacy — kept for compatibility
 
