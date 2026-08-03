@@ -20,6 +20,11 @@ class ExposureGuardResult:
     free_margin: float
     required_margin: float
     cluster_same_dir_count: int = 0
+    # Однонаправленные позиции ВСЕГО портфеля — против cluster_same_dir_count,
+    # который считается внутри движка. Расхождение этих двух чисел показывает,
+    # сколько слотов держат чужие движки.
+    portfolio_same_dir_count: int = 0
+    engine: str | None = None
 
 
 class ExposureGuard:
