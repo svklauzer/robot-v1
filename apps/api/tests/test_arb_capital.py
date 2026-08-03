@@ -81,35 +81,30 @@ def test_zero_balance_falls_back_not_to_zero(monkeypatch):
 
 
 # ── интеграция ──────────────────────────────────────────────────────────────
+class _Opportunity:
+    """Стаб вместо ORM-модели: `HedgeBuilder.build` читает ровно три поля.
+
+    Настоящая FundingArbOpportunity — это таблица, и тянуть её сюда значило бы
+    завязать тест на схему БД ради трёх чисел.
+    """
+
+    spot_price = 0.07
+    swap_price = 0.07
+    funding_rate = 0.0004
+
+
 def test_hedge_builder_uses_capital_share(monkeypatch):
-    from services.funding_arbitrage import FundingArbOpportunity, HedgeBuilder
+    from services.funding_arbitrage import HedgeBuilder
 
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
-    opp = FundingArbOpportunity(
-        symbol="DOGE/USDT", spot_symbol="DOGE/USDT", swap_symbol="DOGE/USDT:USDT",
-        funding_rate=0.0004, funding_rate_pct=0.04, annualized_rate_pct=43.8,
-        spot_price=0.07, swap_price=0.07, basis_pct=0.0,
-        fee_round_trip_pct=0.5, net_yield_per_period_pct=0.01,
-        break_even_periods=12.5, annualized_net_yield_pct=10.0,
-        estimated_edge_pct=0.01, status="ok", reject_reason=None,
-        next_funding_at=None,
-    )
-    built = HedgeBuilder().build(opp)
+    built = HedgeBuilder().build(_Opportunity())
     assert built["notional_usdt"] == pytest.approx(210.0, abs=1.0)
 
 
 def test_explicit_notional_overrides_share(monkeypatch):
     """Ручное открытие через API задаёт размер явно и долей не перебивается."""
-    from services.funding_arbitrage import FundingArbOpportunity, HedgeBuilder
+    from services.funding_arbitrage import HedgeBuilder
 
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
-    opp = FundingArbOpportunity(
-        symbol="DOGE/USDT", spot_symbol="DOGE/USDT", swap_symbol="DOGE/USDT:USDT",
-        funding_rate=0.0004, funding_rate_pct=0.04, annualized_rate_pct=43.8,
-        spot_price=0.07, swap_price=0.07, basis_pct=0.0,
-        fee_round_trip_pct=0.5, net_yield_per_period_pct=0.01,
-        break_even_periods=12.5, annualized_net_yield_pct=10.0,
-        estimated_edge_pct=0.01, status="ok", reject_reason=None,
-        next_funding_at=None,
-    )
-    assert HedgeBuilder().build(opp, notional_usdt=75.0)["notional_usdt"] == pytest.approx(75.0)
+    built = HedgeBuilder().build(_Opportunity(), notional_usdt=75.0)
+    assert built["notional_usdt"] == pytest.approx(75.0)

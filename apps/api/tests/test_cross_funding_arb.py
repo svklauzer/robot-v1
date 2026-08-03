@@ -117,7 +117,12 @@ def test_engine_full_cycle(tmp_path, monkeypatch):
     pos = store.load()["open"][0]
     assert pos["symbol"] == "AVAX/USDT"
     assert pos["entry_basis_pct"] == pytest.approx(0.10)
-    assert pos["fees_round_trip_usdt"] == pytest.approx(round_trip_fees_usdt(100.0))
+    # (#arb-capital-2026-08-03) Нотионал — доля капитала, а не константа 100.
+    # Проверяем СОГЛАСОВАННОСТЬ: комиссия обязана соответствовать тому размеру,
+    # который движок реально взял, каким бы он ни был.
+    assert pos["fees_round_trip_usdt"] == pytest.approx(
+        round_trip_fees_usdt(pos["notional_usdt"])
+    )
 
     # Шаг 2 (+2 часа): начисление carry, позиция жива.
     r2 = engine.step({"status": "ok", "items": [_item(ann=25.0, basis=0.06)]}, now=1000.0 + 2 * HOUR)
