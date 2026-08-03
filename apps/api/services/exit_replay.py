@@ -523,7 +523,19 @@ def build_trend(limit: int = 2000) -> dict:
         "actual_avg_pct": round(actual_total / len(trades), 4),
         "booked_total_pct": round(sum(t["booked_pct"] for t in trades), 4),
         "phantom_fill_trades": phantom_count,
-        "fixed": {"ride_arm_pct": ride_arm, "band_floor_pct": band_floor},
+        # (#band-corridor-2026-08-03) ride_arm БОЛЬШЕ НЕ фиксирован — он стал
+        # осью перебора, потому что именно его расстояние до band_arm задаёт
+        # коридор, в котором полоса перехватывает управление у трейла.
+        "fixed": {"band_floor_pct": band_floor},
+        "axes": {
+            "ride_arm_pct": ride_arms,
+            "band_arm_pct": band_arms,
+            "band_giveback_share": band_gives,
+            "ride_trail_share": ride_trails,
+            "be_arm_pct": be_arms,
+            "be_floor_pct": be_floors,
+            "min_protective_pct": min_protectives,
+        },
         "current_config": current,
         "current_rank": (variants.index(current_row) + 1) if current_row else None,
         "current_total_pct": current_row["total_pct"] if current_row else None,
@@ -533,13 +545,19 @@ def build_trend(limit: int = 2000) -> dict:
         "overfit_check": split,
         "variants": variants[:40],
         "note": (
-            "Сравнение по gross-%: издержки у всех вариантов одинаковы (ровно один "
-            "выход), комиссии сокращаются. Выход книжится по ТЕКУЩЕЙ точке траектории "
-            "— стоп не исполняется лучше рынка. Базис actual_* честный: фантомные "
-            "филлы заменены последней точкой траектории. Ось min_protective_pct "
-            "содержит прежнее боевое 1.80 и правку 0.40 — разница между ними и есть "
-            "измеренный эффект правки 27.07. Выборка меньше 30 сделок доказательством "
-            "не является; смотрите overfit_check прежде чем что-то менять."
+            "Сравнение по ЧИСТЫМ %. Прежняя формулировка «издержки у всех вариантов "
+            "одинаковы, комиссии сокращаются» была неверна и стоила направленного "
+            "смещения: точки traj валовые, а базис actual_* — чистый, поэтому каждый "
+            "ранний выход получал даром ~0.14% (#replay-units-2026-08-03). Подарок был "
+            "пропорционален числу ранних выходов, то есть доставался вариантам, которые "
+            "СИЛЬНЕЕ меняют поведение. Теперь ранний выход платит круг издержек по факту "
+            "сделки. Выход книжится по ТЕКУЩЕЙ точке траектории — стоп не исполняется "
+            "лучше рынка. Базис actual_* честный: фантомные филлы заменены последней "
+            "точкой траектории. Ось min_protective_pct содержит прежнее боевое 1.80 и "
+            "правку 0.40. Ось ride_arm_pct задаёт правую границу коридора, в котором "
+            "полоса захвата перехватывает управление у трейла: смотрите "
+            "band_corridor_width у лидера. Выборка меньше 30 сделок доказательством не "
+            "является; смотрите overfit_check прежде чем что-то менять."
         ),
     }
 
@@ -637,7 +655,14 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
         return total
 
     band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
-    ride_arm = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8))
+    # (#band-corridor-2026-08-03) ride_arm берём ИЗ ПАРАМЕТРОВ варианта, а не
+    # из конфига. Иначе walk-forward оценивал бы лидера с чужим значением оси:
+    # перебор выбрал бы одну правую границу коридора, а проверка вне выборки
+    # мерила бы другую — и по новой оси проверка ничего бы не значила.
+    ride_arm = float(params.get(
+        "ride_arm_pct",
+        getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8),
+    ))
     for t in trades:
         total += _replay_trend_one(
             t["traj"], t["final_pct"],
@@ -669,6 +694,9 @@ def _current_params(regime: str) -> dict:
         "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
         "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
         "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        # Боевое значение правой границы коридора — чтобы «текущий конфиг» в
+        # walk-forward считался тем же способом, что и варианты перебора.
+        "ride_arm_pct": float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
         "capture_start_pct": (float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.9))
                               if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)) else None),
         "capture_drawdown_pct": float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30)),

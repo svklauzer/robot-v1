@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from services import exit_replay as er
@@ -87,6 +89,46 @@ def test_trend_ladder_exits_pay_the_round_trip():
 
 
 # ── направленность смещения ─────────────────────────────────────────────────
+def test_build_trend_runs_end_to_end(tmp_path, monkeypatch):
+    """Дымоход по всей сборке отчёта.
+
+    (#band-corridor-2026-08-03) Когда ride_arm стал осью перебора, ссылка на
+    него осталась висеть в блоке `fixed` за пределами цикла. Локально это не
+    падало: без данных `build_trend` выходит раньше по ветке no_data, и до
+    строки исполнение не доходит. NameError вылез в проде.
+
+    Тест кормит сборку минимальными данными, чтобы дойти до самого конца.
+    """
+    row = {
+        "trade_mode": "trend",
+        "result_pct": 0.20,
+        "qty": 1.0,
+        "closed_total_cost": 0.10,
+        "lifecycle": {
+            "entry_price": 100.0,
+            "mfe_pct": 1.0,
+            "traj": [[0, 0.0], [60, 1.0], [120, 0.4]],
+        },
+    }
+    path = tmp_path / "outcomes.jsonl"
+    path.write_text("\n".join(json.dumps(row) for _ in range(6)), encoding="utf-8")
+
+    class _Logger:
+        def __init__(self):
+            self.path = str(path)
+
+    monkeypatch.setattr("services.ml_trade_logger.MLTradeLogger", _Logger)
+
+    out = er.build_trend(limit=100)
+
+    assert out["status"] == "ok"
+    assert out["trades_replayed"] == 6
+    # Правая граница коридора обязана быть осью, а не константой.
+    assert "ride_arm_pct" not in out["fixed"]
+    assert out["axes"]["ride_arm_pct"]
+    assert "band_corridor_width" in out["best"]
+
+
 def test_the_bias_favoured_whichever_variant_changed_more():
     """Суть бага: подарок пропорционален числу ранних выходов.
 
