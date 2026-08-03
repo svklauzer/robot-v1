@@ -187,6 +187,8 @@ services:
         value: "false"
       - key: GRID_SYMBOLS
         value: BTC/USDT,ETH/USDT,TRX/USDT
+      - key: GRID_KILL_SWITCH_ENABLED
+        value: "true"
 
       # ── Продукт / подписки ────────────────────────────────────────────────
       - key: AFFILIATE_FREE_VIP_DAYS
