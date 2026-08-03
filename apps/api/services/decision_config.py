@@ -136,6 +136,21 @@ def snapshot(
             "ob_gate_entries": bool(_g("OB_GATE_ENTRIES", True)),
             "ob_cvd_min_trades": int(_g("OB_CVD_MIN_TRADES", 0) or 0),
             "corr_cluster_max_same_dir": int(_g("CORR_CLUSTER_MAX_SAME_DIR", 0) or 0),
+            # (#engine-slots-2026-08-03) Считается ли лимит направления внутри
+            # движка. Без этого поля сделки до и после правки неразличимы в
+            # снимке, хотя принимались по разным правилам.
+            "corr_cluster_per_engine": bool(_g("CORR_CLUSTER_PER_ENGINE", False)),
+            "corr_cluster_portfolio_max_same_dir": int(
+                _g("CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR", 0) or 0),
+            "reentry_cooldown_per_engine": bool(_g("REENTRY_COOLDOWN_PER_ENGINE", False)),
+            # Наблюдающие оси: на решение не влияют, но их пороги определяют,
+            # что записано в plan_json.trend_trigger и plan_json.tz_shadow.
+            "trend_trigger_mode": str(_g("TREND_TRIGGER_MODE", "shadow")).lower(),
+            "trend_max_extension_atr": float(_g("TREND_MAX_EXTENSION_ATR", 0)),
+            "tz_adx_min": float(_g("TZ_ADX_MIN", 0)),
+            "tz_stoch_zone": float(_g("TZ_STOCH_ZONE", 0)),
+            "setup_reach_enabled": bool(_g("SETUP_REACH_ENABLED", False)),
+            "regime_exp_sizing_enabled": bool(_g("REGIME_EXP_SIZING_ENABLED", False)),
         },
         "ml": {
             "mode": str(_g("ML_MODE", "off")).lower(),
