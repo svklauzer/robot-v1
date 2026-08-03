@@ -59,9 +59,41 @@ def round_trip_fees_usdt(notional: float) -> float:
     return round(float(notional) * (htx_taker + kraken_taker) * 2, 6)
 
 
+def payback_days(ann_pct: float, notional: float | None = None) -> float | None:
+    """За сколько дней carry по ставке `ann_pct` окупит round-trip комиссии.
+
+    Обе величины пропорциональны нотионалу, поэтому он сокращается: срок
+    окупаемости от размера позиции не зависит вообще.
+    """
+    if ann_pct is None or abs(ann_pct) <= 1e-9:
+        return None
+    notional = float(notional or getattr(settings, "CROSS_FARB_NOTIONAL_USDT", 100.0))
+    fees = round_trip_fees_usdt(notional)
+    carry_per_day = notional * (abs(float(ann_pct)) / 100.0) / 365.0
+    if carry_per_day <= 0:
+        return None
+    return fees / carry_per_day
+
+
 def entry_allowed(item: dict, history_row: dict | None) -> tuple[bool, str]:
-    """Гейт входа: текущий спред ≥ порога И направление устойчиво за lookback
-    (история P1). Без истории — не входим (нет доказательства устойчивости)."""
+    """Гейт входа по КОНСЕРВАТИВНОЙ ставке, а не по мгновенному спреду.
+
+    (#cross-farb-conservative-2026-08-03) Раньше решение принималось по
+    `spread_annualized_pct` последнего снимка. Спред между площадками
+    возвращается к среднему за часы, поэтому реализованная ставка выходила
+    2–10% от той, по которой входили:
+
+        XRP  вход 21.93% год.  держали 6.05 дня  → реализовано 0.51% год.
+        TRX  вход 25.44% год.  держали 0.89 дня  → реализовано 2.52% год.
+
+    При таких ставках окупаемость 0.2% комиссий занимает 40–150 дней против
+    лимита удержания в 14. Итог: 11 закрытых из 11 в минусе, суммарно −1.53.
+
+    Теперь порог применяется к нижнему квантилю наблюдений (знак приведён к
+    доминирующему направлению), и отдельно проверяется, что при этой ставке
+    carry успевает покрыть комиссии за отведённое время. Мгновенный спред
+    остаётся необходимым условием — входить в уже схлопнувшийся смысла нет.
+    """
     spread = item.get("spread") or {}
     ann = float(spread.get("spread_annualized_pct") or 0.0)
     min_ann = float(getattr(settings, "CROSS_FARB_MIN_ANN_PCT", 12.0))
@@ -75,10 +107,32 @@ def entry_allowed(item: dict, history_row: dict | None) -> tuple[bool, str]:
         return False, f"stability_below_min:{stability:.1f}<{min_stab}"
     if history_row.get("dominant_direction") != spread.get("direction"):
         return False, "current_direction_vs_dominant_mismatch"
-    avg_ann = float(history_row.get("avg_spread_ann_pct") or 0.0)
-    if abs(avg_ann) < min_ann * 0.5:
-        return False, f"avg_spread_too_thin:{avg_ann:.2f}"
-    return True, "ok"
+
+    conservative = history_row.get("conservative_ann_pct")
+    if conservative is None:
+        # Старый агрегат без квантиля — не гадаем, отказываем явно.
+        return False, "no_conservative_estimate"
+    conservative = float(conservative)
+
+    # Квантиль знаковый: отрицательный означает, что в четверти наблюдений
+    # carry шёл ПРОТИВ позиции. Такой вход оплачивать нечем.
+    min_conservative = float(getattr(settings, "CROSS_FARB_MIN_CONSERVATIVE_ANN_PCT", 8.0))
+    if conservative < min_conservative:
+        return False, f"conservative_below_min:{conservative:.2f}<{min_conservative}"
+
+    payback = payback_days(conservative)
+    max_hold = float(getattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 14.0))
+    margin = float(getattr(settings, "CROSS_FARB_PAYBACK_MARGIN", 2.0))
+    if payback is None:
+        return False, "payback_not_computable"
+    # Запас кратности: окупиться ровно к моменту принудительного закрытия
+    # значит выйти в ноль. Требуем, чтобы carry успел покрыть комиссии
+    # минимум `margin` раз за отведённое время.
+    if payback * margin > max_hold:
+        return False, (f"payback_too_slow:{payback:.1f}д×{margin:.0f}>{max_hold:.0f}д "
+                       f"(cons={conservative:.2f}%)")
+
+    return True, f"ok:cons={conservative:.2f}%,payback={payback:.1f}д"
 
 
 def exit_reason(position: dict, item: dict, now_ts: float) -> str | None:

@@ -351,12 +351,35 @@ class VenueSpreadHistory:
             stability = round(dirs.count(dominant) / len(dirs) * 100, 1) if dirs else None
             break_evens = [float(i["break_even"]) for _, i in entries if i.get("break_even") is not None]
             last_ts, last_item = max(entries, key=lambda e: e[0])
+
+            # (#cross-farb-conservative-2026-08-03) Консервативная оценка carry
+            # В СТОРОНУ доминирующего направления. Гейт входа раньше судил по
+            # мгновенному спреду, а спред между площадками возвращается к
+            # среднему за часы: по факту реализованная ставка выходила 2–10% от
+            # той, по которой входили (XRP: вход 21.93% год., реализовано 0.51%).
+            # Отсюда 11 закрытых из 11 в минусе.
+            #
+            # Берём нижний квантиль наблюдений, знак приведён к доминирующему
+            # направлению: закладываемся на плохой сценарий в пределах
+            # наблюдавшегося, а не на удачный замер. Тот же принцип, что во
+            # внутрибиржевом арбитраже (FUNDING_ARB_CONSERVATIVE_QUANTILE).
+            signed = [
+                s if str(d) == str(dominant) else -s
+                for s, d in zip(spreads, dirs)
+            ]
+            quantile = float(getattr(settings, "CROSS_FARB_CONSERVATIVE_QUANTILE", 0.25))
+            ordered = sorted(signed)
+            index = max(0, min(int(round(quantile * (len(ordered) - 1))), len(ordered) - 1))
+            conservative_ann = round(ordered[index], 2)
+
             by_symbol.append({
                 "symbol": symbol,
                 "snapshots": len(entries),
                 "avg_spread_ann_pct": round(sum(spreads) / len(spreads), 2),
                 "min_spread_ann_pct": round(min(spreads), 2),
                 "max_spread_ann_pct": round(max(spreads), 2),
+                # Ставка, по которой считается окупаемость на входе.
+                "conservative_ann_pct": conservative_ann,
                 "dominant_direction": dominant,
                 "direction_stability_pct": stability,
                 "avg_break_even_days": round(sum(break_evens) / len(break_evens), 1) if break_evens else None,
