@@ -18,7 +18,7 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
-from services import trend_trigger
+from services import trend_trigger, tz_entry_shadow
 from services.regime_expectancy_sizer import RegimeExpectancySizer
 from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
@@ -1186,6 +1186,15 @@ class RobotLoop:
                     # входы с разной extension_atr и узнать, работает ли порог,
                     # вместо того чтобы догадываться.
                     "trend_trigger": _trigger.as_dict(),
+                    # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
+                    # OBV. Только наблюдение: считаем и пишем, вход не трогаем.
+                    # Через несколько сотен сделок станет видно, какие входы
+                    # каждое условие отсекло бы и чем они закончились.
+                    "tz_shadow": tz_entry_shadow.evaluate(
+                        getattr(result, "timeframes", None),
+                        regime=str(getattr(result, "regime", "") or ""),
+                        side=result.action,
+                    ).as_dict(),
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в

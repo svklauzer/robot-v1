@@ -57,6 +57,19 @@ class TimeframeContext:
     volatility: str
     volume_state: str
 
+    # (#tz-indicators-2026-08-03) Считаются, но на решения НЕ влияют — режим
+    # наблюдения. Закрывают две дыры, видные в замере: меры силы движения в
+    # системе не было вовсе, а точки входа не было вообще (зона = last ±0.3%).
+    # По /analytics/mfe-mae у trend_up edge_ratio 0.943 — ход против сделки
+    # больше хода за неё; выходом это не лечится, только отбором входа.
+    adx14: float = 0.0
+    plus_di: float = 0.0
+    minus_di: float = 0.0
+    stoch_rsi_k: float = 0.0
+    stoch_rsi_d: float = 0.0
+    obv: float = 0.0
+    obv_ema20: float = 0.0
+
 
 @dataclass
 class MarketIntelligenceResult:
@@ -377,6 +390,21 @@ class MarketIntelligenceEngine:
         volatility = self._volatility_state(atr14, last_close)
         volume_state = self._volume_state(volume_ratio)
 
+        # Режим наблюдения: считаем, пишем в план, на решения не влияем.
+        # Сбой любого из них не имеет права уронить скан.
+        try:
+            adx14, plus_di, minus_di = self._adx(high, low, close)
+        except Exception:  # noqa: BLE001
+            adx14 = plus_di = minus_di = 0.0
+        try:
+            stoch_k, stoch_d = self._stoch_rsi(close)
+        except Exception:  # noqa: BLE001
+            stoch_k = stoch_d = 0.0
+        try:
+            obv_value, obv_ema = self._obv(close, volume)
+        except Exception:  # noqa: BLE001
+            obv_value = obv_ema = 0.0
+
         return TimeframeContext(
             timeframe=timeframe,
             last_close=round(float(last_close), 8),
@@ -402,6 +430,14 @@ class MarketIntelligenceEngine:
             momentum=momentum,
             volatility=volatility,
             volume_state=volume_state,
+
+            adx14=round(float(adx14), 4),
+            plus_di=round(float(plus_di), 4),
+            minus_di=round(float(minus_di), 4),
+            stoch_rsi_k=round(float(stoch_k), 4),
+            stoch_rsi_d=round(float(stoch_d), 4),
+            obv=round(float(obv_value), 4),
+            obv_ema20=round(float(obv_ema), 4),
         )
 
     def _score_context(self, ctx: TimeframeContext) -> dict[str, float]:
@@ -992,6 +1028,95 @@ class MarketIntelligenceEngine:
         ).max(axis=1)
 
         return tr.rolling(period).mean().iloc[-1]
+
+    # ── Индикаторы режима наблюдения (#tz-indicators-2026-08-03) ─────────────
+    def _adx(self, high: pd.Series, low: pd.Series, close: pd.Series,
+             period: int = 14) -> tuple[float, float, float]:
+        """ADX и направленные индикаторы по Уайлдеру: (adx, +DI, −DI).
+
+        Меры силы движения в системе не было вообще: `price > ema20 > ema50`
+        одинаково истинно и в импульсе, и в вялом дрейфе. ADX разделяет их.
+        """
+        up = high.diff()
+        down = -low.diff()
+        plus_dm = ((up > down) & (up > 0)) * up.clip(lower=0)
+        minus_dm = ((down > up) & (down > 0)) * down.clip(lower=0)
+
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+
+        # Сглаживание Уайлдера = EMA с alpha 1/period.
+        atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+        plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, 1e-12)
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, 1e-12)
+
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-12)
+        adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+
+        def _last(series):
+            try:
+                value = float(series.iloc[-1])
+            except (IndexError, TypeError, ValueError):
+                return 0.0
+            return value if value == value else 0.0  # NaN → 0
+
+        return _last(adx), _last(plus_di), _last(minus_di)
+
+    def _rsi_series(self, close: pd.Series, period: int = 14) -> pd.Series:
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(period).mean()
+        loss = (-delta.clip(upper=0)).rolling(period).mean()
+        rs = gain / loss.replace(0, 1e-12)
+        return 100 - (100 / (1 + rs))
+
+    def _stoch_rsi(self, close: pd.Series, rsi_period: int = 14,
+                   stoch_period: int = 14, k_smooth: int = 3,
+                   d_smooth: int = 3) -> tuple[float, float]:
+        """Stochastic RSI (14,14,3,3) → (%K, %D) в шкале 0..100.
+
+        Даёт то, чего у входа нет вовсе: точку. Сейчас зона входа — `last ±0.3%`,
+        то есть цена в момент, когда до символа дошёл скан.
+        """
+        rsi = self._rsi_series(close, rsi_period)
+        low = rsi.rolling(stoch_period).min()
+        high = rsi.rolling(stoch_period).max()
+        stoch = 100 * (rsi - low) / (high - low).replace(0, 1e-12)
+        k = stoch.rolling(k_smooth).mean()
+        d = k.rolling(d_smooth).mean()
+
+        def _last(series):
+            try:
+                value = float(series.iloc[-1])
+            except (IndexError, TypeError, ValueError):
+                return 0.0
+            return value if value == value else 0.0
+
+        return _last(k), _last(d)
+
+    def _obv(self, close: pd.Series, volume: pd.Series,
+             ema_period: int = 20) -> tuple[float, float]:
+        """OBV и его EMA. Отвечает «куда идёт объём», а не «есть ли он».
+
+        `volume_ratio` в системе меряет только величину. Для перпетуала точнее
+        был бы CVD из стакана, но он считается на другом горизонте и в решении
+        о входе не участвует — OBV даёт свечной эквивалент на том же ТФ.
+        """
+        direction = close.diff().apply(lambda x: 1.0 if x > 0 else (-1.0 if x < 0 else 0.0))
+        obv = (direction * volume).fillna(0).cumsum()
+        obv_ema = obv.ewm(span=ema_period, adjust=False).mean()
+
+        def _last(series):
+            try:
+                value = float(series.iloc[-1])
+            except (IndexError, TypeError, ValueError):
+                return 0.0
+            return value if value == value else 0.0
+
+        return _last(obv), _last(obv_ema)
 
     def _reason_join(self, parts: list[str]) -> str:
         return "_".join([p for p in parts if p])
