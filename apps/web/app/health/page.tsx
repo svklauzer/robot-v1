@@ -209,7 +209,24 @@ export default function HealthPage() {
           <InfoRow label="Symbols" value={(fundingArb?.symbols || []).join(", ") || "-"} />
           <InfoRow label="Open hedges" value={fundingArb?.open_positions ?? 0} danger={(fundingArb?.open_positions ?? 0) > 0} />
           <InfoRow label="Closed hedges" value={fundingArb?.closed_positions ?? 0} />
-          <InfoRow label="Realized P&L" value={`${fundingArb?.realized_pnl ?? 0} USDT`} danger={(fundingArb?.realized_pnl ?? 0) < 0} />
+          {/* (#funding-periodic-accrual-2026-08-03) Тот же разрез, что и на
+              странице Funding Arb. Пока measured_trades = 0, эта цифра посчитана
+              по ставке ВХОДА и завышена на 0.25–0.60 на сделку — показывать её
+              здесь без пометки значит повторять ту же ошибку в другом месте. */}
+          <InfoRow
+            label="Realized P&L"
+            value={
+              (fundingArb?.measured_trades ?? 0) > 0
+                ? `${fundingArb?.realized_pnl ?? 0} USDT`
+                : `${fundingArb?.realized_pnl ?? 0} USDT (оценка)`
+            }
+            danger={(fundingArb?.realized_pnl ?? 0) < 0 || (fundingArb?.measured_trades ?? 0) === 0}
+          />
+          <InfoRow
+            label="Измерено сделок"
+            value={`${fundingArb?.measured_trades ?? 0} из ${fundingArb?.closed_positions ?? 0}`}
+            danger={(fundingArb?.measured_trades ?? 0) === 0}
+          />
           <InfoRow label="Latest scans" value={(fundingArb?.latest_opportunities || []).length} />
         </Panel>
 
@@ -509,11 +526,19 @@ function Panel({ title, children }: { title: string; children: any }) {
 }
 
 function LoopRow({ title, enabled, created, done }: { title: string; enabled: any; created: any; done: any }) {
+  // `task_done = true` для фонового цикла означает, что он ЗАВЕРШИЛСЯ, то есть
+  // упал или вышел — здоровое состояние это false. Показывать сырой булев
+  // «Task done: false» пятью строками подряд значит пугать нормой: экран
+  // выглядит как пять провалов, хотя всё работает.
+  const alive = Boolean(created) && !Boolean(done);
   return (
     <div className="rounded-xl border border-emerald-950 bg-black/20 p-3">
       <InfoRow label={title} value={enabled ? "enabled" : "disabled"} danger={!enabled} />
-      <InfoRow label="Task created" value={String(Boolean(created))} />
-      <InfoRow label="Task done" value={String(Boolean(done))} danger={Boolean(done)} />
+      <InfoRow
+        label="Состояние"
+        value={!created ? "не запущен" : done ? "ОСТАНОВЛЕН" : "работает"}
+        danger={Boolean(enabled) && !alive}
+      />
     </div>
   );
 }

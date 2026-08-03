@@ -69,6 +69,17 @@ class TimeframeContext:
     stoch_rsi_d: float = 0.0
     obv: float = 0.0
     obv_ema20: float = 0.0
+    # (#tz-trend-engine-2026-08-03) KAMA — линия, относительно которой вход
+    # вообще имеет смысл. Без неё зона входа задавалась как last×0.997…1.003,
+    # то есть «цена в момент, когда до символа дошёл сканер»: вход был
+    # случайной выборкой из цен внутри тренда. Отсюда edge_ratio 0.943.
+    kama: float = 0.0
+    # ADX предыдущего бара — условие ТЗ «ADX выше 23 И имеет ВОСХОДЯЩУЮ
+    # траекторию» без памяти проверить нельзя.
+    adx14_prev: float = 0.0
+    # Stoch RSI предыдущего бара — пересечение %K/%D требует двух точек.
+    stoch_rsi_k_prev: float = 0.0
+    stoch_rsi_d_prev: float = 0.0
 
 
 @dataclass
@@ -405,6 +416,29 @@ class MarketIntelligenceEngine:
         except Exception:  # noqa: BLE001
             obv_value = obv_ema = 0.0
 
+        # (#tz-trend-engine-2026-08-03) KAMA и «предыдущие» значения. Условия ТЗ
+        # требуют памяти: «ADX выше 23 И имеет ВОСХОДЯЩУЮ траекторию» и
+        # «%K пересекает %D снизу вверх» — обе проверки невозможны по одной точке.
+        try:
+            from services.kama import kama_last
+
+            kama_value = kama_last(
+                [float(x) for x in close],
+                er_period=int(getattr(settings, "KAMA_ER_PERIOD", 10)),
+                fast=int(getattr(settings, "KAMA_FAST", 2)),
+                slow=int(getattr(settings, "KAMA_SLOW", 30)),
+            ) or 0.0
+        except Exception:  # noqa: BLE001
+            kama_value = 0.0
+        try:
+            adx_prev, _, _ = self._adx(high[:-1], low[:-1], close[:-1])
+        except Exception:  # noqa: BLE001
+            adx_prev = 0.0
+        try:
+            k_prev, d_prev = self._stoch_rsi(close[:-1])
+        except Exception:  # noqa: BLE001
+            k_prev = d_prev = 0.0
+
         return TimeframeContext(
             timeframe=timeframe,
             last_close=round(float(last_close), 8),
@@ -438,6 +472,10 @@ class MarketIntelligenceEngine:
             stoch_rsi_d=round(float(stoch_d), 4),
             obv=round(float(obv_value), 4),
             obv_ema20=round(float(obv_ema), 4),
+            kama=round(float(kama_value), 8),
+            adx14_prev=round(float(adx_prev), 4),
+            stoch_rsi_k_prev=round(float(k_prev), 4),
+            stoch_rsi_d_prev=round(float(d_prev), 4),
         )
 
     def _score_context(self, ctx: TimeframeContext) -> dict[str, float]:

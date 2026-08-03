@@ -149,6 +149,17 @@ def snapshot(
             "trend_max_extension_atr": float(_g("TREND_MAX_EXTENSION_ATR", 0)),
             "tz_adx_min": float(_g("TZ_ADX_MIN", 0)),
             "tz_stoch_zone": float(_g("TZ_STOCH_ZONE", 0)),
+            # (#tz-enforce-2026-08-03) Условия ТЗ перестали быть только
+            # наблюдающими — режим и список активных условий меняют ВЫБОРКУ
+            # входов, поэтому обязаны попасть в отпечаток: иначе сделки до и
+            # после включения смешаются в одной статистике незаметно.
+            "tz_mode": str(_g("TZ_MODE", "shadow")).lower(),
+            "tz_enforce_conditions": str(_g("TZ_ENFORCE_CONDITIONS", "")),
+            "tz_enforce_min_sample": int(_g("TZ_ENFORCE_MIN_SAMPLE", 0)),
+            # (#tp-reachability-2026-08-03) Порог достижимости цели — тоже ось,
+            # меняющая выборку.
+            "tp_reach_mode": str(_g("TP_REACH_MODE", "shadow")).lower(),
+            "tp_reach_max_ratio": float(_g("TP_REACH_MAX_RATIO", 0)),
             "setup_reach_enabled": bool(_g("SETUP_REACH_ENABLED", False)),
             "regime_exp_sizing_enabled": bool(_g("REGIME_EXP_SIZING_ENABLED", False)),
         },

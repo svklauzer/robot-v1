@@ -18,7 +18,7 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
-from services import trend_trigger, tz_entry_shadow
+from services import trend_trigger, tz_entry_shadow, tp_reachability
 from services.regime_expectancy_sizer import RegimeExpectancySizer
 from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
@@ -621,6 +621,37 @@ class RobotLoop:
                     db.flush()
                 continue
 
+            # (#tp-reachability-2026-08-03) Достижима ли цель. Замер по 342
+            # закрытым: у скальпа TP1 стоит на 0.8% при медианном ходе 0.391% —
+            # до цели не доходят ~82% сделок. Само по себе это не смертельно,
+            # смертельно то, что net_rr_tp1/tp2 считаются ОТ ЭТОЙ ЦЕЛИ, и гейт
+            # min_rr_tp2 пропускает сделку по геометрии, которой не существует.
+            _tp1_dist_pct = None
+            try:
+                if entry_price and tp1:
+                    _tp1_dist_pct = abs(float(tp1) - float(entry_price)) / float(entry_price) * 100.0
+            except (TypeError, ValueError, ZeroDivisionError):
+                _tp1_dist_pct = None
+            _tp_reach = tp_reachability.evaluate(
+                symbol=symbol,
+                regime=str(getattr(result, "regime", "") or ""),
+                tp1_dist_pct=_tp1_dist_pct,
+            )
+            if not _tp_reach.allowed:
+                self.decisions.record(
+                    db,
+                    symbol=symbol,
+                    status="blocked",
+                    decision="tp1_beyond_typical_move",
+                    action=result.action,
+                    regime=str(getattr(result, "regime", "") or ""),
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    payload=_tp_reach.as_dict(),
+                )
+                db.flush()
+                continue
+
             performance = self.symbol_performance_guard.analyze(
                 db=db,
                 bot_id=bot.id,
@@ -1215,10 +1246,13 @@ class RobotLoop:
                     # вместо того чтобы догадываться.
                     "trend_trigger": _trigger.as_dict(),
                     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
-                    # OBV. Только наблюдение: считаем и пишем, вход не трогаем.
-                    # Через несколько сотен сделок станет видно, какие входы
-                    # каждое условие отсекло бы и чем они закончились.
+                    # OBV. Режим задаётся TZ_MODE; при enforce блокируют только
+                    # беспороговые условия и только на достаточной выборке.
                     "tz_shadow": {**_tz.as_dict(), "enforce_reason": _tz_reason},
+                    # (#tp-reachability-2026-08-03) Достижима ли TP1 при типичном
+                    # ходе инструмента. У скальпа цель стоит на 0.8% при медианном
+                    # ходе 0.391% — RR считается от геометрии, которой нет.
+                    "tp_reach": _tp_reach.as_dict(),
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в

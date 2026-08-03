@@ -142,21 +142,45 @@ def evaluate(timeframes, *, regime: str, side: str) -> TZShadow:
         return TZShadow(regime_value, side_value, False, None, (), None, None, None, None, None)
 
     adx = _num(trend_tf, "adx14")
+    adx_prev = _num(trend_tf, "adx14_prev")
     plus_di = _num(trend_tf, "plus_di")
     minus_di = _num(trend_tf, "minus_di")
     stoch_k = _num(entry_tf, "stoch_rsi_k")
     stoch_d = _num(entry_tf, "stoch_rsi_d")
+    stoch_k_prev = _num(entry_tf, "stoch_rsi_k_prev")
+    stoch_d_prev = _num(entry_tf, "stoch_rsi_d_prev")
     obv = _num(trend_tf, "obv")
     obv_ema = _num(trend_tf, "obv_ema20")
+    kama = _num(trend_tf, "kama")
+    close = _num(trend_tf, "last_close")
 
     if adx is None or plus_di is None or minus_di is None or stoch_k is None:
         return TZShadow(regime_value, side_value, False, None, (), adx, None, stoch_k, stoch_d, None)
 
     failed: list[str] = []
 
+    # 0. Цена относительно KAMA — пункт 1 раздела 3.1 ТЗ.
+    #    (#tz-trend-engine-2026-08-03) Раньше это условие не проверялось вовсе:
+    #    KAMA была объявлена «заменой сглаживания, а не новой информацией».
+    #    Замер опроверг: без линии, относительно которой строится вход, зона
+    #    входа задавалась как last×0.997…1.003, и вход становился случайной
+    #    выборкой из цен внутри тренда — отсюда edge_ratio 0.943 у trend_up.
+    if kama is not None and kama > 0 and close is not None and close > 0:
+        above = close > kama
+        if is_long and not above:
+            failed.append("price_below_kama")
+        if not is_long and above:
+            failed.append("price_above_kama")
+
     # 1. Сила движения. Порог из ТЗ.
     if adx < float(getattr(settings, "TZ_ADX_MIN", 23.0)):
         failed.append(f"adx_below_min:{adx:.1f}")
+
+    # 1b. «...и имеет ВОСХОДЯЩУЮ траекторию» — прямая цитата ТЗ. Без этой
+    #     проверки движок входит в тренд, который уже иссяк: ADX 30 по дороге
+    #     вниз выглядит так же, как ADX 30 по дороге вверх.
+    if adx_prev is not None and adx_prev > 0 and adx <= adx_prev:
+        failed.append(f"adx_not_rising:{adx_prev:.1f}->{adx:.1f}")
 
     # 2. Направление подтверждено разностью DI по стороне сделки.
     di_spread = (plus_di - minus_di) if is_long else (minus_di - plus_di)
@@ -170,7 +194,20 @@ def evaluate(timeframes, *, regime: str, side: str) -> TZShadow:
     in_zone = stoch_k <= zone if is_long else stoch_k >= (100.0 - zone)
     if not in_zone:
         failed.append(f"stoch_not_in_pullback:{stoch_k:.1f}")
-    if stoch_d is not None:
+
+    # (#tz-trend-engine-2026-08-03) ТЗ требует ПЕРЕСЕЧЕНИЯ, а не взаимного
+    # положения линий. Разница принципиальная: «%K выше %D» истинно всю дорогу
+    # вверх, то есть пропускает вход в любой точке отката. Пересечение —
+    # событие, происходящее один раз, и это и есть точка входа.
+    if stoch_d is not None and stoch_k_prev is not None and stoch_d_prev is not None:
+        crossed_up = stoch_k_prev <= stoch_d_prev and stoch_k > stoch_d
+        crossed_down = stoch_k_prev >= stoch_d_prev and stoch_k < stoch_d
+        if is_long and not crossed_up:
+            failed.append("stoch_no_bullish_cross")
+        if not is_long and not crossed_down:
+            failed.append("stoch_no_bearish_cross")
+    elif stoch_d is not None:
+        # Нет предыдущего бара — откатываемся на прежнюю мягкую проверку.
         crossing_up = stoch_k > stoch_d
         if is_long and not crossing_up:
             failed.append("stoch_k_below_d")
