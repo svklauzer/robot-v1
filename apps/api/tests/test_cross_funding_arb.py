@@ -128,7 +128,7 @@ def test_engine_full_cycle(tmp_path, monkeypatch):
     r2 = engine.step({"status": "ok", "items": [_item(ann=25.0, basis=0.06)]}, now=1000.0 + 2 * HOUR)
     assert r2["open_count"] == 1
     pos = store.load()["open"][0]
-    expected_carry = accrue_funding_usdt(100.0, 25.0 / (24 * 365), 2.0)
+    expected_carry = accrue_funding_usdt(pos["notional_usdt"], 25.0 / (24 * 365), 2.0)
     assert pos["funding_accrued_usdt"] == pytest.approx(expected_carry, abs=1e-6)
     # Базис сжался 0.10 → 0.06 → +0.04 в нашу пользу.
     assert pos["unrealized_basis_usdt"] == pytest.approx(0.04)
