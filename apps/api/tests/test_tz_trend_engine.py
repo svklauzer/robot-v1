@@ -212,6 +212,88 @@ def test_disarmed_condition_records_but_does_not_close(monkeypatch):
 
 
 # ── сайзинг без стопа ───────────────────────────────────────────────────────
+class _Levels:
+    """Минимальный носитель _tz_stop без рынка и pandas."""
+
+    from services.market_intelligence import MarketIntelligenceEngine as _E
+
+    _tz_stop = _E._tz_stop
+    _tf = _E._tf
+    _ctx_value = _E._ctx_value
+
+
+def _ctx(kama):
+    return {"1h": {"kama": kama}}
+
+
+@pytest.fixture
+def sizing(monkeypatch):
+    monkeypatch.setattr(settings, "TZ_TREND_EXIT_ONLY", True, raising=False)
+    monkeypatch.setattr(settings, "TZ_TREND_TF", "1h", raising=False)
+    monkeypatch.setattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15, raising=False)
+    monkeypatch.setattr(settings, "TZ_STOP_MIN_DIST_PCT", 0.30, raising=False)
+    monkeypatch.setattr(settings, "TZ_DISASTER_STOP_PCT", 5.0, raising=False)
+    return _Levels()
+
+
+def test_sizing_anchor_uses_kama_distance(sizing):
+    """Дистанция до KAMA заменила ATR как мера риска сетапа."""
+    level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=105.0)
+    assert meta["source"] == "kama"
+    # 105 → 99.85 это 4.905%, внутри пола и потолка.
+    assert meta["dist_pct"] == pytest.approx(4.905, abs=0.01)
+    assert level == pytest.approx(105.0 * (1 - 0.04905), rel=1e-6)
+
+
+def test_price_glued_to_kama_hits_the_floor(sizing):
+    """Главный риск отказа от стопа: дистанция 0.05% раздула бы позицию в разы.
+
+    qty = risk / дистанция, поэтому пол здесь — не косметика, а защита от
+    позиции на весь депозит.
+    """
+    level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=100.10)
+    assert meta["clamped"] == "floor"
+    assert meta["dist_pct"] == pytest.approx(0.30)
+    assert level < 100.10
+
+
+def test_stretched_price_hits_the_cap(sizing):
+    """Растянутая цена дала бы «риск» в 20% и съела бюджет одной сделкой."""
+    level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=130.0)
+    assert meta["clamped"] == "cap"
+    assert meta["dist_pct"] == pytest.approx(5.0)
+
+
+def test_short_anchor_is_symmetric(sizing):
+    level, meta = sizing._tz_stop(_ctx(100.0), side="short", last=95.0)
+    assert meta["source"] == "kama"
+    assert level > 95.0
+
+
+def test_price_on_the_wrong_side_falls_back(sizing):
+    """Лонг ниже KAMA по ТЗ вообще не должен был открыться.
+
+    Не выдумываем уровень — отдаём решение прежней логике, иначе «стоп» окажется
+    выше цены входа.
+    """
+    level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=95.0)
+    assert level is None
+    assert meta["source"] == "price_wrong_side_of_kama"
+
+
+def test_no_kama_falls_back(sizing):
+    level, meta = sizing._tz_stop(_ctx(0.0), side="long", last=105.0)
+    assert level is None
+    assert meta["source"] == "no_kama"
+
+
+def test_disabled_flag_keeps_old_behaviour(sizing, monkeypatch):
+    monkeypatch.setattr(settings, "TZ_TREND_EXIT_ONLY", False, raising=False)
+    level, meta = sizing._tz_stop(_ctx(100.0), side="long", last=105.0)
+    assert level is None
+    assert meta["source"] == "disabled"
+
+
 def test_kama_distance_anchors_position_size():
     """Убрав стоп, мы убрали якорь сайзинга (qty = risk / дистанция).
 

@@ -70,9 +70,18 @@ TREND_REGIMES = frozenset({"trend_up_candidate", "trend_down_candidate"})
 # включить частично: у `adx` порог не откалиброван, у `di`/`obv` порога нет
 # вовсе — они сравнивают величины между собой и работают на любых таймфреймах.
 CONDITION_FAMILY = {
+    # (#tz-trend-engine-2026-08-03) KAMA и «растущий ADX» — пункты 1 и 2
+    # раздела 3.1 ТЗ. Без записи в этой таблице условие считается, пишется в
+    # план и НЕ блокирует ничего: _family() вернёт "unknown", и вход пройдёт.
+    # Молча. Поэтому таблица обязана пополняться вместе с условиями.
+    "price_below_kama": "kama",
+    "price_above_kama": "kama",
     "adx_below_min": "adx",
+    "adx_not_rising": "adx",
     "di_against_side": "di",
     "stoch_not_in_pullback": "stoch",
+    "stoch_no_bullish_cross": "stoch",
+    "stoch_no_bearish_cross": "stoch",
     "stoch_k_below_d": "stoch",
     "stoch_k_above_d": "stoch",
     "obv_below_ema": "obv",

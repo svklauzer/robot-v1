@@ -771,6 +771,61 @@ class MarketIntelligenceEngine:
             return tp
         return cand
 
+    def _tz_stop(self, contexts, *, side: str, last: float) -> tuple[float | None, dict]:
+        """Уровень слома тренда по KAMA — он же якорь сайзинга.
+
+        (#tz-trend-engine-2026-08-03) Стоп-ордер по ТЗ не выставляется: выход
+        идёт по приборам. Но размер позиции считается как
+        `qty = risk_usdt / дистанция_до_стопа`, и без якоря сайзинг теряет смысл.
+
+        Дистанция до KAMA — естественная мера риска СЕТАПА, а не произвольная
+        доля ATR: она мала при входе от линии (то есть при хорошем входе по ТЗ —
+        откате к KAMA) и велика при растянутой цене, так что плохой вход сам
+        получит меньший размер.
+
+        Два ограничителя обязательны и оба про одно:
+          * ПОЛ. Цена может стоять почти на KAMA, дистанция уйдёт в 0.05%, и
+            qty = risk / 0.0005 раздует позицию в разы. Ближе минимума не берём.
+          * ПОТОЛОК. Растянутая цена даёт дистанцию в 8%; такой «риск» съест
+            весь бюджет одной сделкой. Дальше аварийного порога не берём.
+        """
+        meta: dict = {"source": "kama", "kama": None, "raw_dist_pct": None,
+                      "clamped": None}
+        if not bool(getattr(settings, "TZ_TREND_EXIT_ONLY", False)):
+            return None, {"source": "disabled"}
+        if not last or float(last) <= 0:
+            return None, {"source": "no_price"}
+
+        tf = str(getattr(settings, "TZ_TREND_TF", "1h"))
+        ctx = self._tf(contexts, tf) or self._tf(contexts, "1h")
+        kama = float(self._ctx_value(ctx, "kama", 0) or 0)
+        if kama <= 0:
+            return None, {"source": "no_kama"}
+        meta["kama"] = round(kama, 8)
+
+        is_long = str(side).lower() in ("long", "buy")
+        buf = float(getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15)) / 100.0
+        level = kama * (1 - buf) if is_long else kama * (1 + buf)
+
+        # Цена по «неправильную» сторону KAMA — вход по ТЗ вообще не должен был
+        # состояться. Не выдумываем уровень, отдаём решение прежней логике.
+        if (is_long and level >= float(last)) or (not is_long and level <= float(last)):
+            return None, {"source": "price_wrong_side_of_kama", "kama": meta["kama"]}
+
+        dist_pct = abs(float(last) - level) / float(last) * 100.0
+        meta["raw_dist_pct"] = round(dist_pct, 4)
+
+        floor_pct = float(getattr(settings, "TZ_STOP_MIN_DIST_PCT", 0.30))
+        cap_pct = float(getattr(settings, "TZ_DISASTER_STOP_PCT", 5.0)) or 100.0
+        clamped_pct = min(max(dist_pct, floor_pct), cap_pct)
+        if abs(clamped_pct - dist_pct) > 1e-9:
+            meta["clamped"] = "floor" if clamped_pct > dist_pct else "cap"
+
+        level = (float(last) * (1 - clamped_pct / 100.0) if is_long
+                 else float(last) * (1 + clamped_pct / 100.0))
+        meta["dist_pct"] = round(clamped_pct, 4)
+        return round(level, 8), meta
+
     def _build_long_levels(self, contexts):
         entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
         signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
@@ -844,6 +899,15 @@ class MarketIntelligenceEngine:
         vp = self._volume_nodes(getattr(self, "_cur_symbol", None))
         if vp:
             stop_price = round(self._vp_stop_long(stop_price, last, max_floor, vp), 6)
+
+        # (#tz-trend-engine-2026-08-03) KAMA перебивает всё вышестоящее: ATR,
+        # структурный уровень и VP-узел отвечают на вопрос «где шум», а ТЗ
+        # спрашивает «где тренд сломан». Раз выход идёт по KAMA, то и размер
+        # позиции должен считаться от неё — иначе риск в расчёте один, а в
+        # реальности другой.
+        _tz_stop_price, _tz_meta = self._tz_stop(contexts, side="long", last=last)
+        if _tz_stop_price:
+            stop_price = _tz_stop_price
 
         risk = max(last - stop_price, atr)
 
@@ -949,6 +1013,12 @@ class MarketIntelligenceEngine:
         vp = self._volume_nodes(getattr(self, "_cur_symbol", None))
         if vp:
             stop_price = round(self._vp_stop_short(stop_price, last, max_floor, vp), 6)
+
+        # (#tz-trend-engine-2026-08-03) Симметрично лонгу: шорты дают −52.77 из
+        # −108.79 трендового убытка, и правило распространяется на них так же.
+        _tz_stop_price, _tz_meta = self._tz_stop(contexts, side="short", last=last)
+        if _tz_stop_price:
+            stop_price = _tz_stop_price
 
         risk = max(stop_price - last, atr)
 

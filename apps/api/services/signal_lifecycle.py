@@ -640,6 +640,12 @@ class SignalLifecycleManager:
                 flow_against=_depth_flow_against(signal, side),
                 # (#range-time-stop-2026-07-09) range-режим получает свой таймер.
                 regime=(signal.plan_json or {}).get("regime"),
+                # (#tz-trend-engine-2026-08-03) Приборы для выхода по ТЗ.
+                # adx_peak — МАКСИМУМ за жизнь сделки: условие «разворот ADX из
+                # зоны выше 50» по одному значению не проверяется, без памяти
+                # оно вырождается в «ADX < 50» и закрывало бы каждую сделку,
+                # которая до 50 не дошла.
+                tz_context=self._tz_context(signal, lifecycle),
             )
 
             if exit_decision.exit:
@@ -939,6 +945,55 @@ class SignalLifecycleManager:
             return float((float(entry_from) + float(entry_to)) / 2)
 
         return None
+
+    def _tz_context(self, signal: Signal, lifecycle: dict) -> dict | None:
+        """Свежие показания приборов для выхода по ТЗ.
+
+        (#tz-trend-engine-2026-08-03) Индикаторы считаются на КАЖДОМ проходе
+        сопровождения, а не берутся с момента входа: выход по ТЗ — это ответ на
+        вопрос «жив ли тренд СЕЙЧАС», и вчерашняя KAMA на него не отвечает.
+
+        Пик ADX копится в lifecycle: `adx_peak` обновляется здесь же, потому что
+        это единственное место, которое видит каждый тик сопровождения.
+        """
+        if not bool(getattr(settings, "TZ_TREND_EXIT_ONLY", False)):
+            return None
+        mode = str((signal.plan_json or {}).get("trade_mode") or "").lower()
+        if mode not in ("trend", "trend_up", "trend_down", "ride"):
+            return None
+        try:
+            from services.market_intelligence import MarketIntelligenceEngine
+
+            engine = getattr(self, "_mi_engine", None)
+            if engine is None:
+                engine = MarketIntelligenceEngine()
+                self._mi_engine = engine
+
+            tf = str(getattr(settings, "TZ_TREND_TF", "1h"))
+            snap = engine.market.multi_timeframe_snapshot(signal.symbol)
+            df = (snap.get("timeframes") or {}).get(tf)
+            if df is None:
+                return None
+            ctx = engine._analyze_timeframe(df, tf)
+            if ctx is None:
+                return None
+
+            adx = float(getattr(ctx, "adx14", 0.0) or 0.0)
+            prev_peak = float(lifecycle.get("adx_peak") or 0.0)
+            peak = max(prev_peak, adx)
+            lifecycle["adx_peak"] = round(peak, 4)
+
+            return {
+                "kama": float(getattr(ctx, "kama", 0.0) or 0.0) or None,
+                "adx": adx or None,
+                "adx_peak": peak or None,
+                "obv": float(getattr(ctx, "obv", 0.0) or 0.0) or None,
+                "obv_ema20": float(getattr(ctx, "obv_ema20", 0.0) or 0.0) or None,
+            }
+        except Exception:  # noqa: BLE001
+            # Нет приборов — нет выхода по приборам. Возврат None роняет решение
+            # обратно на прежнюю лестницу, а не оставляет позицию без присмотра.
+            return None
 
     def _update_lifecycle_metrics(self, db, signal: Signal, price: float):
         """

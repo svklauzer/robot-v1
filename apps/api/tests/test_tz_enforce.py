@@ -82,11 +82,28 @@ def test_stoch_can_be_switched_on_explicitly(enforce, monkeypatch):
 
 
 # ── fail-open ───────────────────────────────────────────────────────────────
-def test_shadow_mode_blocks_nothing():
+def test_shadow_mode_blocks_nothing(monkeypatch):
+    """Режим выставляем ЯВНО.
+
+    Раньше тест полагался на дефолт конфига, и когда 03.08 дефолт сменился на
+    enforce, тест начал падать — правильно начал. Тест про поведение в shadow
+    обязан задавать shadow сам, иначе он проверяет значение настройки, а не
+    логику.
+    """
+    monkeypatch.setattr(settings, "TZ_MODE", "shadow", raising=False)
     blocked, reason = tz.should_block(_shadow(failed=["di_against_side:-2.0"]),
                                       sample_size=1000)
     assert blocked is False
     assert reason == "mode_shadow"
+
+
+def test_enforce_is_the_default_now(monkeypatch):
+    """Дефолт — enforce: трендовые движки дают 96% убытка, полумеры кончились."""
+    monkeypatch.setattr(settings, "TZ_ENFORCE_MIN_SAMPLE", 0, raising=False)
+    monkeypatch.setattr(settings, "TZ_ENFORCE_CONDITIONS", "kama,adx,di,stoch,obv",
+                        raising=False)
+    blocked, _ = tz.should_block(_shadow(failed=["price_below_kama"]), sample_size=0)
+    assert blocked is True
 
 
 def test_missing_indicators_do_not_block(enforce):
@@ -108,3 +125,19 @@ def test_clean_setup_passes(enforce):
     blocked, reason = tz.should_block(_shadow(failed=[]), sample_size=1000)
     assert blocked is False
     assert reason == "enabled_conditions_passed"
+
+
+def test_every_condition_has_a_family():
+    """Условие вне таблицы семейств не блокирует НИЧЕГО — молча.
+
+    _family() вернёт "unknown", оно не совпадёт ни с одним включённым
+    семейством, и вход пройдёт. Условие при этом будет исправно считаться и
+    писаться в план, то есть выглядеть работающим. Этот тест — единственное,
+    что не даст добавить новое условие и забыть про таблицу.
+    """
+    known = set(tz.CONDITION_FAMILY.values())
+    assert known == {"kama", "adx", "di", "stoch", "obv"}
+    for code, family in tz.CONDITION_FAMILY.items():
+        assert tz._family(code) == family, code
+        assert tz._family(f"{code}:12.3") == family, code
+    assert tz._family("something_new") == "unknown"

@@ -1,7 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 from core.config import settings
+from core.logging import get_logger, log_event
 from services.htx_client import HTXClient
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -184,6 +188,7 @@ class ExitPolicyService:
         trade_mode: str = "default",
         flow_against: bool = False,
         regime: str | None = None,
+        tz_context: dict | None = None,
     ) -> ExitDecision:
         side = str(side).lower()
         entry_price = float(entry_price)
@@ -224,6 +229,57 @@ class ExitPolicyService:
             if tp1_price is not None and float(tp1_price) > 0
             else None
         )
+
+        # ── ВЫХОД ПО ПРИБОРАМ (#tz-trend-engine-2026-08-03) ──────────────────
+        # Для трендового профиля лестница ниже ЗАМЕНЕНА условиями ТЗ. Основание:
+        #   107 стопов из 342 сделок, −223.76 USDT, ни одной прибыльной — 76%
+        #   всего убытка. Средний MAE при этом −0.618%, стопы стоят на 1–3%:
+        #   типичная сделка до стопа не доходит. Стоп не защищал, он фиксировал
+        #   уже случившееся.
+        # Раздел 3.2 ТЗ закрывает не по дистанции, а по слому тренда: пробой
+        # KAMA, разворот ADX из зоны выше 50, уход OBV под свою EMA(20).
+        #
+        # Проверка идёт ПЕРВОЙ и делает ранний return: смешивать её с прежней
+        # лестницей нельзя — они спорят. Прежняя может выбить сделку, тренд
+        # которой по KAMA цел, и наоборот держать сделку со сломанным трендом.
+        if (
+            bool(getattr(settings, "TZ_TREND_EXIT_ONLY", False))
+            and str(trade_mode or "").lower() in ("trend", "trend_up", "trend_down", "ride")
+            and isinstance(tz_context, dict)
+        ):
+            try:
+                from services.tz_trend_exit import evaluate as tz_exit_eval
+
+                verdict = tz_exit_eval(
+                    side=side,
+                    close=current_price,
+                    kama=tz_context.get("kama"),
+                    adx=tz_context.get("adx"),
+                    adx_peak=tz_context.get("adx_peak"),
+                    obv=tz_context.get("obv"),
+                    obv_ema=tz_context.get("obv_ema20"),
+                )
+                if verdict.exit:
+                    return ExitDecision(
+                        exit=True,
+                        reason=verdict.reason,
+                        exit_price=current_price,
+                        note=(
+                            f"{verdict.reason} triggers={','.join(verdict.triggers)} "
+                            f"kama={verdict.kama} adx={verdict.adx} peak={verdict.adx_peak}"
+                        ),
+                    )
+                # Тренд цел — держим. Прежние ярусы намеренно НЕ вызываются:
+                # именно они давали capture 7.08% при среднем ходе 0.816%.
+                return ExitDecision(
+                    exit=False,
+                    note=f"tz_trend_intact triggers={','.join(verdict.triggers) or 'none'}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Сбой расчёта не имеет права держать позицию вслепую —
+                # проваливаемся на прежнюю лестницу как на бэкстоп.
+                log_event(logger, logging.WARNING, "tz_exit_failed",
+                          symbol=symbol, error=f"{type(exc).__name__}: {exc}")
 
         # ── Скальп-режим: безубыток-замок (до failed_setup_exit) ─────────────
         # Маленькая позиция + мелкое движение: тренд-пороги capture/protective

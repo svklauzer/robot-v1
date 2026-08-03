@@ -52,6 +52,20 @@ from dataclasses import dataclass, asdict
 from core.config import settings
 
 
+# Условие → семейство. Явная таблица вместо разбора имени по подчёркиванию:
+# прежний `code.split("_")[0]` давал "kama" из "kama_broken" по случайности
+# именования и молча сломался бы на любом условии вроде "price_below_kama".
+EXIT_FAMILY = {
+    "kama_broken": "kama",
+    "adx_fading_from_peak": "adx",
+    "obv_reversed": "obv",
+}
+
+
+def _family(code: str) -> str:
+    return EXIT_FAMILY.get(str(code).split(":", 1)[0], "unknown")
+
+
 @dataclass(frozen=True)
 class TZExit:
     exit: bool
@@ -135,12 +149,15 @@ def evaluate(
         for x in str(getattr(settings, "TZ_EXIT_CONDITIONS", "kama") or "").split(",")
         if x.strip()
     }
-    fired = [t for t in triggers if t.split(":", 1)[0].split("_")[0] in armed
-             or t.split(":", 1)[0] in armed]
+    fired = [t for t in triggers if _family(t) in armed]
 
+    # Причина — по СЕМЕЙСТВУ, а не по полному коду. Отчёт «куда уходят деньги»
+    # группирует сделки по close_reason: если в причину попадут значения ADX,
+    # каждая сделка получит уникальную строку и группировка развалится.
+    # Подробности остаются в `triggers`.
     return TZExit(
         exit=bool(fired),
-        reason=("tz_" + fired[0].split(":", 1)[0]) if fired else "trigger_not_armed",
+        reason=("tz_" + _family(fired[0])) if fired else "trigger_not_armed",
         triggers=tuple(triggers),
         kama=kama_v,
         adx=adx_v,
