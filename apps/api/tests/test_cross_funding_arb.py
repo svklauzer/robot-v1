@@ -273,6 +273,12 @@ def test_hard_limits_still_close_regardless_of_carry(tmp_path, monkeypatch):
     from core.config import settings
 
     monkeypatch.setattr(settings, "CROSS_FARB_MAX_HOLD_DAYS", 0.5, raising=False)
+    # (#cross-farb-conservative-2026-08-03) Гейт входа требует, чтобы carry
+    # успел покрыть комиссии за отведённое удержание с кратным запасом. При
+    # max_hold=0.5 дня это условие не выполнимо ни при какой реалистичной
+    # ставке — и это правильно. Здесь проверяется ЗАКРЫТИЕ по возрасту, поэтому
+    # проверку окупаемости отключаем: иначе тест не дойдёт до открытия позиции.
+    monkeypatch.setattr(settings, "CROSS_FARB_PAYBACK_MARGIN", 0.0, raising=False)
     store = CrossFundingArbStore(path=str(tmp_path / "farb.json"))
     engine = CrossFundingArbEngine(store=store, history=_FakeHistory([_hist_row()]))
 

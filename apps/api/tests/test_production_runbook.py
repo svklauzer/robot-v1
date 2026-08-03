@@ -4,12 +4,29 @@ from pathlib import Path
 
 import pytest
 
-# Тест исполняет .sh — без bash он не про код, а про среду. На Windows без
-# git-bash он падал в каждом прогоне и приучал смотреть на красное как на норму.
+def _bash_works() -> bool:
+    """Не «есть ли файл bash», а «запускается ли он».
+
+    На Windows `shutil.which("bash")` находит C:\\Windows\\System32\\bash.exe —
+    лаунчер WSL. Он существует, но при отсутствии установленного дистрибутива
+    падает с `execvpe(/bin/bash) failed: No such file or directory`, и тест
+    выглядел как провал контракта скрипта, хотя скрипт не запускался вовсе.
+    """
+    if shutil.which("bash") is None:
+        return False
+    try:
+        probe = subprocess.run(["bash", "-c", "echo ok"], capture_output=True,
+                               text=True, timeout=15)
+    except Exception:  # noqa: BLE001
+        return False
+    return probe.returncode == 0 and "ok" in (probe.stdout or "")
+
+
+# Тест исполняет .sh — без рабочего bash он не про код, а про среду.
 # В CI (Linux) bash есть, контракт скрипта проверяется там.
 requires_bash = pytest.mark.skipif(
-    shutil.which("bash") is None,
-    reason="нужен bash: тест проверяет контракт .sh-скрипта, а не поведение кода",
+    not _bash_works(),
+    reason="нужен РАБОЧИЙ bash: тест проверяет контракт .sh-скрипта, а не код",
 )
 
 
