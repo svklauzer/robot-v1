@@ -51,7 +51,9 @@ def _assumed_hold_periods() -> int:
 
     Теперь горизонт вычисляется, а не задаётся отдельно: при любой правке
     потолка удержания амортизация едет за ним и разъехаться они не могут.
-    Явный ASSUMED_HOLD_PERIODS остаётся аварийным переопределением.
+    Отдельный ASSUMED_HOLD_PERIODS удалён из конфига: настройка, которую видно
+    и можно выставить, но которая ни на что не влияет, — та же ловушка. Остался
+    только аварийный OVERRIDE.
     """
     override = getattr(settings, "FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE", None)
     if override:
@@ -72,11 +74,11 @@ class FundingSnapshot:
     swap_price: float
     basis_pct: float          # (swap - spot) / spot × 100; positive = perp premium (good for us)
     fee_round_trip_pct: float  # total round-trip fees as % of notional
-    # Per-period net yield = funding_pct - fee_amortized (assuming ASSUMED_HOLD_PERIODS)
+    # Per-period net yield = funding_pct - fee_amortized (горизонт — _assumed_hold_periods())
     net_yield_per_period_pct: float
     # Periods needed to break even on fees
     break_even_periods: float | None
-    # Annualized net return assuming ASSUMED_HOLD_PERIODS hold
+    # Annualized net return для того же горизонта — _assumed_hold_periods()
     annualized_net_yield_pct: float
     estimated_edge_pct: float  # legacy field; same as net_yield_per_period_pct
     next_funding_at: datetime | None

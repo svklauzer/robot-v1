@@ -1716,14 +1716,21 @@ class Settings(BaseSettings):
     FUNDING_ARB_SCAN_INTERVAL_HOURS: int = 8
     # Automatically open paper positions when a profitable candidate is found
     FUNDING_ARB_AUTO_OPEN_PAPER: bool = True
-    # (#funding-hold-horizon-2026-08-03) БОЛЬШЕ НЕ ЧИТАЕТСЯ НАПРЯМУЮ.
-    # Горизонт амортизации вычисляется из FUNDING_ARB_MAX_HOLD_HOURS / 8 —
-    # см. _assumed_hold_periods() в services/funding_arbitrage.py. Две настройки
-    # описывали одно удержание и разошлись втрое (10 против фактических 30),
-    # из-за чего порог входа был завышен вдвое с лишним.
-    # Оставлено для совместимости и как ориентир; аварийное переопределение —
-    # FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE.
-    FUNDING_ARB_ASSUMED_HOLD_PERIODS: int = 10
+    # (#funding-hold-horizon-2026-08-03) FUNDING_ARB_ASSUMED_HOLD_PERIODS = 10
+    # УДАЛЁН. Он задавал горизонт амортизации комиссии в гейте входа, тогда как
+    # реальный выход определял FUNDING_ARB_MAX_HOLD_HOURS = 240, то есть 30
+    # периодов. Все пять закрытых позиций держались ровно 30 — они упирались в
+    # потолок. Расхождение втрое завышало порог входа с ~0.022% до ~0.055%.
+    #
+    # Оставлять поле «для совместимости» нельзя: оно читается из окружения, его
+    # видно в конфиге, выставить его можно — а эффекта не будет. Это ровно тот
+    # тип молчаливого расхождения, который мы и устраняем. Горизонт теперь один
+    # и выводится из потолка удержания: _assumed_hold_periods() в
+    # services/funding_arbitrage.py. Разъехаться им больше нечем.
+    #
+    # Ниже — аварийный рычаг: 0 = выключен, любое положительное число
+    # перекрывает вычисленный горизонт. Нужен, если понадобится сузить гейт
+    # быстрее, чем менять потолок удержания открытых позиций.
     FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE: int = 0
 
     # Legacy — kept for compatibility

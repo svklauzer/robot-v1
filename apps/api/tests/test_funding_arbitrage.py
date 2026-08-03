@@ -376,13 +376,17 @@ def test_auto_open_candidates_respects_max_hedges():
 def test_snapshot_computes_fee_aware_net_yield():
     """Net yield per period must account for round-trip fees."""
     old_enabled = settings.ENABLE_FUNDING_ARB
-    old_assumed = settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS
+    # (#funding-hold-horizon-2026-08-03) Горизонт больше не задаётся отдельным
+    # ASSUMED_HOLD_PERIODS — он выводится из потолка удержания. Здесь фиксируем
+    # его аварийным рычагом, чтобы проверять арифметику доходности на круглом
+    # числе, а не тем, что сейчас стоит в потолке.
+    old_override = settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE
     # См. комментарий выше: здесь проверяется расчёт доходности, а не наличие
     # подтверждённой истории ставки.
     old_confirm = settings.FUNDING_ARB_CONFIRM_ENABLED
     try:
         settings.ENABLE_FUNDING_ARB = True
-        settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS = 10
+        settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE = 10
         settings.FUNDING_ARB_CONFIRM_ENABLED = False
 
         snapshot = FundingMonitorService(client=FakeHTXFundingClient()).snapshot("BTC/USDT")
@@ -393,13 +397,22 @@ def test_snapshot_computes_fee_aware_net_yield():
         # net_yield = 0.08 + 0.006 - 0.05 = 0.036
         assert snapshot.funding_rate_pct == 0.08
         assert snapshot.fee_round_trip_pct == 0.5
-        assert snapshot.net_yield_per_period_pct > 0  # profitable after fees
+        # Точное число, а не «> 0»: прежняя проверка на неравенство прошла бы и
+        # при другом горизонте, то есть не заметила бы расхождения, из-за
+        # которого всё это и правилось.
+        assert snapshot.net_yield_per_period_pct == pytest.approx(0.036, abs=1e-6)
         assert snapshot.break_even_periods is not None
         assert snapshot.break_even_periods > 0
         assert snapshot.status == "candidate"
+
+        # А с горизонтом по умолчанию (240 / 8 = 30) комиссия размазывается
+        # втрое тоньше и порог входа заметно ниже — ради этого правка и делалась.
+        settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE = 0
+        wide = FundingMonitorService(client=FakeHTXFundingClient()).snapshot("BTC/USDT")
+        assert wide.net_yield_per_period_pct > snapshot.net_yield_per_period_pct
     finally:
         settings.ENABLE_FUNDING_ARB = old_enabled
-        settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS = old_assumed
+        settings.FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE = old_override
         settings.FUNDING_ARB_CONFIRM_ENABLED = old_confirm
 
 
