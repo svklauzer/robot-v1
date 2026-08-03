@@ -79,8 +79,38 @@ def _honest_final_pct(row: dict, traj: list, final_pct: float) -> tuple[float, b
     return final_pct, False
 
 
+def _cost_pct(row: dict) -> float:
+    """Издержки сделки в % от нотионала — цена приведения траектории к нетто.
+
+    (#replay-units-2026-08-03) Точки `traj` — ВАЛОВОЕ движение цены, а
+    `result_pct` — результат ПОСЛЕ издержек. Пока ранний выход возвращал точку
+    траектории, а базой служила сумма `result_pct`, каждый такой выход получал
+    даром разницу единиц — на боевой выборке это ровно 0.1385–0.1386% на сделку
+    (сверено на #345 и #347). Подарок доставался тем вариантам, которые СИЛЬНЕЕ
+    меняют поведение: текущий конфиг чаще доходит до `actual_close` и потому
+    получал меньше всех. Инструмент против подгонки сам голосовал за правки.
+
+    Считаем из факта: издержки / (qty × цена входа) × 100.
+    """
+    try:
+        cost = float(row.get("closed_total_cost") or 0.0)
+        qty = float(row.get("qty") or 0.0)
+        entry = float((row.get("lifecycle") or {}).get("entry_price") or 0.0)
+        notional = qty * entry
+        if cost > 0 and notional > 0:
+            return cost / notional * 100.0
+    except (TypeError, ValueError):
+        pass
+    # Фолбэк — модельный круг по конфигу. Хуже факта, но лучше нуля: ноль
+    # означал бы возврат к сравнению валового с чистым.
+    taker = float(getattr(settings, "FUTURES_TAKER_FEE", 0.0005))
+    slip = float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
+    return (taker + slip) * 2 * 100.0
+
+
 def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
-                ts_min: float | None, hard_mult: float) -> tuple[float, str]:
+                ts_min: float | None, hard_mult: float,
+                cost_pct: float = 0.0) -> tuple[float, str]:
     """Возвращает (result_pct, exit_reason) для варианта конфига.
 
     ВАЖНО (#replay-honesty-2026-07-25): `final_pct` здесь — ЧЕСТНЫЙ результат
@@ -89,6 +119,10 @@ def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
     конфигом → каждый вариант, который не сработал раньше, наследовал исход
     текущего конфига, и текущий не мог проиграть. Отсюда «текущий конфиг №1
     шесть замеров подряд» — артефакт сравнения конфига с самим собой.
+
+    (#replay-units-2026-08-03) Ранний выход книжится по траектории, то есть
+    ВАЛОВО, и потому обязан заплатить круг издержек. `final_pct` уже чистый —
+    из него не вычитаем, иначе издержки спишутся дважды.
     """
     mfe = 0.0
     ts_sec = (ts_min or 0.0) * 60.0
@@ -101,12 +135,12 @@ def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
         mfe = max(mfe, pct)
         # scalp breakeven lock: вооружились и отдали долю пика
         if mfe >= arm and mfe > 0 and (mfe - pct) >= mfe * give:
-            return pct, "replay_breakeven_lock"
+            return pct - cost_pct, "replay_breakeven_lock"
         # time stop (с grace до hard: не в значимом минусе → держим)
         if ts_min and age >= ts_sec and mfe < arm:
             net_safe = float(getattr(settings, "NET_SAFE_FLOOR_SWAP_PCT", 0.30))
             if age >= hard_sec or pct <= -net_safe:
-                return pct, "replay_time_stop"
+                return pct - cost_pct, "replay_time_stop"
     return final_pct, "actual_close"
 
 
@@ -125,6 +159,7 @@ def _replay_trend_one(
     capture_start: float | None = None,
     capture_drawdown: float = 0.30,
     capture_share: float = 0.40,
+    cost_pct: float = 0.0,
 ) -> tuple[float, str]:
     """(#backtest-trend-2026-07-27) Трендовая лестница выхода по траектории.
 
@@ -143,6 +178,11 @@ def _replay_trend_one(
 
     Выход книжится по ТЕКУЩЕЙ точке (`pct`), а не по защитному уровню: стоп не
     исполняется лучше рынка.
+
+    (#replay-units-2026-08-03) И платит круг издержек: `traj` валовая, а
+    `final_pct` уже чистый. Пороги (`min_protective`, `band_floor`) сравниваются
+    с ВАЛОВЫМ `pct` — так же, как в бою: `exit_policy` смотрит на движение цены,
+    а издержки вычитаются при закрытии.
     """
     mfe = 0.0
     for point in traj:
@@ -155,7 +195,7 @@ def _replay_trend_one(
         if mfe >= ride_arm:
             protect = mfe * (1.0 - ride_trail)
             if pct <= protect and pct >= min_protective:
-                return pct, "replay_trend_trail"
+                return pct - cost_pct, "replay_trend_trail"
         elif capture_start is not None and mfe >= capture_start:
             # adaptive_mfe_capture: пик набран, откат превысил порог — забираем
             # долю пика. Ярус живёт МЕЖДУ ride и полосой захвата, поэтому его
@@ -163,15 +203,15 @@ def _replay_trend_one(
             if (mfe - pct) >= capture_drawdown and pct >= max(
                 mfe * capture_share, min_protective
             ):
-                return pct, "replay_mfe_capture"
+                return pct - cost_pct, "replay_mfe_capture"
         elif mfe >= band_arm:
             if (mfe - pct) >= mfe * band_give and pct >= max(band_floor, min_protective):
-                return pct, "replay_capture_band"
+                return pct - cost_pct, "replay_capture_band"
 
         # Замок безубытка — последний рубеж; срабатывает, когда цена вернулась
         # к входу. Порогом min_protective НЕ гейтится: это стоп, а не фиксация.
         if mfe >= be_arm and pct <= be_floor:
-            return pct, "replay_breakeven"
+            return pct - cost_pct, "replay_breakeven"
 
     return final_pct, "actual_close"
 
@@ -250,6 +290,7 @@ def build(limit: int = 2000) -> dict:
             phantom_count += 1
         trades.append({"traj": traj, "final_pct": honest_pct,
                        "booked_pct": float(final_pct), "phantom": is_phantom,
+                       "cost_pct": _cost_pct(r),
                        "symbol": r.get("symbol"), "signal_id": r.get("signal_id")})
 
     if not trades:
@@ -274,7 +315,8 @@ def build(limit: int = 2000) -> dict:
         early_exits = 0
         for t in trades:
             pct, reason = _replay_one(t["traj"], t["final_pct"],
-                                      arm=arm, give=give, ts_min=ts, hard_mult=hard_mult)
+                                      arm=arm, give=give, ts_min=ts, hard_mult=hard_mult,
+                                      cost_pct=t.get("cost_pct", 0.0))
             total += pct
             wins += 1 if pct > 0 else 0
             early_exits += 1 if reason != "actual_close" else 0
@@ -294,7 +336,7 @@ def build(limit: int = 2000) -> dict:
         for a, g, t in product(arms, gives, time_stops):
             tot = sum(
                 _replay_one(x["traj"], x["final_pct"], arm=a, give=g, ts_min=t,
-                            hard_mult=hard_mult)[0]
+                            hard_mult=hard_mult, cost_pct=x.get("cost_pct", 0.0))[0]
                 for x in subset
             )
             out.append({"arm_pct": a, "giveback_share": g, "time_stop_min": t,
@@ -375,6 +417,7 @@ def build_trend(limit: int = 2000) -> dict:
             "final_pct": honest_pct,
             "booked_pct": float(final_pct),
             "phantom": is_phantom,
+            "cost_pct": _cost_pct(r),
             "symbol": r.get("symbol"),
             "signal_id": r.get("signal_id"),
             "mfe_pct": lc.get("mfe_pct"),
@@ -399,14 +442,20 @@ def build_trend(limit: int = 2000) -> dict:
     # 1.80 — прежнее боевое значение, 0.40 — правка 27.07. Ось нужна, чтобы
     # эффект правки был ИЗМЕРЕН, а не заявлен.
     min_protectives = [0.40, 1.80]
+    # (#band-corridor-2026-08-03) ride_arm БЫЛ константой из конфига — и это
+    # закрывало от замера ровно тот вопрос, который стоит: полоса захвата живёт
+    # в коридоре [band_arm, ride_arm), и все 15 боевых закрытий по
+    # `trend_capture_band` попали в него (MFE 0.41–0.76 при коридоре 0.40–0.80).
+    # Ни одно не вышло за границу. Ширину коридора нельзя было ни подтвердить,
+    # ни опровергнуть, пока его правая граница не перебиралась.
+    ride_arms = [0.55, 0.80, 1.20]
 
-    ride_arm = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8))
     band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
 
     def _run(subset: list[dict]) -> list[dict]:
         out = []
-        for be_arm, be_floor, band_arm, band_give, ride_trail, min_prot in product(
-            be_arms, be_floors, band_arms, band_gives, ride_trails, min_protectives
+        for be_arm, be_floor, band_arm, band_give, ride_trail, min_prot, ride_arm in product(
+            be_arms, be_floors, band_arms, band_gives, ride_trails, min_protectives, ride_arms
         ):
             total = 0.0
             wins = 0
@@ -418,6 +467,7 @@ def build_trend(limit: int = 2000) -> dict:
                     band_arm=band_arm, band_give=band_give, band_floor=band_floor,
                     ride_arm=ride_arm, ride_trail=ride_trail,
                     min_protective=min_prot,
+                    cost_pct=t.get("cost_pct", 0.0),
                 )
                 total += pct
                 wins += int(pct > 0)
@@ -429,6 +479,10 @@ def build_trend(limit: int = 2000) -> dict:
                 "band_giveback_share": band_give,
                 "ride_trail_share": ride_trail,
                 "min_protective_pct": min_prot,
+                "ride_arm_pct": ride_arm,
+                # Ширина коридора, в котором полоса перехватывает управление у
+                # трейла. Отрицательная = коридора нет, полоса выключена собой.
+                "band_corridor_width": round(ride_arm - band_arm, 4),
                 "total_pct": round(total, 4),
                 "avg_pct": round(total / len(subset), 4),
                 "winrate_pct": round(wins / len(subset) * 100, 1),
@@ -444,7 +498,8 @@ def build_trend(limit: int = 2000) -> dict:
 
     def _key(v):
         return (v["be_arm_pct"], v["be_floor_pct"], v["band_arm_pct"],
-                v["band_giveback_share"], v["ride_trail_share"], v["min_protective_pct"])
+                v["band_giveback_share"], v["ride_trail_share"], v["min_protective_pct"],
+                v["ride_arm_pct"])
 
     split = _split_check(trades, _run, variants[0], _key)
 
@@ -455,6 +510,7 @@ def build_trend(limit: int = 2000) -> dict:
         "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
         "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
         "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        "ride_arm_pct": float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
     }
     current_row = next((v for v in variants if _key(v) == _key(current)), None)
 
@@ -593,6 +649,7 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
             capture_start=params.get("capture_start_pct"),
             capture_drawdown=params.get("capture_drawdown_pct", 0.30),
             capture_share=params.get("capture_share", 0.40),
+            cost_pct=t.get("cost_pct", 0.0),
         )[0]
     return total
 

@@ -211,6 +211,34 @@ class RobotLoop:
                 db.flush()
                 continue
 
+            # (#tz-enforce-2026-08-03) Условия ТЗ. Считаются всегда, блокируют
+            # только при TZ_MODE=enforce И накопленной выборке — см. предохра-
+            # нители в tz_entry_shadow. Первый замер дал ADX 16.1/18.0/19.4 при
+            # пороге ТЗ 23: enforce на нём остановил бы трендовый контур целиком,
+            # поэтому по умолчанию включены лишь беспороговые условия (di, obv).
+            _tz = tz_entry_shadow.evaluate(
+                getattr(result, "timeframes", None),
+                regime=_regime,
+                side=result.action,
+            )
+            _tz_block, _tz_reason = tz_entry_shadow.should_block(
+                _tz, sample_size=tz_entry_shadow.observed_sample_size()
+            )
+            if _tz_block:
+                self.decisions.record(
+                    db,
+                    symbol=symbol,
+                    status="blocked",
+                    decision="tz_entry_conditions",
+                    action=result.action,
+                    regime=_regime,
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    payload={**_tz.as_dict(), "enforce_reason": _tz_reason},
+                )
+                db.flush()
+                continue
+
             is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
 
             # Range-шорт включается своим флагом RANGE_ALLOW_SHORT и не зависит
@@ -1190,11 +1218,7 @@ class RobotLoop:
                     # OBV. Только наблюдение: считаем и пишем, вход не трогаем.
                     # Через несколько сотен сделок станет видно, какие входы
                     # каждое условие отсекло бы и чем они закончились.
-                    "tz_shadow": tz_entry_shadow.evaluate(
-                        getattr(result, "timeframes", None),
-                        regime=str(getattr(result, "regime", "") or ""),
-                        side=result.action,
-                    ).as_dict(),
+                    "tz_shadow": {**_tz.as_dict(), "enforce_reason": _tz_reason},
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в

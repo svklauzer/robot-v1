@@ -37,11 +37,24 @@ edge 0.084% на сделку допуск в 1% это двенадцать edg
 
 Режим
 -----
-ТОЛЬКО наблюдение. Функция ничего не блокирует, результат пишется в
-`plan_json.tz_shadow`. Порог ADX и зона Stoch RSI взяты из ТЗ (23 и 30), а не
-подобраны — подбирать не на чем: ни один из индикаторов до этой правки не
-считался, распределений нет. Через несколько сотен сделок будет видно, какие
-входы каждое условие отсекло бы и чем они закончились; тогда и решать.
+`TZ_MODE`: shadow (по умолчанию) | enforce.
+
+(#tz-enforce-2026-08-03) Замер на первых наблюдениях: ADX по трендовым сетапам
+шёл 16.1 / 18.0 / 19.4 при пороге ТЗ 23. Ни один сетап порога не достигал —
+значит enforce на пороге 23 это не «стать разборчивее», а выключить трендовый
+контур параметром. Порог из ТЗ написан под DEX-таймфреймы и к нашим не подошёл.
+
+Отсюда два предохранителя, оба обязательны:
+
+  * `TZ_ENFORCE_MIN_SAMPLE` — enforce НЕ включается, пока не накоплено столько
+    оценок. Иначе порог калибруется по трём точкам, а это подгонка с другим
+    названием. Счётчик берётся из журнала, а не из веры.
+  * `TZ_ENFORCE_CONDITIONS` — какие именно условия блокируют. Условия с
+    некалиброванным порогом можно оставить в тени, включив только те, что
+    порога не требуют (направление DI, OBV против своей EMA).
+
+Пока выборки нет, `should_block` возвращает False с причиной — поведение
+не меняется, но в `plan_json` видно, ЧТО именно удерживает enforce выключенным.
 
 Чистые функции над словарями таймфреймов — тестируется без pandas и рынка.
 """
@@ -52,6 +65,23 @@ from dataclasses import dataclass, asdict
 from core.config import settings
 
 TREND_REGIMES = frozenset({"trend_up_candidate", "trend_down_candidate"})
+
+# Условие → к какому семейству относится. Нужно, чтобы enforce можно было
+# включить частично: у `adx` порог не откалиброван, у `di`/`obv` порога нет
+# вовсе — они сравнивают величины между собой и работают на любых таймфреймах.
+CONDITION_FAMILY = {
+    "adx_below_min": "adx",
+    "di_against_side": "di",
+    "stoch_not_in_pullback": "stoch",
+    "stoch_k_below_d": "stoch",
+    "stoch_k_above_d": "stoch",
+    "obv_below_ema": "obv",
+    "obv_above_ema": "obv",
+}
+
+
+def _family(code: str) -> str:
+    return CONDITION_FAMILY.get(str(code).split(":", 1)[0], "unknown")
 
 
 @dataclass(frozen=True)
@@ -168,3 +198,82 @@ def evaluate(timeframes, *, regime: str, side: str) -> TZShadow:
         stoch_d=round(stoch_d, 4) if stoch_d is not None else None,
         obv_vs_ema=round(obv_vs_ema, 4) if obv_vs_ema is not None else None,
     )
+
+
+_SAMPLE_CACHE: dict = {"ts": 0.0, "value": 0}
+
+
+def observed_sample_size(ttl_sec: float = 600.0) -> int:
+    """Сколько РЕАЛЬНО посчитанных оценок накоплено в журнале сделок.
+
+    Считаем из файла, а не из памяти процесса: счётчик в памяти обнулялся бы
+    при каждом рестарте, и enforce то включался бы, то выключался сам по себе.
+    Результат кешируется — гейт зовут на каждом символе каждого прохода.
+    """
+    import time
+
+    now = time.time()
+    if now - float(_SAMPLE_CACHE["ts"]) < ttl_sec:
+        return int(_SAMPLE_CACHE["value"])
+
+    count = 0
+    try:
+        import json
+        from pathlib import Path
+
+        from services.ml_trade_logger import MLTradeLogger
+
+        path = Path(MLTradeLogger().path)
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    if '"tz_shadow"' not in line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    plan = row.get("plan") or row.get("plan_json") or {}
+                    shadow = plan.get("tz_shadow") if isinstance(plan, dict) else None
+                    if isinstance(shadow, dict) and shadow.get("evaluated"):
+                        count += 1
+    except Exception:
+        # Не смогли прочитать — считаем выборку нулевой. Это выключает enforce,
+        # то есть ошибка чтения делает систему мягче, а не жёстче.
+        count = 0
+
+    _SAMPLE_CACHE["ts"] = now
+    _SAMPLE_CACHE["value"] = count
+    return count
+
+
+def enforced_families() -> frozenset[str]:
+    raw = str(getattr(settings, "TZ_ENFORCE_CONDITIONS", "") or "")
+    return frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
+
+
+def should_block(shadow: TZShadow, *, sample_size: int) -> tuple[bool, str]:
+    """Блокировать ли вход. Возвращает (блокировать, причина решения).
+
+    Причина возвращается ВСЕГДА, в том числе когда не блокируем: в разборе
+    нужно видеть, что удержало enforce — режим, размер выборки или то, что
+    сработавшие условия не входят в список включённых.
+    """
+    if str(getattr(settings, "TZ_MODE", "shadow")).lower() != "enforce":
+        return False, "mode_shadow"
+    if not shadow.evaluated:
+        # Нет индикаторов — не повод не пускать. Fail-open, как и в тени.
+        return False, "not_evaluated"
+
+    min_sample = int(getattr(settings, "TZ_ENFORCE_MIN_SAMPLE", 40))
+    if int(sample_size) < min_sample:
+        return False, f"sample_too_small:{sample_size}<{min_sample}"
+
+    families = enforced_families()
+    if not families:
+        return False, "no_conditions_enabled"
+
+    hit = sorted({_family(code) for code in shadow.failed} & families)
+    if not hit:
+        return False, "enabled_conditions_passed"
+    return True, "blocked_by:" + ",".join(hit)
