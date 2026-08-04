@@ -1613,10 +1613,11 @@ class MarketIntelligenceEngine:
         volume_confirmation = 0.0
         penalty = 0.0
 
-        # (#3) Reversal-кандидат: 4h контр-тренд — это СУТЬ разворота, не штрафуем
-        # за него и даём credit за подтверждённую разворотную структуру младших ТФ
-        # (он уже прошёл тугие гейты _try_reversal_long).
+        # Reversal контр-трендовый по сути — за 4h контр-тренд не штрафуем.
         is_reversal = "reversal" in str(regime)
+        # Трендовый кандидат: вход в него решает тренд-контур (TZ/KAMA enforce
+        # в robot_loop), а не range/timing-гейты бокового рынка.
+        is_trend = str(regime) in ("trend_up_candidate", "trend_down_candidate")
 
         if action == "long":
             if is_reversal:
@@ -1862,13 +1863,13 @@ class MarketIntelligenceEngine:
                     elif _rsi_gate.zone == "late_entry":
                         comment = "trend_htf_overheat_late_entry"
 
-        # (#timing-veto) Купируем вход в микро-разворот. Аудит: лосеры шли +0.2%
-        # и разворачивались — вход в ВЕРШИНУ (long) / ДНО (short) на исполнительном
-        # ТФ. entry_timing считался, но аппрув его НЕ гейтил. Теперь: если 5m
-        # истощён ПРОТИВ сделки (overheated для long / oversold для short), а 1m НЕ
-        # подтверждает продолжение — ждём (не покупаем вершину, не шортим дно).
-        # 1m, подтверждающий импульс, оставляет вход (настоящее продолжение).
-        if bool(getattr(settings, "ENTRY_TIMING_VETO_ENABLED", True)) and decision == "approve":
+        # Не покупаем вершину / не шортим дно на исполнительном ТФ. Для тренда —
+        # мимо: тайминг входа отдаём тренд-контуру (Stoch-откат в TZ).
+        if (
+            bool(getattr(settings, "ENTRY_TIMING_VETO_ENABLED", True))
+            and decision == "approve"
+            and not is_trend
+        ):
             _m5_mom = self._ctx_value(m5, "momentum")
             _m1_mom = self._ctx_value(m1, "momentum")
             if action == "long" and _m5_mom == "overheated" and _m1_mom != "bullish":
@@ -1878,11 +1879,9 @@ class MarketIntelligenceEngine:
                 decision = "wait"
                 comment = "entry_timing_shorting_bottom"
 
-        # (#anti-chop) Сила тренда через веер EMA, нормированный на ATR якорного ТФ.
-        # Лосеры #104/#106 — шорты в чоп/разворот: EMA свёрнуты или развёрнуты
-        # вверх, спред мал/отрицателен → не трендовый рынок для этой стороны.
-        # Reversal-кандидаты исключены: они намеренно контртрендовые и уже прошли
-        # тугие гейты _try_reversal_*. Выходная логика тут бессильна — режем вход.
+        # Сила тренда: веер EMA20/EMA200, нормированный на ATR якорного ТФ.
+        # Узкий/развёрнутый веер = не трендовый рынок для этой стороны. Reversal —
+        # мимо. Реальный тренд проходит (широкий веер), поэтому оставлен и тренду.
         if (
             bool(getattr(settings, "ANTI_CHOP_GATE_ENABLED", True))
             and decision == "approve"
@@ -1900,10 +1899,8 @@ class MarketIntelligenceEngine:
                     decision = "wait"
                     comment = f"anti_chop_no_trend(fan_atr={_fan_atr:.2f}<{_min_fan:.2f})"
 
-        # (#htf-align) Выравнивание со СТАРШИМ ТФ. Аудит свежих тестов: AVAX-лонги
-        # (#146/#147) открывались, пока 4h структурно ВНИЗ (price << ema200_4h) —
-        # контртренд к большому ТФ, MFE~0.06-0.13 → стоп −2.3…−3.0. Не лонгуем,
-        # если старший ТФ в даунтренде; не шортим, если в аптренде. Reversal — мимо.
+        # Выравнивание со старшим ТФ: не лонгуем при 4h вниз, не шортим при 4h
+        # вверх. Reversal — мимо. Реальный тренд согласован с 4h и проходит.
         if (
             bool(getattr(settings, "HTF_ALIGN_ENABLED", True))
             and decision == "approve"
@@ -1921,17 +1918,14 @@ class MarketIntelligenceEngine:
                     decision = "wait"
                     comment = "htf_against_short_4h_up"
 
-        # (#range-pos) Не входим в НЕВЫГОДНЫЙ край диапазона. Аудит 0%-WR окна:
-        # #157 шортил у дна 59.2k (range_pos 0.16) → отскок в безубыток. Внутри
-        # тренда цена ходит вбок, и вход у противоположного края = смерть. Позиция
-        # в диапазоне якорного ТФ: 0=поддержка(низ), 1=сопротивление(верх).
-        #   short разрешён только в ВЕРХНЕЙ части (range_pos >= порога),
-        #   long  — только в НИЖНЕЙ части (range_pos <= 1-порога).
-        # Reversal — мимо (он намеренно фейдит экстремум).
+        # Позиция в диапазоне якорного ТФ (0=низ, 1=верх): short только в верхней
+        # части, long только в нижней. Range-концепт — reversal и ТРЕНД мимо: в
+        # аптренде цена и живёт у верха диапазона, гейт душил бы продолжение.
         if (
             bool(getattr(settings, "RANGE_POS_GATE_ENABLED", True))
             and decision == "approve"
             and not is_reversal
+            and not is_trend
         ):
             _rp_anchor = self._tf(contexts, str(getattr(settings, "RANGE_POS_ANCHOR_TF", "1h")))
             _sup = float(self._ctx_value(_rp_anchor, "support", 0) or 0)
