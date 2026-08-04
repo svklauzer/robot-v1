@@ -1330,83 +1330,53 @@ class MarketIntelligenceEngine:
         trend_score = float(scores.get("trend", 0))
         volume_score = float(scores.get("volume", 0))
 
-        # Строгий классический long.
-        if (
-            h4_trend == "trend_up"
-            and h1_trend == "trend_up"
-            and m15_momentum in ["bullish", "neutral"]
-        ):
-            return "trend_up_candidate"
+        # Направление задают старшие ТФ (4h+1h). Импульс РАЗРЕШАЕТ и
+        # «перегрет/перепродан»: сильный тренд по нижним ТФ именно такой, а
+        # тайминг входа (откат) решает тренд-контур ниже (TZ Stoch/KAMA), не
+        # классификатор режима. Раньше [bullish/neutral] отсекало сильнейшие
+        # тренды (TRX: 5/5 ТФ вверх, trend_score 75, но m15 overheated → mixed).
+        _long_mom = ("bullish", "neutral", "overheated")
+        _short_mom = ("bearish", "neutral", "oversold")
 
-        # Строгий классический short.
-        if (
-            h4_trend == "trend_down"
-            and h1_trend == "trend_down"
-            and m15_momentum in ["bearish", "neutral"]
-        ):
+        # Строгий классический тренд: 4h и 1h согласованы.
+        if h4_trend == "trend_up" and h1_trend == "trend_up" and m15_momentum in _long_mom:
+            return "trend_up_candidate"
+        if h4_trend == "trend_down" and h1_trend == "trend_down" and m15_momentum in _short_mom:
             return "trend_down_candidate"
 
-        # Learning/dev: разрешаем кандидат, если 4h mixed,
-        # но 1h + 15m + 5m уже дают рабочее направление.
-        # (#side-parity-2026-07-28) Единые пороги для обеих сторон.
+        # Learning: 4h может быть mixed, если 1h+15m+5m дают направление.
+        # Пороги качества (total) и направления (trend_score вокруг 50) едины
+        # для обеих сторон.
         _min_total = float(getattr(settings, "SETUP_MIN_TOTAL_SCORE", 55.0))
         _trend_margin = float(getattr(settings, "SETUP_TREND_SCORE_MARGIN", 5.0))
 
         if learning_mode:
-            long_learning_ok = (
-                h4_trend in ["trend_up", "mixed"]            # flat убран
-                and h1_trend == "trend_up"                   # FIX: h1 обязан быть trend_up
+            if (
+                h4_trend in ("trend_up", "mixed")
+                and h1_trend == "trend_up"
                 and m15_trend == "trend_up"
-                and m5_trend in ["trend_up", "flat", "mixed"]
-                and m15_momentum in ["bullish", "neutral"]
-                and m5_momentum in ["bullish", "neutral"]
-                # (#side-parity-2026-07-28) Порог КАЧЕСТВА одинаков для обеих
-                # сторон, направление задаёт trend_score симметрично вокруг 50.
+                and m5_trend in ("trend_up", "flat", "mixed")
+                and m15_momentum in _long_mom
+                and m5_momentum in _long_mom
                 and total_score >= _min_total
                 and trend_score >= 50.0 + _trend_margin
-            )
-
-            if long_learning_ok:
+            ):
                 return "trend_up_candidate"
 
-            short_learning_ok = (
-                h4_trend in ["trend_down", "mixed"]          # flat убран: flat на 4h = боковик, не short
-                and h1_trend == "trend_down"                 # FIX: h1 обязан быть trend_down
+            if (
+                h4_trend in ("trend_down", "mixed")
+                and h1_trend == "trend_down"
                 and m15_trend == "trend_down"
-                and m5_trend in ["trend_down", "flat", "mixed"]
-                and m15_momentum in ["bearish", "neutral"]
-                and m5_momentum in ["bearish", "neutral"]
-                # (#side-parity-2026-07-28) БЫЛО: `total_score >= 50` против 55 у
-                # лонга и `trend_score <= 55` против `>= 55`.
-                #
-                # Вторая асимметрия была разрушительнее первой. Наблюдаемый
-                # trend_score по всей вселенной лежит в 25–43 (замер по скану:
-                # BTC 27.8, ETH 30.0, SOL 25.0, XRP 25.0, AVAX 29.0, TRX 43.0,
-                # ADA 35.5). То есть условие лонга `>= 55` не выполнялось почти
-                # никогда, а условие шорта `<= 55` — почти всегда. Направленный
-                # фильтр работал только в одну сторону.
-                #
-                # Результат в данных: шортов 170 против лонгов 117 (в 1.45 раза)
-                # при почти одинаковом убытке на сделку (−0.36 против −0.34).
-                # Перекос дал не худшие сделки, а БОЛЬШЕ сделок той же
-                # убыточности — ту самую частоту, которую мы режем.
+                and m5_trend in ("trend_down", "flat", "mixed")
+                and m15_momentum in _short_mom
+                and m5_momentum in _short_mom
                 and total_score >= _min_total
                 and trend_score <= 50.0 - _trend_margin
-            )
-
-            if short_learning_ok:
+            ):
                 return "trend_down_candidate"
 
-        # Голосование по тренду.
-        #
-        # (#side-parity-2026-07-28) БЫЛО: лонг `total_score >= 58`, шорт
-        # `total_score <= 50`. Это не асимметрия порога — это РАЗНЫЙ СМЫСЛ
-        # одной величины: для лонга total_score работал как оценка КАЧЕСТВА,
-        # для шорта как индикатор НАПРАВЛЕНИЯ. Шорт с отличным качеством
-        # (total 80) отвергался именно за то, что он хороший.
-        #
-        # Направление определяют голоса ТФ — они для того и считаются. Качество
-        # обе стороны проходят по одному порогу.
+        # Фолбэк — голосование ТФ. Направление задают голоса, качество — единый
+        # порог total для обеих сторон.
         _vote_min = float(getattr(settings, "SETUP_VOTING_MIN_TOTAL_SCORE", 58.0))
         if trend_up_votes >= 3 and total_score >= _vote_min:
             return "trend_up_candidate"
