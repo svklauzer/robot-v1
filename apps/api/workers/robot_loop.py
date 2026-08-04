@@ -227,18 +227,23 @@ class RobotLoop:
                 _tz, sample_size=tz_entry_shadow.observed_sample_size()
             )
             if _tz_block:
-                self.decisions.record(
-                    db,
-                    symbol=symbol,
-                    status="blocked",
-                    decision="tz_entry_conditions",
-                    action=result.action,
-                    regime=_regime,
-                    radar_state=getattr(result, "radar_state", None),
-                    confidence_hint=getattr(result, "confidence_hint", None),
-                    payload={**_tz.as_dict(), "enforce_reason": _tz_reason},
-                )
-                db.flush()
+                # Дедуп как у прочих блоков: трендовый кандидат живёт весь up/down-
+                # leg (состояние, не событие), и без дедупа один и тот же tz-блок
+                # писался КАЖДЫЙ скан (~67с) — ADA/TRX «висли» десятками строк за
+                # минуты и раздували intelligence_events.
+                if self._should_record_block_event(db, symbol, "tz_entry_conditions"):
+                    self.decisions.record(
+                        db,
+                        symbol=symbol,
+                        status="blocked",
+                        decision="tz_entry_conditions",
+                        action=result.action,
+                        regime=_regime,
+                        radar_state=getattr(result, "radar_state", None),
+                        confidence_hint=getattr(result, "confidence_hint", None),
+                        payload={**_tz.as_dict(), "enforce_reason": _tz_reason},
+                    )
+                    db.flush()
                 continue
 
             is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
