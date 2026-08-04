@@ -211,6 +211,29 @@ def test_disarmed_condition_records_but_does_not_close(monkeypatch):
     assert "obv_reversed" in out.triggers
 
 
+def test_default_exit_does_not_arm_obv():
+    """Дефолт не вооружает OBV на выход: вход требует obv>ema, и тот же порог на
+    выходе churn-ил позицию у линии (TRX #362 — открыл/закрыл за 10с в ноль)."""
+    armed = {x.strip() for x in settings.TZ_EXIT_CONDITIONS.split(",") if x.strip()}
+    assert "obv" not in armed
+
+
+def test_obv_reversal_alone_does_not_churn_on_default_exit(monkeypatch):
+    """С дефолтными условиями (kama,adx) разворот OBV НЕ закрывает свежий вход,
+    а слом KAMA — закрывает."""
+    monkeypatch.setattr(settings, "TZ_EXIT_CONDITIONS", "kama,adx", raising=False)
+    # тренд цел (close>kama), ADX не падает от пика, но OBV ушёл под EMA
+    held = tze.evaluate(side="long", close=105.0, kama=100.0, adx=30.0,
+                        adx_peak=35.0, obv=700.0, obv_ema=800.0)
+    assert held.exit is False
+    assert "obv_reversed" in held.triggers  # наблюдается, но не закрывает
+    # а вот пробой KAMA закрывает
+    broke = tze.evaluate(side="long", close=99.0, kama=100.0, adx=30.0,
+                         adx_peak=35.0, obv=1000.0, obv_ema=800.0)
+    assert broke.exit is True
+    assert broke.reason == "tz_kama"
+
+
 # ── сайзинг без стопа ───────────────────────────────────────────────────────
 class _Levels:
     """Минимальный носитель _tz_stop без рынка и pandas."""
