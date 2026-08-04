@@ -311,9 +311,16 @@ class HedgeBuilder:
         # notional_usdt (ручное открытие через API) имеет приоритет.
         from services.arb_capital import funding_arb_notional
 
+        # (#live-notional-parity-2026-08-04) Кэп нотионала ордера держим и здесь:
+        # арбитраж открывает две ноги через LIVE_EXECUTOR, и каждая нога — ордер,
+        # который в live режется LIVE_MAX_ORDER_NOTIONAL_USDT. Без кэпа в сайзинге
+        # бумага насчитала бы ногу $100, а live отклонил бы по кэпу $25 — та же
+        # рассинхронизация, что и в обычных сделках. cap<=0 = выключено.
+        _order_cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
         notional = min(
             float(notional_usdt or funding_arb_notional()),
             settings.FUNDING_ARB_MAX_NOTIONAL_USDT,
+            _order_cap if _order_cap > 0 else float("inf"),
         )
         spot_qty = notional / float(opportunity.spot_price)
         swap_qty = notional / float(opportunity.swap_price)

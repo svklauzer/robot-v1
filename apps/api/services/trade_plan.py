@@ -128,12 +128,33 @@ class TradePlanBuilder:
         max_position_notional = max_position_margin_usdt * leverage_value
         qty_by_position_cap = max_position_notional / entry_price
 
+        # (#live-notional-parity-2026-08-04) Кэп нотионала ордера. Раньше он жил
+        # ТОЛЬКО в LIVE_EXECUTOR и срабатывал лишь в live: бумага планировала
+        # полный размер (ADA $188.92), а live отклонял ордер по кэпу $25 —
+        # «бумага разошлась бы с биржей» вне зависимости от монеты. Заводим тот
+        # же кэп В САЙЗИНГ: план ограничивает нотионал ДО исполнения, поэтому
+        # бумага и live берут один размер, и ни один ордер не упирается в кэп на
+        # отправке. cap<=0 — выключено. Применяется в ОБОИХ режимах намеренно:
+        # смысл кэпа на этапе ramp-up — маленькие ордера и там, и там.
+        _notional_cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
+        qty_by_notional_cap = (_notional_cap / entry_price) if _notional_cap > 0 else float("inf")
+
         # Берём меньшее, чтобы не открыть позицию больше допустимого размера.
-        qty = min(qty_by_risk, qty_by_balance, qty_by_position_cap)
+        qty = min(qty_by_risk, qty_by_balance, qty_by_position_cap, qty_by_notional_cap)
 
         # Приводим qty к точности биржи.
         qty = float(self.htx.amount_to_precision(exch_symbol, qty))
         qty = float(qty)
+
+        # Предохранитель на случай биржи, которая при квантовании ОКРУГЛЯЕТ объём
+        # вверх (ccxt по умолчанию усекает, но не все маршруты). Тогда нотионал
+        # мог бы вылезти за кэп на один шаг — а LIVE_EXECUTOR режет по строгому
+        # «>», и такой ордер отклонился бы в live. Ужимаем на шаг вниз до кэпа.
+        if _notional_cap > 0 and entry_price > 0:
+            _guard = 0
+            while qty > 0 and entry_price * qty > _notional_cap and _guard < 32:
+                qty = float(self.htx.amount_to_precision(exch_symbol, qty * 0.999))
+                _guard += 1
 
         if qty <= 0:
             return self._invalid_plan(

@@ -560,9 +560,14 @@ class Settings(BaseSettings):
     LIVE_MARGIN_MODE: str = "cross"           # cross | isolated (swap)
     LIVE_FILL_POLL_TIMEOUT_SEC: float = 10.0  # ждать подтверждения филла
     LIVE_FILL_POLL_INTERVAL_SEC: float = 1.0
-    # Предохранитель live_limited: макс. нотионал ОДНОГО ордера (USDT). 0 → выкл.
-    # Для старта живой торговли держим крошечным (напр. 25), потом поднимаем.
-    LIVE_MAX_ORDER_NOTIONAL_USDT: float = 25.0
+    # Предохранитель: макс. нотионал ОДНОГО ордера (USDT). 0 → выкл.
+    # (#live-notional-parity-2026-08-04) Кэп ЗАВЕДЁН В САЙЗИНГ (trade_plan и
+    # funding_arbitrage), поэтому бумага и live берут один размер, и ни один
+    # ордер не упирается в кэп на отправке. 250 покрывает обычный сайзинг
+    # (trend/scalp $123–190, арб $100), а экстрим (dynamic all-in ~$807,
+    # арб-макс $500) ужимает до здорового потолка на ордер. Было 25 — это
+    # ужимало КАЖДУЮ позицию в 5–8 раз (ADA-ордер $188.92 в live отклонялся бы).
+    LIVE_MAX_ORDER_NOTIONAL_USDT: float = 250.0
     # Сайзинг от РЕАЛЬНОГО баланса биржи (fetch_balance), а не от RISK_EQUITY_USDT.
     # В live эквити = свободный USDT соответствующего счёта в моменте (SPOT и
     # USDT-M фьючерсы — РАЗНЫЕ счета HTX). Растёт с пополнениями владельца и

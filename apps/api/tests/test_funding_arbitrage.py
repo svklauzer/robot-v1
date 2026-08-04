@@ -83,6 +83,10 @@ def test_monitor_scan_persists_candidate_when_funding_edge_is_positive():
 
 def test_hedge_builder_and_paper_close_log_pnl():
     db = _db_session()
+    # Тест про PnL при нотионале 100 — изолируем от кэпа ордера, иначе он
+    # ужмёт ногу до 25 и qty/накопление не сойдутся.
+    _old_cap = settings.LIVE_MAX_ORDER_NOTIONAL_USDT
+    settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 1000.0
     try:
         opportunity = FundingArbOpportunity(
             symbol="BTC/USDT",
@@ -130,6 +134,7 @@ def test_hedge_builder_and_paper_close_log_pnl():
         assert closed.realized_pnl is not None
         assert closed.realized_pnl > 0
     finally:
+        settings.LIVE_MAX_ORDER_NOTIONAL_USDT = _old_cap
         db.close()
 
 
