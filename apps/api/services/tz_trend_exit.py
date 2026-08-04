@@ -116,9 +116,17 @@ def evaluate(
 
     triggers: list[str] = []
 
-    # 1. Экстренный выход: цена закрылась по ту сторону KAMA.
-    if close_v is not None and kama_v is not None:
-        broken = close_v < kama_v if is_long else close_v > kama_v
+    # 1. Экстренный выход: цена ПРОБИЛА KAMA с буфером, а не коснулась линии.
+    #    Вход требует price>kama, выход на close<kama тем же порогом churn-ил
+    #    позицию у линии (AVAX #363: открылась и закрылась за 11с на движении
+    #    0.044%). Буфер даёт мёртвую зону между входом и выходом и заодно
+    #    согласует выход со СТОПОМ (stop_from_kama = kama×(1∓буфер)) — докстринг
+    #    требует, чтобы стоп и выход говорили одно и то же.
+    if close_v is not None and kama_v is not None and kama_v > 0:
+        buf = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_PCT",
+                            getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15))) / 100.0
+        level = kama_v * (1 - buf) if is_long else kama_v * (1 + buf)
+        broken = close_v < level if is_long else close_v > level
         if broken:
             triggers.append("kama_broken")
 

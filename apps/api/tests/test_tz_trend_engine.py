@@ -211,6 +211,22 @@ def test_disarmed_condition_records_but_does_not_close(monkeypatch):
     assert "obv_reversed" in out.triggers
 
 
+def test_kama_touch_within_buffer_does_not_churn(monkeypatch):
+    """Касание KAMA в пределах буфера НЕ закрывает (AVAX #363 churn), а пробой
+    за буфер — закрывает."""
+    monkeypatch.setattr(settings, "TZ_EXIT_CONDITIONS", "kama,adx", raising=False)
+    monkeypatch.setattr(settings, "TZ_EXIT_KAMA_BUFFER_PCT", 0.15, raising=False)
+    # вход у линии (kama≈6.8155), цена тикнула на 0.044% вниз — в пределах буфера
+    held = tze.evaluate(side="long", close=6.8127, kama=6.8155, adx=42.0,
+                        adx_peak=42.0, obv=1000.0, obv_ema=900.0)
+    assert held.exit is False
+    # реальный пробой ниже kama×(1−0.0015)=6.8053
+    broke = tze.evaluate(side="long", close=6.8000, kama=6.8155, adx=42.0,
+                         adx_peak=42.0, obv=1000.0, obv_ema=900.0)
+    assert broke.exit is True
+    assert broke.reason == "tz_kama"
+
+
 def test_default_exit_does_not_arm_obv():
     """Дефолт не вооружает OBV на выход: вход требует obv>ema, и тот же порог на
     выходе churn-ил позицию у линии (TRX #362 — открыл/закрыл за 10с в ноль)."""
