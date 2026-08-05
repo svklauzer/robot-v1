@@ -256,7 +256,7 @@ services:
 
       # ── Сетка ─────────────────────────────────────────────────────────────
       - key: GRID_ENABLED
-        value: "false"
+        value: "true"
       - key: GRID_SYMBOLS
         value: BTC/USDT,ETH/USDT,TRX/USDT
       - key: GRID_KILL_SWITCH_ENABLED
