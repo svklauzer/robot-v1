@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     # чинится она там. Эта ось остаётся доступной как страховочный рельс против
     # будущей деградации режима, но включать её нужно осознанно и не вместо
     # разбора причины. Подробности — в services/regime_expectancy_sizer.py.
-    REGIME_EXP_SIZING_ENABLED: bool = False
+    REGIME_EXP_SIZING_ENABLED: bool = True
     # Наблюдательный размер для режима с отрицательным ожиданием. НЕ ноль: при
     # нуле режим перестаёт давать закрытия, ожидание замерзает, и восстановиться
     # он уже не сможет никогда.
@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 1.5
+    TREND_MAX_EXTENSION_ATR: float = 1.2
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     # может 80%. Сначала 2–3 дня наблюдения, потом порог по фактическому
     # распределению и переключение в enforce. Отгружать блокирующее правило с
     # порогом «на глаз» в этом репозитории уже пробовали — см. SETUP_REACH_*.
-    TREND_TRIGGER_MODE: str = "shadow"
+    TREND_TRIGGER_MODE: str = "enforce"
 
     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ТОЛЬКО наблюдение.
     # Основание: по /analytics/mfe-mae у trend_up edge_ratio 0.943 — средний ход
@@ -214,8 +214,8 @@ class Settings(BaseSettings):
     # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h"
     TZ_ENTRY_TF: str = "15m"
-    TZ_ADX_MIN: float = 23.0        # ниже — движения нет, входить не во что
-    TZ_STOCH_ZONE: float = 30.0     # лонг: %K <= 30; шорт: %K >= 70
+    TZ_ADX_MIN: float = 18.0        # ниже — движения нет, входить не во что
+    TZ_STOCH_ZONE: float = 35.0     # лонг: %K <= 35; шорт: %K >= 65
 
     # (#tz-enforce-2026-08-03) Ввод условий в бой — с двумя предохранителями.
     # Первый замер: ADX по трендовым сетапам 16.1 / 18.0 / 19.4 при пороге 23.
@@ -258,18 +258,18 @@ class Settings(BaseSettings):
     # копится в тени, порог откалибруем по данным (scripts/tz_calibrate.py),
     # тогда и вооружим. Так trend проходит вход по здоровым продолжениям, а не
     # блокируется некалиброванным порогом.
-    TZ_ENFORCE_CONDITIONS: str = "kama,di,obv"
+    TZ_ENFORCE_CONDITIONS: str = "kama,adx,di,stoch,obv"
 
     # (#tp-reachability-2026-08-03) Достижимость цели: план против факта.
     # TP_REACH_MODE: shadow | enforce.
-    TP_REACH_MODE: str = "shadow"
+    TP_REACH_MODE: str = "enforce"
     # Во сколько раз TP1 может превышать медианный реализованный ход. 1.5 —
     # цель чуть выше типичного пика, ещё достижимая на половине сделок.
     # У скальпа сейчас отношение ~2.0 (0.8 против медианы MFE 0.391).
     TP_REACH_MAX_RATIO: float = 1.5
     # Медиана по трём сделкам — не медиана. Ниже этого выборка не используется,
     # гейт пропускает (fail-open).
-    TP_REACH_MIN_SAMPLE: int = 20
+    TP_REACH_MIN_SAMPLE: int = 15
 
     # ── Трендовый движок по ТЗ (#tz-trend-engine-2026-08-03) ─────────────────
     # Сравнение с текущим движком показало один структурный пробел, который
@@ -1479,11 +1479,11 @@ class Settings(BaseSettings):
     # EMA200 и band 0.25% не удерживал NEUTRAL → пила long/short. Шире зона =
     # ДОЛЬШЕ двусторонний грид (родная среда сетки), направленная лестница
     # только при реальном уходе цены. Это усиливает mean-reversion, не тренд.
-    GRID_REGIME_EMA_BAND_PCT: float = 0.60
-    GRID_TP_PCT: float = 0.8 # было 0.5 (изм 17.06.2026) тейк = безубыток + этот % (вся сетка)
-    GRID_SL_ATR_MULT: float = 2 # было 1.5 (изм 17.06.2026) стоп = крайний уровень ± k·ATR
-    GRID_MAX_SAFETY_ORDERS: int = 4 # было 6 (изм 17.06.2026) макс. исполненных уровней; дальше стоп выставлять
-    GRID_MAX_USED_MARGIN_PCT: float = 20.0     # СВОЙ карман маржи (% экв), отдельно от тренда (70%)
+    GRID_REGIME_EMA_BAND_PCT: float = 0.80
+    GRID_TP_PCT: float = 0.6 # тейк = безубыток + этот % (вся сетка)
+    GRID_SL_ATR_MULT: float = 1.6 # стоп = крайний уровень ± k·ATR
+    GRID_MAX_SAFETY_ORDERS: int = 3 # макс. исполненных уровней; дальше стоп выставлять
+    GRID_MAX_USED_MARGIN_PCT: float = 10.0     # СВОЙ карман маржи (% экв), отдельно от тренда (70%)
     GRID_LEVERAGE: float = 1.0                 # плечо для нотионала/маржи (swap)
     # (#grid-neutral-only-2026-07-24) 0.1 → 0.06: уровни сетки — ЛИМИТНЫЕ ордера,
     # в реале платят maker 0.02% (вход) + TP тоже лимиткой 0.02%; тейкер только
@@ -1548,10 +1548,10 @@ class Settings(BaseSettings):
     GRID_FREEZE_ON_BREAKOUT: bool = True
     # Расстояние цены от EMA в единицах ATR. Нормировка обязательна: 2% от EMA
     # это пробой для BTC и обычный день для TRX.
-    GRID_BREAKOUT_ATR_DIST: float = 2.0
+    GRID_BREAKOUT_ATR_DIST: float = 1.6
     # Порог оттаивания заметно ниже порога заморозки — это и есть гистерезис.
     # Без него корзина дёргалась бы у границы, включая добор на каждом тике.
-    GRID_RANGE_ATR_DIST: float = 1.0
+    GRID_RANGE_ATR_DIST: float = 0.8
     # Возврат в диапазон подтверждается тиками, иначе оттаем на первом же
     # откате внутри продолжающегося пробоя.
     GRID_RANGE_CONFIRM_TICKS: int = 3
@@ -1690,9 +1690,9 @@ class Settings(BaseSettings):
     LEARNING_SETUP_MIN_SCORE: float = 62.0
     LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 32.0
     LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 8.0
-    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = True
+    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = False
     LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 32.0
-    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 4.0
+    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 8.0
     LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
     LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 55.0
 

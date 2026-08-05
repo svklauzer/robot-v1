@@ -184,6 +184,8 @@ services:
       # 0.7718 — ровно то, что предсказывает такое переобучение.
       - key: ML_MODE
         value: shadow
+      - key: REGIME_EXP_SIZING_ENABLED
+        value: "true"
 
       # ── KAMA (ER-период, fast, slow) ─────────────────────────────────────
       # Наша линия enforce/выхода считается на 1h (TZ_TREND_TF) — свинг. Для
@@ -200,18 +202,22 @@ services:
         value: "30"
 
       # ── Условия входа по ТЗ (ADX/DMI, Stoch RSI, OBV) ─────────────────────
-      # Enforce трендового входа. KAMA (сторона линии), DI (направление), OBV
-      # (объём) — вооружены; ADX/Stoch в тени (некалиброванный порог).
+      # Enforce трендового входа: блокируем растянутые входы, а в TZ-гейте
+      # вооружены KAMA/ADX/DI/Stoch/OBV с мягким ADX=18 и зоной Stoch=35.
+      - key: TREND_TRIGGER_MODE
+        value: enforce
+      - key: TREND_MAX_EXTENSION_ATR
+        value: "1.2"
+      - key: TZ_ADX_MIN
+        value: "18.0"
+      - key: TZ_STOCH_ZONE
+        value: "35.0"
       - key: TZ_MODE
         value: enforce
-      # Вооружены только БЕСПОРОГОВЫЕ условия: цена на верной стороне KAMA (якорь
-      # входа), направление +DI/−DI, поток OBV. adx (порог 23 «и растёт») и stoch
-      # (пересечение %K/%D на текущем баре) — В ТЕНИ: ADX на сетапах шёл 16–19,
-      # enforce на 23 выключал трендовый контур целиком (0 входов). Порог из ТЗ
-      # под DEX-ТФ к нашим не подошёл; копим распределение в тени и калибруем по
-      # данным, затем вооружаем. Так trend проходит вход, а не блокируется.
+      # Фильтры входа: цена на верной стороне KAMA, ADX растёт и не ниже 18,
+      # DI за сторону сделки, StochRSI показывает откат/пересечение, OBV за поток.
       - key: TZ_ENFORCE_CONDITIONS
-        value: kama,di,obv
+        value: kama,adx,di,stoch,obv
       # 0 = предохранитель снят. Он защищал от МОИХ подобранных порогов;
       # пороги ТЗ заданы извне, подгонять в них нечего.
       - key: TZ_ENFORCE_MIN_SAMPLE
@@ -235,13 +241,18 @@ services:
         value: "5.0"
 
       # ── Достижимость цели ─────────────────────────────────────────────────
-      # У скальпа TP1 стоит на 0.8% при медианном ходе 0.391% — до цели не
-      # доходят ~82% сделок, а RR считается именно от неё. Пока shadow: нужно
-      # увидеть распределение reach_ratio, прежде чем резать входы.
+      # Достижимость TP1 включена в enforce: не берём сетап, где цель далеко
+      # за историческим медианным MFE режима/символа.
       - key: TP_REACH_MODE
-        value: shadow
+        value: enforce
       - key: TP_REACH_MAX_RATIO
         value: "1.5"
+      - key: TP_REACH_MIN_SAMPLE
+        value: "15"
+      - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
+        value: "false"
+      - key: LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION
+        value: "8.0"
 
       # ── Сетка ─────────────────────────────────────────────────────────────
       - key: GRID_ENABLED
@@ -250,6 +261,20 @@ services:
         value: BTC/USDT,ETH/USDT,TRX/USDT
       - key: GRID_KILL_SWITCH_ENABLED
         value: "true"
+      - key: GRID_REGIME_EMA_BAND_PCT
+        value: "0.80"
+      - key: GRID_TP_PCT
+        value: "0.6"
+      - key: GRID_SL_ATR_MULT
+        value: "1.6"
+      - key: GRID_MAX_SAFETY_ORDERS
+        value: "3"
+      - key: GRID_MAX_USED_MARGIN_PCT
+        value: "10.0"
+      - key: GRID_BREAKOUT_ATR_DIST
+        value: "1.6"
+      - key: GRID_RANGE_ATR_DIST
+        value: "0.8"
 
       # ── Продукт / подписки ────────────────────────────────────────────────
       - key: AFFILIATE_FREE_VIP_DAYS
