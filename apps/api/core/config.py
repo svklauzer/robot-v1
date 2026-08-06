@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 1.2
+    TREND_MAX_EXTENSION_ATR: float = 1.5
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -446,7 +446,7 @@ class Settings(BaseSettings):
     # консервативной ставке ~0.05%/8ч окупается за ~10 периодов, столько же
     # закладывает ASSUMED_HOLD_PERIODS, а MAX_HOLD_HOURS=240 даёт 30 периодов
     # запаса. Порог ниже breakeven сделал бы гейт неисполнимым.
-    FUNDING_ARB_CONFIRM_HOLD_PERIODS: int = 10
+    FUNDING_ARB_CONFIRM_HOLD_PERIODS: int = 30
     # Стресс: базис расходится против нас на эту величину за время удержания.
     # Позиция дельта-нейтральна, поэтому бьёт именно расхождение.
     FUNDING_ARB_BASIS_STRESS_PCT: float = 0.30
@@ -906,7 +906,7 @@ class Settings(BaseSettings):
     # ожидал 15m (fallback), config переопределял на 5m. MSS/FVG на 15m чище.
     CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
-    CRT_LTF_CONFIRM: str = "either"        # "either" | "both" | "off" (MSS/FVG)
+    CRT_LTF_CONFIRM: str = "both"        # "either" | "both" | "off" (MSS/FVG)
     # (#crt-part13-2026-07-10) CISD-чек из LTF Sequence (CRT→CISD→OTE→MSS→IDM):
     # манипуляционная свеча C2 должна ЗАКРЫТЬСЯ против свипа (свип CRH →
     # медвежье закрытие ниже открытия; свип CRL → бычье выше открытия) — это и
@@ -1023,8 +1023,8 @@ class Settings(BaseSettings):
     # без единой сделки. Потолок обязан быть ВЫШЕ цели, иначе он режет не риск,
     # а арифметику округления.
     SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 26.0   # маржевый лимит anti-drain для скальпа
-    SCALP_ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.40
-    SCALP_ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.85
+    SCALP_ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.30
+    SCALP_ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.70
     # Scalp exit: безубыток-замок (трейл от MFE). Тренд-пороги capture (~0.95%)
     # и protective (1.2% / 1.5 USDT) под маленький скальп не вооружаются — и
     # зелёная сделка переворачивается в убыток (кейс LINK: +0.72% → −1.18%).

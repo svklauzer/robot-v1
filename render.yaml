@@ -207,7 +207,7 @@ services:
       - key: TREND_TRIGGER_MODE
         value: enforce
       - key: TREND_MAX_EXTENSION_ATR
-        value: "1.2"
+        value: "1.5"
       - key: TZ_ADX_MIN
         value: "18.0"
       - key: TZ_STOCH_ZONE
