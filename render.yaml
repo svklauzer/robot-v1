@@ -260,7 +260,7 @@ services:
       - key: GRID_SYMBOLS
         value: BTC/USDT,ETH/USDT,TRX/USDT
       - key: GRID_KILL_SWITCH_ENABLED
-        value: "false"
+        value: "true"
       - key: GRID_REGIME_EMA_BAND_PCT
         value: "0.80"
       - key: GRID_TP_PCT
