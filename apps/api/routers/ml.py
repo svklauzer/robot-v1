@@ -7,7 +7,7 @@ from services.ml_trade_logger import MLTradeLogger
 router = APIRouter(prefix="/ml", tags=["ml"])
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_owner_action)])
 def ml_status():
     """Статус ML-контура: режимы, качество моделей, доступность компонентов."""
     from services.ml_intelligence_hub import get_ml_hub
@@ -16,7 +16,7 @@ def ml_status():
     return hub.health()
 
 
-@router.get("/shadow-report")
+@router.get("/shadow-report", dependencies=[Depends(require_owner_action)])
 def ml_shadow_report():
     """Отчёт Shadow mode: прогноз vs факт по закрытым сделкам.
     
@@ -28,7 +28,7 @@ def ml_shadow_report():
     return stats_service.shadow_report()
 
 
-@router.get("/evaluate")
+@router.get("/evaluate", dependencies=[Depends(require_owner_action)])
 def ml_evaluate_candidate(
     confidence: float = 60.0,
     grade: str = "B",
