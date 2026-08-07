@@ -183,7 +183,7 @@ services:
       # на переменную при минимуме 10. Живой AUC 0.5683 против валидационных
       # 0.7718 — ровно то, что предсказывает такое переобучение.
       - key: ML_MODE
-        value: shadow
+        value: "shadow"
       - key: REGIME_EXP_SIZING_ENABLED
         value: "true"
 
