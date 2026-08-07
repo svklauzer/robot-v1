@@ -68,7 +68,8 @@ export default function MLPage() {
     load();
   }, []);
 
-  const mode = String(status?.ml_mode || "off");
+  // Правильно: проверяем effective_mode, затем ml_mode (для совместимости), затем off
+  const mode = String(status?.effective_mode || status?.ml_mode || "off");
   const model = status?.model || {};
   const metrics = model?.metrics || {};
   const ready = !!model?.model_exists;
