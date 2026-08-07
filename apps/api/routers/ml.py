@@ -7,6 +7,55 @@ from services.ml_trade_logger import MLTradeLogger
 router = APIRouter(prefix="/ml", tags=["ml"])
 
 
+@router.get("/status")
+def ml_status():
+    """Статус ML-контура: режимы, качество моделей, доступность компонентов."""
+    from services.ml_intelligence_hub import get_ml_hub
+    
+    hub = get_ml_hub()
+    return hub.health()
+
+
+@router.get("/shadow-report")
+def ml_shadow_report():
+    """Отчёт Shadow mode: прогноз vs факт по закрытым сделкам.
+    
+    Используется для калибровки модели и оценки live AUC.
+    """
+    from services.ml_outcome_stats import MLOutcomeStatsService
+    
+    stats_service = MLOutcomeStatsService()
+    return stats_service.shadow_report()
+
+
+@router.get("/evaluate")
+def ml_evaluate_candidate(
+    confidence: float = 60.0,
+    grade: str = "B",
+    side: str = "long",
+    regime: str = "reversal",
+    net_rr_tp1: float = 1.5,
+    net_rr_tp2: float = 3.0,
+):
+    """Тестовая оценка кандидата через ML Intelligence Hub.
+    
+    Для использования в production вызывайте hub.evaluate_candidate() напрямую из robot_loop.
+    """
+    from services.ml_intelligence_hub import get_ml_hub
+    
+    hub = get_ml_hub()
+    candidate = {
+        "confidence": confidence,
+        "grade": grade,
+        "side": side,
+        "regime": regime,
+        "net_rr_tp1": net_rr_tp1,
+        "net_rr_tp2": net_rr_tp2,
+    }
+    decision = hub.evaluate_candidate(candidate)
+    return decision.to_dict()
+
+
 @router.get("/outcomes/summary", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_summary():
     return MLOutcomeStatsService().safe_summary()

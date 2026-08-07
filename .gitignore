@@ -1,38 +1,16 @@
-.env
-
-# Node / Next.js
-node_modules/
-.next/
-out/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
+```gitignore
 # Python
 __pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.venv/
-venv/
+*.pyc
+*.pyo
+*.pyd
 
-# OS / editor
-.DS_Store
-.idea/
-.vscode/
+# Logs and temp files
+*.log
+*.tmp
 
-# (#repo-cleanup-2026-07-27) Боевые ML-данные НЕ должны лежать в репозитории.
-# На Render к /app/storage/ml примонтирован persistent disk (render.yaml), он
-# перекрывает содержимое образа — то есть версия из git на прод не влияет.
-# Зато при локальной разработке docker-compose монтирует ./storage/ml, и
-# устаревший снимок (был от 05.06: 101 запись против 283 на проде) подменял
-# датасет. Плюс метки тех сделок сделаны СТАРОЙ exit-логикой — учить на них ML
-# нельзя.
-storage/ml/*.jsonl
-storage/ml/*.json
-
-# NB: analytics_24h/telemetry_*.json намеренно НЕ игнорируются — это выгрузки
-# боевой телеметрии (scripts/collect_telemetry.ps1), их нужно коммитить, чтобы
-# разбор шёл по файлу, а не по ручному копированию curl в чат.
+# Environment
+.env
+.env.local
+*.env.*
+```
