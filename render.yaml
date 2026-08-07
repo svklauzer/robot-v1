@@ -400,6 +400,9 @@ services:
       # Должен совпадать с OWNER_API_TOKEN у robot-api.
       - key: OWNER_API_TOKEN
         sync: false
+      # ML_MODE должен совпадать с robot-api для корректного отображения статуса
+      - key: ML_MODE
+        value: shadow
       # HTTP Basic перед страницами И перед /api/proxy. Прокси сам подставляет
       # owner-токен, поэтому без этой пары любой посетитель публичного URL
       # получает права владельца. middleware пропускает всех, если они не
