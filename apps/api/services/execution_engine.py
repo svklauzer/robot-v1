@@ -83,6 +83,11 @@ class ExecutionEngine:
 
         side = "buy" if signal["action"] == "long" else "sell"
 
+        # (#htx-amount-precision-fix) Округляем количество по точности биржи
+        # ПЕРЕД отправкой ордера, чтобы избежать InvalidOrder из-за неверной
+        # точности количества (например, 0.06483416104070641 ETH вместо 0.06).
+        qty = float(self.client.amount_to_precision(signal["symbol"], qty))
+
         result = self.client.create_market_order(
             signal["symbol"],
             side,

@@ -1,4 +1,5 @@
 import logging
+import math
 import random
 import socket
 import time
@@ -370,6 +371,15 @@ class HTXClient:
             return float(price)
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
+        """Округляет количество по точности биржи HTX.
+
+        Для линейных свопов (ETH/USDT:USDT и т.д.) объём ордера указывается в
+        КОНТРАКТАХ, где 1 контракт = contractSize базовой монеты (например 0.01 ETH).
+        Биржа требует целочисленное количество контрактов, поэтому:
+          1. Конвертируем amount (в монетах) → контракты
+          2. Округляем вниз до целого числа контрактов
+          3. Конвертируем обратно → монеты
+        """
         try:
             amount = float(amount)
         except Exception:
@@ -380,6 +390,22 @@ class HTXClient:
 
         try:
             self.load_markets()
+            market = self.exchange.markets.get(symbol)
+            
+            # Для свопов с contractSize нужно конвертировать в контракты
+            if market and market.get('contract') and market.get('contractSize'):
+                contract_size = float(market['contractSize'])
+                # Конвертируем монеты → контракты
+                contracts = amount / contract_size
+                # Округляем вниз до целого числа контрактов
+                contracts_int = int(contracts)
+                # Минимум 1 контракт если amount > 0
+                if contracts_int < 1 and amount > 0:
+                    contracts_int = 1
+                # Конвертируем обратно → монеты
+                return float(contracts_int * contract_size)
+            
+            # Для спота или если contractSize отсутствует — стандартная точность
             return float(self.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
             # (#precision-log-2026-07-26) Логируем САМО значение: без него разобрать
@@ -389,7 +415,12 @@ class HTXClient:
                       symbol=symbol, amount=float(amount),
                       markets_loaded=bool(HTXClient._cached_markets),
                       error_type=type(e).__name__, error=str(e))
-            return float(amount)
+            
+            # (#htx-amount-precision-fix) При ошибке precision НЕ возвращаем
+            # исходное значение — именно это вызывает InvalidOrder на бирже.
+            # Вместо этого округляем вниз до целого числа контрактов (безопасный
+            # фолбэк для свопов HTX, где шаг = 1 контракт).
+            return float(math.floor(amount))
 
     def contract_size(self, symbol: str) -> float | None:
         """Сколько базовой монеты в одном контракте. None — рынок не контрактный
