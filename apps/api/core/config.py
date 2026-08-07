@@ -826,7 +826,7 @@ class Settings(BaseSettings):
     # запуск в live НЕ затрагивается (ML ортогонален ENABLE_LIVE_ORDERS, fail-open).
     #   off | shadow | advisory | full_auto
     # =========================
-    ML_MODE: str = "off"
+    ML_MODE: str = "shadow"
     # (#ml-rework-2026-07-28) Метка обучения. БЫЛО "is_win" — та же ловушка,
     # что и win-rate: модель училась максимизировать ЧИСЛО побед, тогда как наш
     # собственный замер даёт 67% побед при payoff 0.11, то есть убыточную
