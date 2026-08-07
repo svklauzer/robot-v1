@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     # копится в тени, порог откалибруем по данным (scripts/tz_calibrate.py),
     # тогда и вооружим. Так trend проходит вход по здоровым продолжениям, а не
     # блокируется некалиброванным порогом.
-    TZ_ENFORCE_CONDITIONS: str = "kama,adx,di,stoch,obv"
+    TZ_ENFORCE_CONDITIONS: str = "kama,di,obv"
 
     # (#tp-reachability-2026-08-03) Достижимость цели: план против факта.
     # TP_REACH_MODE: shadow | enforce.

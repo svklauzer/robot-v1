@@ -217,7 +217,7 @@ services:
       # Фильтры входа: цена на верной стороне KAMA, ADX растёт и не ниже 18,
       # DI за сторону сделки, StochRSI показывает откат/пересечение, OBV за поток.
       - key: TZ_ENFORCE_CONDITIONS
-        value: kama,adx,di,stoch,obv
+        value: kama,di,obv
       # 0 = предохранитель снят. Он защищал от МОИХ подобранных порогов;
       # пороги ТЗ заданы извне, подгонять в них нечего.
       - key: TZ_ENFORCE_MIN_SAMPLE
