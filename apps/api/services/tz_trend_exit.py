@@ -117,11 +117,10 @@ def evaluate(
         # Проверяем, включен ли режим ATR
         use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
         
-        if use_atr and tz_context and "atr" in tz_context:
+        if use_atr and atr_v is not None and atr_v > 0:
             # Динамический буфер: ATR * множитель
-            atr = tz_context.get("atr")
             mult = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_ATR_MULT", 0.8))
-            buffer_value = atr * mult
+            buffer_value = atr_v * mult
             level = kama_v - buffer_value if is_long else kama_v + buffer_value
         else:
             # Legacy: процент от цены

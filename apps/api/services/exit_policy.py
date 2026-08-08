@@ -372,6 +372,7 @@ class ExitPolicyService:
                     adx_peak=tz_context.get("adx_peak"),
                     obv=tz_context.get("obv"),
                     obv_ema=tz_context.get("obv_ema20"),
+                    atr=tz_context.get("atr"),  # Передаем ATR для динамического буфера
                 )
                 if verdict.exit:
                     return ExitDecision(
