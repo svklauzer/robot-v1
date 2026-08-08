@@ -105,6 +105,7 @@ class MLTradeLogger:
 
         plan = signal.plan_json or {}
         lifecycle = plan.get("lifecycle") or {}
+        ml_data = plan.get("ml") or {}
 
         closed_net_pnl = signal.closed_net_pnl
         closed_reason = signal.closed_reason
@@ -150,6 +151,11 @@ class MLTradeLogger:
             "opened_at": str(signal.opened_at) if signal.opened_at else None,
             "closed_at": str(signal.closed_at) if signal.closed_at else None,
             "created_at": str(signal.created_at) if signal.created_at else None,
+
+            # (#ml-score-logging-fix) ML-данные для shadow-валидации
+            "ml_score": ml_data.get("ml_score"),
+            "ml_mode": ml_data.get("mode"),
+            "ml_action": ml_data.get("action"),
 
             "lifecycle": {
                 "entry_price": lifecycle.get("entry_price"),
