@@ -67,15 +67,18 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
 
     rows: list[dict] = []
     for s in signals:
+        # ИСПРАВЛЕНИЕ: корректный парсинг plan_json
         plan = _parse_plan_json(s.plan_json)
         ml = plan.get("ml") if isinstance(plan, dict) else None
         score = (ml or {}).get("ml_score")
+        
         if score is None:
             continue
         try:
             score = float(score)
         except (TypeError, ValueError):
             continue
+            
         net = s.closed_net_pnl
         net = float(net) if net is not None else 0.0
         rows.append({
