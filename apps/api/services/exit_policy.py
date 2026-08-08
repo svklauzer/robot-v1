@@ -140,37 +140,151 @@ class ExitPolicyService:
         floor = self._net_safe_floor_pct(fee_rate)
         return round(max(calculated, floor), 4), fee_source, fee_rate
 
-    def _dynamic_thresholds(self, stop_distance_pct: float, net_safe_floor: float = 0.60) -> dict:
-        sd = abs(float(stop_distance_pct or 0.0))
+    def _dynamic_thresholds(
+        self, 
+        stop_distance_pct: float | None, 
+        net_safe_floor: float = 0.60,
+        atr: float | None = None,
+        price: float | None = None
+    ) -> dict:
+        """Расчет пороговых значений.
+        
+        Если TZ_USE_DYNAMIC_ATR_STOPS=true и передан ATR, пороги считаются от волатильности.
+        Иначе — от фиксированной дистанции стопа (legacy).
+        """
+        use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
+        
+        # Конвертируем ATR в проценты, если он передан
+        atr_pct = None
+        if use_atr and atr is not None and price is not None and price > 0:
+            atr_pct = (atr / price) * 100.0
+
         mfe_absolute_min = float(
             getattr(settings, "FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT", self.DEFAULT_MFE_ABSOLUTE_MIN_FOR_GUARD)
         )
 
-        abs_cap_soft = abs(float(getattr(settings, "FAILED_SETUP_LOSS_SOFT_PCT", -0.40)))
-        abs_cap_mid = abs(float(getattr(settings, "FAILED_SETUP_LOSS_MID_PCT", -0.65)))
-        abs_cap_deep = abs(float(getattr(settings, "FAILED_SETUP_LOSS_DEEP_PCT", -0.90)))
+        # Если используем ATR, берем множители из конфига, иначе — старые коэффициенты от stop_distance
+        if use_atr and atr_pct is not None:
+            # Динамические пороги на основе ATR
+            sd = atr_pct  # Базовая единица измерения теперь ATR%
+            
+            # Множители из конфига (с фоллбэком на классические константы, если нет новых переменных)
+            k_failed_soft = float(getattr(settings, "ATR_FAILED_SETUP_SOFT_MULT", self.K_FAILED_SOFT))
+            k_failed_mid = float(getattr(settings, "ATR_FAILED_SETUP_MID_MULT", self.K_FAILED_MID))
+            k_failed_deep = float(getattr(settings, "ATR_FAILED_SETUP_DEEP_MULT", self.K_FAILED_DEEP))
+            k_protect = float(getattr(settings, "ATR_PROTECT_START_MULT", self.K_PROTECT))
+            k_trail = float(getattr(settings, "ATR_TRAIL_START_MULT", self.K_TRAIL))
+            k_capture = float(getattr(settings, "ATR_CAPTURE_START_MULT", self.K_CAPTURE))
+            
+            # Абсолютные кэпы для потерь (можно тоже сделать динамическими, но пока оставим как есть или привяжем к ATR)
+            abs_cap_soft = abs(float(getattr(settings, "FAILED_SETUP_LOSS_SOFT_PCT", -0.40)))
+            abs_cap_mid = abs(float(getattr(settings, "FAILED_SETUP_LOSS_MID_PCT", -0.65)))
+            abs_cap_deep = abs(float(getattr(settings, "FAILED_SETUP_LOSS_DEEP_PCT", -0.90)))
 
-        # K_CAPTURE is configurable via MFE_CAPTURE_START_PCT (default = class constant K_CAPTURE).
-        k_capture = float(getattr(settings, "MFE_CAPTURE_START_PCT", self.K_CAPTURE))
+            return {
+                "failed_mfe_soft": max(sd * k_failed_soft, mfe_absolute_min),
+                "failed_mfe_mid": max(sd * k_failed_mid, mfe_absolute_min),
+                "failed_mfe_deep": max(sd * k_failed_deep, mfe_absolute_min),
+                "failed_loss_soft": -min(sd * k_failed_soft, abs_cap_soft), # Используем тот же множитель для простоты или отдельный
+                "failed_loss_mid": -min(sd * k_failed_mid, abs_cap_mid),
+                "failed_loss_deep": -min(sd * k_failed_deep, abs_cap_deep),
+                "protect_start": max(sd * k_protect, net_safe_floor, float(settings.PROTECTIVE_MFE_START_PCT)),
+                "trail_start": max(sd * k_trail, net_safe_floor + 0.40),
+                "capture_start": max(sd * k_capture, net_safe_floor + 0.20),
+                "mfe_absolute_min": mfe_absolute_min,
+                "source": f"dynamic_atr(mult={k_failed_soft})"
+            }
+        else:
+            # Legacy логика (от фиксированного stop_distance_pct)
+            sd = abs(float(stop_distance_pct or 0.0))
+            abs_cap_soft = abs(float(getattr(settings, "FAILED_SETUP_LOSS_SOFT_PCT", -0.40)))
+            abs_cap_mid = abs(float(getattr(settings, "FAILED_SETUP_LOSS_MID_PCT", -0.65)))
+            abs_cap_deep = abs(float(getattr(settings, "FAILED_SETUP_LOSS_DEEP_PCT", -0.90)))
+            k_capture = float(getattr(settings, "MFE_CAPTURE_START_PCT", self.K_CAPTURE))
 
-        return {
-            "failed_mfe_soft": max(sd * self.K_FAILED_SOFT, mfe_absolute_min),
-            "failed_mfe_mid": max(sd * self.K_FAILED_MID, mfe_absolute_min),
-            "failed_mfe_deep": max(sd * self.K_FAILED_DEEP, mfe_absolute_min),
-            "failed_loss_soft": -min(sd * self.K_LOSS_SOFT, abs_cap_soft),
-            "failed_loss_mid": -min(sd * self.K_LOSS_MID, abs_cap_mid),
-            "failed_loss_deep": -min(sd * self.K_LOSS_DEEP, abs_cap_deep),
-            "protect_start": max(sd * self.K_PROTECT, net_safe_floor, float(settings.PROTECTIVE_MFE_START_PCT)),
-            "trail_start": max(sd * self.K_TRAIL, net_safe_floor + 0.40),
-            "capture_start": max(sd * k_capture, net_safe_floor + 0.20),
-            "mfe_absolute_min": mfe_absolute_min,
-        }
+            return {
+                "failed_mfe_soft": max(sd * self.K_FAILED_SOFT, mfe_absolute_min),
+                "failed_mfe_mid": max(sd * self.K_FAILED_MID, mfe_absolute_min),
+                "failed_mfe_deep": max(sd * self.K_FAILED_DEEP, mfe_absolute_min),
+                "failed_loss_soft": -min(sd * self.K_LOSS_SOFT, abs_cap_soft),
+                "failed_loss_mid": -min(sd * self.K_LOSS_MID, abs_cap_mid),
+                "failed_loss_deep": -min(sd * self.K_LOSS_DEEP, abs_cap_deep),
+                "protect_start": max(sd * self.K_PROTECT, net_safe_floor, float(settings.PROTECTIVE_MFE_START_PCT)),
+                "trail_start": max(sd * self.K_TRAIL, net_safe_floor + 0.40),
+                "capture_start": max(sd * k_capture, net_safe_floor + 0.20),
+                "mfe_absolute_min": mfe_absolute_min,
+                "source": f"legacy_fixed(stop={round(sd, 3)}%)"
+            }
 
-    def _get_thresholds(self, stop_distance_pct: float | None, net_safe_floor: float = 0.60) -> tuple[dict, str]:
+    def _get_thresholds(
+        self, 
+        stop_distance_pct: float | None, 
+        net_safe_floor: float = 0.60,
+        atr: float | None = None,
+        price: float | None = None
+    ) -> tuple[dict, str]:
+        # Приоритет: если передан ATR и включен режим, игнорируем stop_distance_pct
+        if atr is not None and price is not None:
+             return self._dynamic_thresholds(stop_distance_pct, net_safe_floor, atr, price), "dynamic_atr"
+        
+        # Фоллбэк на старую логику
         if stop_distance_pct is not None and stop_distance_pct > 0:
             return self._dynamic_thresholds(stop_distance_pct, net_safe_floor), f"dynamic(stop={round(stop_distance_pct, 3)}%)"
+        
         fallback_stop = 1.5
         return self._dynamic_thresholds(fallback_stop, net_safe_floor), "dynamic_fallback(stop=1.5%+capped)"
+
+    def before_tp1_decision(
+        self,
+        side: str,
+        entry_price: float,
+        current_price: float,
+        stop_price: float | None = None,
+        tp1_price: float | None = None,
+        mfe_pct: float | None = None,
+        max_profit_price: float | None = None,
+        symbol: str | None = None,
+        market_type: str | None = None,
+        position_notional_usdt: float | None = None,
+        signal_age_sec: float | None = None,
+        trade_mode: str = "default",
+        flow_against: bool = False,
+        regime: str | None = None,
+        tz_context: dict | None = None,
+        atr: float | None = None,  # <--- НОВЫЙ ПАРАМЕТР
+    ) -> ExitDecision:
+        # ... начало метода без изменений ...
+        side = str(side).lower()
+        entry_price = float(entry_price)
+        current_price = float(current_price)
+        mfe = float(mfe_pct or 0.0)
+        current_pct = self._result_pct(side, entry_price, current_price)
+
+        # ... (liquidity guard без изменений) ...
+
+        # Расчет дистанции стопа
+        stop_distance_pct = (
+            abs(entry_price - float(stop_price)) / entry_price * 100
+            if stop_price is not None and float(stop_price) > 0
+            else None
+        )
+        
+        drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
+        net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        
+        # Передаем ATR и цену в расчет порогов
+        thr, threshold_source = self._get_thresholds(
+            stop_distance_pct, 
+            self._net_safe_floor_pct(fee_rate),
+            atr=atr,
+            price=current_price # Используем текущую цену для конвертации ATR в %
+        )
+        
+        # ... остальной код метода без изменений, кроме передачи atr в tz_context если нужно ...
+        
+        # Внутри блока TZ_TREND_EXIT_ONLY можно также передать ATR, если tz_trend_exit будет его использовать
+        # Но пока tz_trend_exit работает по буферу %, который мы изменили в config.py через TZ_EXIT_KAMA_BUFFER_ATR_MULT
+        # Нужно убедиться, что tz_trend_exit.py тоже читает этот новый конфиг.
 
     def before_tp1_decision(
         self,
