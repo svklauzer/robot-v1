@@ -1,5 +1,19 @@
 """Shadow-валидация мета-лейблера: ПРОГНОЗ vs ФАКТ на ЖИВЫХ закрытых сделках.
-... (остальной код из предыдущего ответа) ...
+
+В режиме ML_MODE=shadow контроллер пишет ml_score (P(win)) в сигнал, НЕ влияя на
+торговлю. Этот отчёт сравнивает те предсказания с реальным исходом (closed_net_pnl),
+чтобы ЧЕСТНО ответить: бьёт ли модель реальность, прежде чем давать ей руль.
+
+Метрики:
+  - live-AUC (rank-based, без sklearn): P(score у победителя > score у лузера).
+    0.5 = модель не отличает win от loss; >0.55 = есть сигнал.
+  - калибровка по бакетам ml_score: реальный winrate в каждом диапазоне.
+    Хорошая модель монотонна: выше score → выше winrate.
+  - эффект порога ML_MIN_SCORE_TO_TRADE: что было бы, если бы full_auto отрезал
+    score < порога (сколько убытка избежали бы / прибыли потеряли бы).
+
+Источник истины — БД сигналов (plan_json.ml.ml_score + closed_net_pnl). Off-режим
+даёт ml_score=null и в выборку не попадает. Никаких внешних зависимостей.
 """
 import json
 from typing import Any
@@ -119,13 +133,15 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "skipped_count": len(skipped),
         "skipped_winrate_pct": round(sum(r["win"] for r in skipped) / len(skipped) * 100, 1) if skipped else None,
         "skipped_net_usdt": skipped_net,
+        # ВЫГОДА от ML-гейта = насколько книга «только взятые» лучше книги «все».
+        # = taken_net − total_net = −skipped_net. >0 → ML отрезал бы убыточные.
         "ml_gate_benefit_usdt": round(taken_net - total_net, 4),
     }
 
     base_winrate = round(len(wins) / n * 100, 1)
     taken_wr = threshold_impact["taken_winrate_pct"]
 
-    # ── вердикт ─────────────────────────────────────────────────────────────────
+    # ── вердикт (с оговоркой на размер выборки) ────────────────────────────────
     if n < 30:
         verdict = "insufficient_sample"
     elif auc is not None and auc >= 0.58 and (taken_wr or 0) > base_winrate and threshold_impact["ml_gate_benefit_usdt"] > 0:
