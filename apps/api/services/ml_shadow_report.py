@@ -15,8 +15,7 @@
 Источник истины — БД сигналов (plan_json.ml.ml_score + closed_net_pnl). Off-режим
 даёт ml_score=null и в выборку не попадает. Никаких внешних зависимостей.
 """
-from __future__ import annotations
-
+import json
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -40,6 +39,20 @@ def _auc(scores_win: list[float], scores_loss: list[float]) -> float | None:
     return round((greater + 0.5 * ties) / (n_pos * n_neg), 4)
 
 
+def _parse_plan_json(plan_raw: Any) -> dict:
+    """Безопасно парсит plan_json: если строка — десериализует, иначе возвращает как dict."""
+    if plan_raw is None:
+        return {}
+    if isinstance(plan_raw, dict):
+        return plan_raw
+    if isinstance(plan_raw, str):
+        try:
+            return json.loads(plan_raw)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return {}
+
+
 def build(db: Session, limit: int = 2000) -> dict[str, Any]:
     mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
     thr = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
@@ -54,7 +67,7 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
 
     rows: list[dict] = []
     for s in signals:
-        plan = s.plan_json or {}
+        plan = _parse_plan_json(s.plan_json)
         ml = plan.get("ml") if isinstance(plan, dict) else None
         score = (ml or {}).get("ml_score")
         if score is None:
