@@ -98,14 +98,9 @@ def evaluate(
     adx_peak: float | None,
     obv: float | None,
     obv_ema: float | None,
+    atr: float | None = None,  # <-- Новый параметр: текущая волатильность
 ) -> TZExit:
-    """Пора ли закрывать по условиям ТЗ.
-
-    `adx_peak` — максимум ADX за время жизни сделки. Условие ТЗ «разворот вниз
-    из зоны выше 50» требует ПАМЯТИ: мгновенное значение не отличает «ADX 45 по
-    дороге вверх» от «ADX 45 после пика 60». Без памяти условие превращается в
-    «ADX < 50», что закрывало бы каждую сделку, не дошедшую до 50.
-    """
+    """Пора ли закрывать по условиям ТЗ + Dynamic ATR Buffer."""
     is_long = str(side or "").lower() in ("long", "buy")
     close_v = _num(close)
     kama_v = _num(kama)
@@ -113,33 +108,39 @@ def evaluate(
     peak_v = _num(adx_peak)
     obv_v = _num(obv)
     obv_ema_v = _num(obv_ema)
+    atr_v = _num(atr)
 
     triggers: list[str] = []
 
-    # 1. Экстренный выход: цена ПРОБИЛА KAMA с буфером, а не коснулась линии.
-    #    Вход требует price>kama, выход на close<kama тем же порогом churn-ил
-    #    позицию у линии (AVAX #363: открылась и закрылась за 11с на движении
-    #    0.044%). Буфер даёт мёртвую зону между входом и выходом и заодно
-    #    согласует выход со СТОПОМ (stop_from_kama = kama×(1∓буфер)) — докстринг
-    #    требует, чтобы стоп и выход говорили одно и то же.
+    # 1. Экстренный выход: цена ПРОБИЛА KAMA с буфером.
     if close_v is not None and kama_v is not None and kama_v > 0:
-        buf = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_PCT",
-                            getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15))) / 100.0
-        level = kama_v * (1 - buf) if is_long else kama_v * (1 + buf)
+        # Проверяем, включен ли режим ATR
+        use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
+        
+        if use_atr and tz_context and "atr" in tz_context:
+            # Динамический буфер: ATR * множитель
+            atr = tz_context.get("atr")
+            mult = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_ATR_MULT", 0.8))
+            buffer_value = atr * mult
+            level = kama_v - buffer_value if is_long else kama_v + buffer_value
+        else:
+            # Legacy: процент от цены
+            buf = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_PCT",
+                                getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15))) / 100.0
+            level = kama_v * (1 - buf) if is_long else kama_v * (1 + buf)
+            
         broken = close_v < level if is_long else close_v > level
         if broken:
             triggers.append("kama_broken")
 
-    # 2. Ослабление тренда: ADX развернулся вниз из зоны выше порога.
-    #    Порог 50 из ТЗ здесь безопаснее, чем 23 на входе: он не запрещает
-    #    сделки, а лишь фиксирует прибыль у пика силы.
+    # 2. Ослабление тренда (ADX) - порог увеличен до 6.0 для устойчивости
     peak_min = float(getattr(settings, "TZ_EXIT_ADX_PEAK_MIN", 50.0))
-    fade = float(getattr(settings, "TZ_EXIT_ADX_FADE", 3.0))
+    fade = float(getattr(settings, "TZ_EXIT_ADX_FADE", 6.0)) # <-- Hardcoded fix или через settings
     if adx_v is not None and peak_v is not None and peak_v >= peak_min:
         if (peak_v - adx_v) >= fade:
             triggers.append(f"adx_fading_from_peak:{peak_v:.1f}->{adx_v:.1f}")
 
-    # 3. Объёмный разворот: OBV ушёл за свою EMA(20).
+    # 3. Объёмный разворот (OBV)
     if obv_v is not None and obv_ema_v is not None:
         against = obv_v < obv_ema_v if is_long else obv_v > obv_ema_v
         if against:
@@ -149,9 +150,6 @@ def evaluate(
         return TZExit(False, "trend_intact", (), kama_v, adx_v, peak_v,
                       (obv_v - obv_ema_v) if (obv_v is not None and obv_ema_v is not None) else None)
 
-    # Какие из условий имеют право закрывать. По умолчанию — только слом KAMA:
-    # это единственное условие ТЗ, которое говорит «тренда больше нет», а не
-    # «тренд слабеет». Остальные включаются отдельно, когда наберётся выборка.
     armed = {
         x.strip().lower()
         for x in str(getattr(settings, "TZ_EXIT_CONDITIONS", "kama") or "").split(",")
@@ -159,10 +157,6 @@ def evaluate(
     }
     fired = [t for t in triggers if _family(t) in armed]
 
-    # Причина — по СЕМЕЙСТВУ, а не по полному коду. Отчёт «куда уходят деньги»
-    # группирует сделки по close_reason: если в причину попадут значения ADX,
-    # каждая сделка получит уникальную строку и группировка развалится.
-    # Подробности остаются в `triggers`.
     return TZExit(
         exit=bool(fired),
         reason=("tz_" + _family(fired[0])) if fired else "trigger_not_armed",
@@ -173,19 +167,27 @@ def evaluate(
         obv_vs_ema=(obv_v - obv_ema_v) if (obv_v is not None and obv_ema_v is not None) else None,
     )
 
-
-def stop_from_kama(*, side: str, kama: float | None, buffer_pct: float | None = None) -> float | None:
-    """Стоп на линии слома тренда, а не на произвольной дистанции ATR.
-
-    Сейчас ATR-стоп и логика выхода спорят между собой: стоп может выбить
-    сделку, тренд которой по KAMA цел, и наоборот — держать сделку, у которой
-    тренд уже сломан. Один источник истины устраняет спор и заодно сохраняет
-    якорь сайзинга: дистанция до KAMA известна на входе.
-    """
+# Функция расчета стопа также обновляется для использования в сайзинге
+def stop_from_kama(
+    *, 
+    side: str, 
+    kama: float | None, 
+    buffer_pct: float | None = None,
+    atr: float | None = None, # Новый параметр
+) -> float | None:
     kama_v = _num(kama)
     if kama_v is None or kama_v <= 0:
         return None
-    buf = float(buffer_pct if buffer_pct is not None
-                else getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15)) / 100.0
-    is_long = str(side or "").lower() in ("long", "buy")
-    return round(kama_v * (1 - buf) if is_long else kama_v * (1 + buf), 8)
+    
+    use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
+    
+    if use_atr and atr is not None:
+        mult = float(getattr(settings, "TZ_STOP_LOSS_ATR_MULT", 2))
+        buffer_value = atr * mult
+        stop_price = kama_v - buffer_value if str(side).lower() in ("long", "buy") else kama_v + buffer_value
+    else:
+        buf = float(buffer_pct if buffer_pct is not None
+                    else getattr(settings, "TZ_STOP_KAMA_BUFFER_PCT", 0.15)) / 100.0
+        stop_price = kama_v * (1 - buf) if str(side).lower() in ("long", "buy") else kama_v * (1 + buf)
+        
+    return round(stop_price, 8)

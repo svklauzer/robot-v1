@@ -296,7 +296,7 @@ class Settings(BaseSettings):
     # условие вырождается в «ADX < 50» и закрывало бы каждую сделку, не дошедшую
     # до 50. Закрываем, когда ADX упал от своего пика на TZ_EXIT_ADX_FADE.
     TZ_EXIT_ADX_PEAK_MIN: float = 50.0
-    TZ_EXIT_ADX_FADE: float = 3.0
+    TZ_EXIT_ADX_FADE: float = 6.0  # Увеличено для устойчивости к шуму
     # Выход ТОЛЬКО по приборам, стоп-ордера нет. Основание — замер:
     #   107 стопов из 342 сделок, −223.76 USDT, НИ ОДНОЙ прибыльной (76% всего
     #   убытка). При этом средний MAE −0.618%, а стопы стоят на 1–3%: типичная
@@ -318,6 +318,24 @@ class Settings(BaseSettings):
     # в 0.05%, и qty = risk / 0.0005 раздует позицию в разы. 0.30 = net_safe для
     # swap: ближе этого «риск» всё равно съедается издержками.
     TZ_STOP_MIN_DIST_PCT: float = 0.30
+    # =========================
+    # Dynamic ATR Stops & Exits (#dynamic-atr-stops-2026-08-07)
+    # Единая адаптивная логика для всех движков. Стопы и пороги выхода
+    # рассчитываются как множители текущего ATR, а не фиксированные %.
+    # =========================
+    TZ_USE_DYNAMIC_ATR_STOPS: bool = False  
+    TZ_STOP_MIN_DIST_ATR_MULT: float = 1.5  # Мин. дистанция стопа = ATR * 1.5
+    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 0.8  # Буфер выхода KAMA = ATR * 0.8
+    TZ_STOP_LOSS_ATR_MULT: float = 2  # Уровень стоп-лосса = ATR * 2
+    
+    # Множители для динамических порогов exit_policy (заменяют жесткие %)
+    # Пороги будут: max(ATR * mult, net_safe_floor)
+    ATR_FAILED_SETUP_SOFT_MULT: float = 0.5
+    ATR_FAILED_SETUP_MID_MULT: float = 0.8
+    ATR_FAILED_SETUP_DEEP_MULT: float = 1.1
+    ATR_PROTECT_START_MULT: float = 0.6
+    ATR_TRAIL_START_MULT: float = 0.9
+    ATR_CAPTURE_START_MULT: float = 0.9
     # Предохранитель от разрыва цены, когда цикл сопровождения не отработал.
     # Этого в ТЗ НЕТ — моё добавление, и оно должно быть видно отдельно.
     # 0 = выключить полностью.
