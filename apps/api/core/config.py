@@ -323,7 +323,7 @@ class Settings(BaseSettings):
     # Единая адаптивная логика для всех движков. Стопы и пороги выхода
     # рассчитываются как множители текущего ATR, а не фиксированные %.
     # =========================
-    TZ_USE_DYNAMIC_ATR_STOPS: bool = False  
+    TZ_USE_DYNAMIC_ATR_STOPS: bool = True  # ВКЛЮЧЕНО: адаптивные стопы от волатильности
     TZ_STOP_MIN_DIST_ATR_MULT: float = 1.5  # Мин. дистанция стопа = ATR * 1.5
     TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 0.8  # Буфер выхода KAMA = ATR * 0.8
     TZ_STOP_LOSS_ATR_MULT: float = 2  # Уровень стоп-лосса = ATR * 2
