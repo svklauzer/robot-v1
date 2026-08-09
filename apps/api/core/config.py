@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 1.5
+    TREND_MAX_EXTENSION_ATR: float = 2
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     # может 80%. Сначала 2–3 дня наблюдения, потом порог по фактическому
     # распределению и переключение в enforce. Отгружать блокирующее правило с
     # порогом «на глаз» в этом репозитории уже пробовали — см. SETUP_REACH_*.
-    TREND_TRIGGER_MODE: str = "enforce"
+    TREND_TRIGGER_MODE: str = "shadow"
 
     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ТОЛЬКО наблюдение.
     # Основание: по /analytics/mfe-mae у trend_up edge_ratio 0.943 — средний ход
@@ -234,7 +234,7 @@ class Settings(BaseSettings):
     #
     # Enforce не означает «блокирует всё»: два предохранителя ниже держат
     # активными только беспороговые условия и только на достаточной выборке.
-    TZ_MODE: str = "enforce"
+    TZ_MODE: str = "shadow"
     # Enforce не включается, пока не накоплено столько ОЦЕНОК (не сделок).
     # Порог, откалиброванный по трём точкам, — подгонка под другим именем.
     # Считать распределение: python scripts/tz_calibrate.py --export <jsonl>
@@ -260,13 +260,13 @@ class Settings(BaseSettings):
     # блокируется некалиброванным порогом.
     TZ_ENFORCE_CONDITIONS: str = "kama,di,obv"
 
-    # (#tp-reachability-2026-08-03) Достижимость цели: план против факта.
+    # (# tp-reachability-2026-08-03) Достижимость цели: план против факта.
     # TP_REACH_MODE: shadow | enforce.
-    TP_REACH_MODE: str = "enforce"
+    TP_REACH_MODE: str = "shadow"
     # Во сколько раз TP1 может превышать медианный реализованный ход. 1.5 —
     # цель чуть выше типичного пика, ещё достижимая на половине сделок.
     # У скальпа сейчас отношение ~2.0 (0.8 против медианы MFE 0.391).
-    TP_REACH_MAX_RATIO: float = 1.5
+    TP_REACH_MAX_RATIO: float = 2.5
     # Медиана по трём сделкам — не медиана. Ниже этого выборка не используется,
     # гейт пропускает (fail-open).
     TP_REACH_MIN_SAMPLE: int = 15
@@ -324,9 +324,9 @@ class Settings(BaseSettings):
     # рассчитываются как множители текущего ATR, а не фиксированные %.
     # =========================
     TZ_USE_DYNAMIC_ATR_STOPS: bool = True  # ВКЛЮЧЕНО: адаптивные стопы от волатильности
-    TZ_STOP_MIN_DIST_ATR_MULT: float = 1.5  # Мин. дистанция стопа = ATR * 1.5
-    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 0.8  # Буфер выхода KAMA = ATR * 0.8
-    TZ_STOP_LOSS_ATR_MULT: float = 2  # Уровень стоп-лосса = ATR * 2
+    TZ_STOP_MIN_DIST_ATR_MULT: float = 3  # Мин. дистанция стопа = ATR * 3
+    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 1.5  # Буфер выхода KAMA = ATR * 0.8
+    TZ_STOP_LOSS_ATR_MULT: float = 4  # Уровень стоп-лосса = ATR * 4
     
     # Множители для динамических порогов exit_policy (заменяют жесткие %)
     # Пороги будут: max(ATR * mult, net_safe_floor)

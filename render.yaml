@@ -205,15 +205,15 @@ services:
       # Enforce трендового входа: блокируем растянутые входы, а в TZ-гейте
       # вооружены KAMA/ADX/DI/Stoch/OBV с мягким ADX=18 и зоной Stoch=35.
       - key: TREND_TRIGGER_MODE
-        value: enforce
+        value: shadow
       - key: TREND_MAX_EXTENSION_ATR
-        value: "1.5"
+        value: "2"
       - key: TZ_ADX_MIN
         value: "18.0"
       - key: TZ_STOCH_ZONE
         value: "35.0"
       - key: TZ_MODE
-        value: enforce
+        value: shadow
       # Фильтры входа: цена на верной стороне KAMA, ADX растёт и не ниже 18,
       # DI за сторону сделки, StochRSI показывает откат/пересечение, OBV за поток.
       - key: TZ_ENFORCE_CONDITIONS
@@ -246,11 +246,11 @@ services:
         value: "true"
       # Множители для расчета дистанций в единицах ATR:
       - key: TZ_STOP_MIN_DIST_ATR_MULT
-        value: "1.5"       # Мин. дистанция стопа = 1.5 × ATR
+        value: "3"       # Мин. дистанция стопа = 3 × ATR
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
-        value: "0.8"       # Буфер выхода по KAMA = 0.8 × ATR
+        value: "1.5"       # Буфер выхода по KAMA = 1.5 × ATR
       - key: TZ_STOP_LOSS_ATR_MULT
-        value: "2"       # Уровень стоп-лосса = 2 × ATR
+        value: "4"       # Уровень стоп-лосса = 4 × ATR
       # Смягчение фильтра ADX для устойчивости к шуму (было 3.0):
       - key: TZ_EXIT_ADX_FADE
         value: "6.0"
@@ -261,9 +261,9 @@ services:
       # Достижимость TP1 включена в enforce: не берём сетап, где цель далеко
       # за историческим медианным MFE режима/символа.
       - key: TP_REACH_MODE
-        value: enforce
+        value: shadow
       - key: TP_REACH_MAX_RATIO
-        value: "1.5"
+        value: "2.5"
       - key: TP_REACH_MIN_SAMPLE
         value: "15"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
