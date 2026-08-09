@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 2
+    TREND_MAX_EXTENSION_ATR: float = 1.7
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -979,7 +979,7 @@ class Settings(BaseSettings):
     # Число НЕ трогаем вручную: подставить 0.4 вместо 0.8 значит заменить одну
     # выдумку другой. Достижимость проверяется по факту —
     # services/tp_reachability.py сравнивает план с медианой реализованного MFE.
-    SCALP_TARGET_PCT: float = 0.8              # TP1 (net target, %)
+    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %)
     SCALP_TP2_MULT: float = 1.6               # TP2 = target * mult
     SCALP_STOP_BUFFER_ATR: float = 0.5         # стоп за микро-экстремумом (в ATR)
     SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
