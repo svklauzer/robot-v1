@@ -200,6 +200,17 @@ class Settings(BaseSettings):
     #
     # Переведено в shadow 08.08: порог 1.5 ATR блокирует 40% трендовых входов
     # на SOL/USDT. Сначала сбор статистики, потом калибровка по распределению.
+
+    TREND_MAX_EXTENSION_ATR: float = 2
+    # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
+    # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
+    #
+    # Дефолт shadow сознательно: порог 1.5 ATR не откалиброван, потому что
+    # `extension_atr` до этой правки не записывался и его распределение на
+    # живых сканах неизвестно. Правило может резать 5% трендовых входов, а
+    # может 80%. Сначала 2–3 дня наблюдения, потом порог по фактическому
+    # распределению и переключение в enforce. Отгружать блокирующее правило с
+    # порогом «на глаз» в этом репозитории уже пробовали — см. SETUP_REACH_*.
     TREND_TRIGGER_MODE: str = "shadow"
 
     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ТОЛЬКО наблюдение.
@@ -257,8 +268,7 @@ class Settings(BaseSettings):
     # тогда и вооружим. Так trend проходит вход по здоровым продолжениям, а не
     # блокируется некалиброванным порогом.
     TZ_ENFORCE_CONDITIONS: str = "kama,di,obv"
-
-    # (#tp-reachability-2026-08-03) Достижимость цели: план против факта.
+    # (# tp-reachability-2026-08-03) Достижимость цели: план против факта.
     # TP_REACH_MODE: shadow | enforce.
     # 08.08: все 20 последних событий заблокированы по этому гейту (ratio 2.0-2.3x).
     # Крипта не сток — волатильность высокая, цель должна быть достижима.
@@ -343,6 +353,20 @@ class Settings(BaseSettings):
     ATR_PROTECT_START_MULT: float = 1.5      # было 1.2
     ATR_TRAIL_START_MULT: float = 2.2        # было 1.8
     ATR_CAPTURE_START_MULT: float = 2.0      # было 1.5
+=======
+    TZ_STOP_MIN_DIST_ATR_MULT: float = 3  # Мин. дистанция стопа = ATR * 3
+    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 1.5  # Буфер выхода KAMA = ATR * 0.8
+    TZ_STOP_LOSS_ATR_MULT: float = 4  # Уровень стоп-лосса = ATR * 4
+    
+    # Множители для динамических порогов exit_policy (заменяют жесткие %)
+    # Пороги будут: max(ATR * mult, net_safe_floor)
+    ATR_FAILED_SETUP_SOFT_MULT: float = 1.2
+    ATR_FAILED_SETUP_MID_MULT: float = 1.8
+    ATR_FAILED_SETUP_DEEP_MULT: float = 2.5
+    ATR_PROTECT_START_MULT: float = 1.5
+    ATR_TRAIL_START_MULT: float = 2.2
+    ATR_CAPTURE_START_MULT: float = 2.0
+
     # Предохранитель от разрыва цены, когда цикл сопровождения не отработал.
     # Этого в ТЗ НЕТ — моё добавление, и оно должно быть видно отдельно.
     # 0 = выключить полностью.
@@ -913,6 +937,8 @@ class Settings(BaseSettings):
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
     RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 2.5·ATR (крипта: было 1.5)
+
+    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
