@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 1.7
+    TREND_MAX_EXTENSION_ATR: float = 2
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -330,12 +330,12 @@ class Settings(BaseSettings):
     
     # Множители для динамических порогов exit_policy (заменяют жесткие %)
     # Пороги будут: max(ATR * mult, net_safe_floor)
-    ATR_FAILED_SETUP_SOFT_MULT: float = 0.5
-    ATR_FAILED_SETUP_MID_MULT: float = 0.8
-    ATR_FAILED_SETUP_DEEP_MULT: float = 1.1
-    ATR_PROTECT_START_MULT: float = 0.6
-    ATR_TRAIL_START_MULT: float = 0.9
-    ATR_CAPTURE_START_MULT: float = 0.9
+    ATR_FAILED_SETUP_SOFT_MULT: float = 1.2
+    ATR_FAILED_SETUP_MID_MULT: float = 1.8
+    ATR_FAILED_SETUP_DEEP_MULT: float = 2.5
+    ATR_PROTECT_START_MULT: float = 1.5
+    ATR_TRAIL_START_MULT: float = 2.2
+    ATR_CAPTURE_START_MULT: float = 2.0
     # Предохранитель от разрыва цены, когда цикл сопровождения не отработал.
     # Этого в ТЗ НЕТ — моё добавление, и оно должно быть видно отдельно.
     # 0 = выключить полностью.
@@ -905,7 +905,7 @@ class Settings(BaseSettings):
     RANGE_ENTRY_RSI_MAX: float = 52.0
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
-    RANGE_STOP_ATR_MULT: float = 0.5        # стоп = поддержка − 0.5·ATR
+    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
@@ -980,8 +980,8 @@ class Settings(BaseSettings):
     # выдумку другой. Достижимость проверяется по факту —
     # services/tp_reachability.py сравнивает план с медианой реализованного MFE.
     SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %)
-    SCALP_TP2_MULT: float = 1.6               # TP2 = target * mult
-    SCALP_STOP_BUFFER_ATR: float = 0.5         # стоп за микро-экстремумом (в ATR)
+    SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult
+    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR)
     SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
