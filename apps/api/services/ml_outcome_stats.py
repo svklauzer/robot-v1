@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from core.config import settings
 
-ef sanitize_float(value, default=0.0) -> float:
+def sanitize_float(value, default=0.0) -> float:
     """Санитизация float-значений для JSON: nan/inf -> default."""
     if value is None:
         return default
