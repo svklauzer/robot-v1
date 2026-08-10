@@ -33,11 +33,23 @@ range)` — то есть молча пропускал ВЕСЬ трендов�
 from __future__ import annotations
 
 import json
+import math
 from itertools import product
 from pathlib import Path
 
 from core.config import settings
 
+def _sanitize_float(value, default=0.0) -> float:
+    """Санитизация float-значений для JSON: nan/inf -> default."""
+    if value is None:
+        return default
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
 
 def _load_rows(path: Path) -> list[dict]:
     if not path.exists():
@@ -68,12 +80,16 @@ def _honest_final_pct(row: dict, traj: list, final_pct: float) -> tuple[float, b
     """
     lc = row.get("lifecycle") or {}
     try:
-        mfe = float(lc.get("mfe_pct"))
+        mfe_raw = lc.get("mfe_pct")
+        if mfe_raw is None:
+            return final_pct, False
+        mfe = _sanitize_float(mfe_raw, 0.0)
     except (TypeError, ValueError):
         return final_pct, False
     if final_pct > mfe + 1e-9:
         try:
-            return float(traj[-1][1]), True
+            last_val = _sanitize_float(traj[-1][1], mfe)
+            return last_val, True
         except (TypeError, ValueError, IndexError):
             return mfe, True
     return final_pct, False
@@ -93,9 +109,9 @@ def _cost_pct(row: dict) -> float:
     Считаем из факта: издержки / (qty × цена входа) × 100.
     """
     try:
-        cost = float(row.get("closed_total_cost") or 0.0)
-        qty = float(row.get("qty") or 0.0)
-        entry = float((row.get("lifecycle") or {}).get("entry_price") or 0.0)
+        cost = _sanitize_float(row.get("closed_total_cost"), 0.0)
+        qty = _sanitize_float(row.get("qty"), 0.0)
+        entry = _sanitize_float((row.get("lifecycle") or {}).get("entry_price"), 0.0)
         notional = qty * entry
         if cost > 0 and notional > 0:
             return cost / notional * 100.0
@@ -103,8 +119,8 @@ def _cost_pct(row: dict) -> float:
         pass
     # Фолбэк — модельный круг по конфигу. Хуже факта, но лучше нуля: ноль
     # означал бы возврат к сравнению валового с чистым.
-    taker = float(getattr(settings, "FUTURES_TAKER_FEE", 0.0005))
-    slip = float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
+    taker = _sanitize_float(getattr(settings, "FUTURES_TAKER_FEE", 0.0005), 0.0005)
+    slip = _sanitize_float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002), 0.0002)
     return (taker + slip) * 2 * 100.0
 
 
@@ -129,7 +145,8 @@ def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
     hard_sec = ts_sec * max(hard_mult, 1.0)
     for point in traj:
         try:
-            age, pct = float(point[0]), float(point[1])
+            age = _sanitize_float(point[0], 0.0)
+            pct = _sanitize_float(point[1], 0.0)
         except (TypeError, ValueError, IndexError):
             continue
         mfe = max(mfe, pct)
@@ -138,7 +155,7 @@ def _replay_one(traj: list, final_pct: float, *, arm: float, give: float,
             return pct - cost_pct, "replay_breakeven_lock"
         # time stop (с grace до hard: не в значимом минусе → держим)
         if ts_min and age >= ts_sec and mfe < arm:
-            net_safe = float(getattr(settings, "NET_SAFE_FLOOR_SWAP_PCT", 0.30))
+            net_safe = _sanitize_float(getattr(settings, "NET_SAFE_FLOOR_SWAP_PCT", 0.30), 0.30)
             if age >= hard_sec or pct <= -net_safe:
                 return pct - cost_pct, "replay_time_stop"
     return final_pct, "actual_close"
@@ -187,7 +204,7 @@ def _replay_trend_one(
     mfe = 0.0
     for point in traj:
         try:
-            pct = float(point[1])
+            pct = _sanitize_float(point[1], 0.0)
         except (TypeError, ValueError, IndexError):
             continue
         mfe = max(mfe, pct)
@@ -239,14 +256,14 @@ def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float)
       * разрыв МЕНЬШЕ дельты лидера — иначе достаточно найти вариант
         поэкстремальнее, чтобы «доказать» любой вывод.
     """
-    gap = float(current_pct) - float(actual_pct)
-    scale = abs(float(actual_pct)) or 1.0
-    best_edge = abs(float(best_pct) - float(actual_pct))
+    gap = _sanitize_float(current_pct, 0.0) - _sanitize_float(actual_pct, 0.0)
+    scale = abs(_sanitize_float(actual_pct, 0.0)) or 1.0
+    best_edge = abs(_sanitize_float(best_pct, 0.0) - _sanitize_float(actual_pct, 0.0))
     trustworthy = bool(abs(gap) <= max(0.5, 0.1 * scale) and best_edge > abs(gap))
 
     return {
-        "current_replayed_pct": round(float(current_pct), 4),
-        "actual_pct": round(float(actual_pct), 4),
+        "current_replayed_pct": round(_sanitize_float(current_pct, 0.0), 4),
+        "actual_pct": round(_sanitize_float(actual_pct, 0.0), 4),
         "gap_pct": round(gap, 4),
         "gap_share_of_result": round(abs(gap) / scale, 3),
         "best_edge_pct": round(best_edge, 4),
@@ -331,11 +348,11 @@ def build(limit: int = 2000) -> dict:
         if not traj or len(traj) < 3:
             skipped_no_traj += 1
             continue
-        honest_pct, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        honest_pct, is_phantom = _honest_final_pct(r, traj, _sanitize_float(final_pct, 0.0))
         if is_phantom:
             phantom_count += 1
         trades.append({"traj": traj, "final_pct": honest_pct,
-                       "booked_pct": float(final_pct), "phantom": is_phantom,
+                       "booked_pct": _sanitize_float(final_pct, 0.0), "phantom": is_phantom,
                        "cost_pct": _cost_pct(r),
                        "symbol": r.get("symbol"), "signal_id": r.get("signal_id")})
 
@@ -351,7 +368,7 @@ def build(limit: int = 2000) -> dict:
     arms = [0.3, 0.5, 0.7]
     gives = [0.4, 0.5, 0.6]
     time_stops = [45.0, 90.0, None]  # None = time-stop off
-    hard_mult = float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
+    hard_mult = _sanitize_float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
 
     actual_total = round(sum(t["final_pct"] for t in trades), 4)
     variants = []
@@ -395,9 +412,9 @@ def build(limit: int = 2000) -> dict:
     split = _split_check(trades, _run_scalp, variants[0], _key_scalp)
 
     current = {
-        "arm_pct": float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5)),
-        "giveback_share": float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.6)),
-        "time_stop_min": (float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
+        "arm_pct": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5)),
+        "giveback_share": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.6)),
+        "time_stop_min": (_sanitize_float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
                           if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)) else None),
     }
 
@@ -456,12 +473,12 @@ def build_trend(limit: int = 2000) -> dict:
         if not traj or len(traj) < 3:
             skipped_no_traj += 1
             continue
-        honest_pct, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        honest_pct, is_phantom = _honest_final_pct(r, traj, _sanitize_float(final_pct, 0.0))
         phantom_count += int(is_phantom)
         trades.append({
             "traj": traj,
             "final_pct": honest_pct,
-            "booked_pct": float(final_pct),
+            "booked_pct": _sanitize_float(final_pct, 0.0),
             "phantom": is_phantom,
             "cost_pct": _cost_pct(r),
             "symbol": r.get("symbol"),
@@ -496,7 +513,7 @@ def build_trend(limit: int = 2000) -> dict:
     # ни опровергнуть, пока его правая граница не перебиралась.
     ride_arms = [0.55, 0.80, 1.20]
 
-    band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
+    band_floor = _sanitize_float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
 
     def _run(subset: list[dict]) -> list[dict]:
         out = []
@@ -550,13 +567,13 @@ def build_trend(limit: int = 2000) -> dict:
     split = _split_check(trades, _run, variants[0], _key)
 
     current = {
-        "be_arm_pct": float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
-        "be_floor_pct": float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
-        "band_arm_pct": float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
-        "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
-        "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
-        "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
-        "ride_arm_pct": float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
+        "be_arm_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
+        "be_floor_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
+        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
+        "ride_trail_share": _sanitize_float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
+        "min_protective_pct": _sanitize_float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        "ride_arm_pct": _sanitize_float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
     }
     current_row = next((v for v in variants if _key(v) == _key(current)), None)
 
@@ -711,10 +728,10 @@ def _load_trades(regime: str, limit: int) -> tuple[list[dict], int, int]:
         if not traj or len(traj) < 3:
             skipped += 1
             continue
-        honest, is_phantom = _honest_final_pct(r, traj, float(final_pct))
+        honest, is_phantom = _honest_final_pct(r, traj, _sanitize_float(final_pct, 0.0))
         phantom += int(is_phantom)
         trades.append({
-            "traj": traj, "final_pct": honest, "booked_pct": float(final_pct),
+            "traj": traj, "final_pct": honest, "booked_pct": _sanitize_float(final_pct, 0.0),
             "symbol": r.get("symbol"), "signal_id": r.get("signal_id"),
             "mfe_pct": lc.get("mfe_pct"), "phantom": is_phantom,
         })
@@ -725,7 +742,7 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
     """Суммарный gross-% набора параметров на выборке."""
     total = 0.0
     if regime == "scalp":
-        hard = float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
+        hard = _sanitize_float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
         for t in trades:
             total += _replay_one(
                 t["traj"], t["final_pct"],
@@ -734,7 +751,7 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
             )[0]
         return total
 
-    band_floor = float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
+    band_floor = _sanitize_float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
     # (#band-corridor-2026-08-03) ride_arm берём ИЗ ПАРАМЕТРОВ варианта, а не
     # из конфига. Иначе walk-forward оценивал бы лидера с чужим значением оси:
     # перебор выбрал бы одну правую границу коридора, а проверка вне выборки
@@ -762,25 +779,25 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
 def _current_params(regime: str) -> dict:
     if regime == "scalp":
         return {
-            "arm_pct": float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.3)),
-            "giveback_share": float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.4)),
-            "time_stop_min": (float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
+            "arm_pct": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.3)),
+            "giveback_share": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.4)),
+            "time_stop_min": (_sanitize_float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
                               if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)) else None),
         }
     return {
-        "be_arm_pct": float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
-        "be_floor_pct": float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
-        "band_arm_pct": float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
-        "band_giveback_share": float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
-        "ride_trail_share": float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
-        "min_protective_pct": float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        "be_arm_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
+        "be_floor_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
+        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
+        "ride_trail_share": _sanitize_float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
+        "min_protective_pct": _sanitize_float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
         # Боевое значение правой границы коридора — чтобы «текущий конфиг» в
         # walk-forward считался тем же способом, что и варианты перебора.
-        "ride_arm_pct": float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
-        "capture_start_pct": (float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.9))
+        "ride_arm_pct": _sanitize_float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
+        "capture_start_pct": (_sanitize_float(getattr(settings, "MFE_CAPTURE_START_PCT", 0.9))
                               if bool(getattr(settings, "MFE_CAPTURE_ENABLED", True)) else None),
-        "capture_drawdown_pct": float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30)),
-        "capture_share": float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.40)),
+        "capture_drawdown_pct": _sanitize_float(getattr(settings, "MFE_CAPTURE_DRAWDOWN_PCT", 0.30)),
+        "capture_share": _sanitize_float(getattr(settings, "MFE_CAPTURE_PROTECT_SHARE", 0.40)),
     }
 
 
