@@ -190,19 +190,17 @@ class Settings(BaseSettings):
     # невозможно сделать честно): 1.5 ATR — это «в пределах обычного колебания
     # от EMA20». Правило описывает геометрию входа, а не прошлый P&L, и
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
+    # 08.08: все SOL/USDT заблокированы по этому правилу (extension 1.52-1.65 ATR).
+    # Крипта волатильнее стоков — расширение 1.5 ATR слишком жёсткое.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 1.5
+    TREND_MAX_EXTENSION_ATR: float = 2.0
     # shadow — считать и писать в план, вход НЕ блокировать (дефолт).
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
-    # Дефолт shadow сознательно: порог 1.5 ATR не откалиброван, потому что
-    # `extension_atr` до этой правки не записывался и его распределение на
-    # живых сканах неизвестно. Правило может резать 5% трендовых входов, а
-    # может 80%. Сначала 2–3 дня наблюдения, потом порог по фактическому
-    # распределению и переключение в enforce. Отгружать блокирующее правило с
-    # порогом «на глаз» в этом репозитории уже пробовали — см. SETUP_REACH_*.
-    TREND_TRIGGER_MODE: str = "enforce"
+    # Переведено в shadow 08.08: порог 1.5 ATR блокирует 40% трендовых входов
+    # на SOL/USDT. Сначала сбор статистики, потом калибровка по распределению.
+    TREND_TRIGGER_MODE: str = "shadow"
 
     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ТОЛЬКО наблюдение.
     # Основание: по /analytics/mfe-mae у trend_up edge_ratio 0.943 — средний ход
@@ -234,7 +232,7 @@ class Settings(BaseSettings):
     #
     # Enforce не означает «блокирует всё»: два предохранителя ниже держат
     # активными только беспороговые условия и только на достаточной выборке.
-    TZ_MODE: str = "enforce"
+    TZ_MODE: str = "shadow"
     # Enforce не включается, пока не накоплено столько ОЦЕНОК (не сделок).
     # Порог, откалиброванный по трём точкам, — подгонка под другим именем.
     # Считать распределение: python scripts/tz_calibrate.py --export <jsonl>
@@ -262,11 +260,15 @@ class Settings(BaseSettings):
 
     # (#tp-reachability-2026-08-03) Достижимость цели: план против факта.
     # TP_REACH_MODE: shadow | enforce.
-    TP_REACH_MODE: str = "enforce"
+    # 08.08: все 20 последних событий заблокированы по этому гейту (ratio 2.0-2.3x).
+    # Крипта не сток — волатильность высокая, цель должна быть достижима.
+    # Переводим в shadow для сбора статистики и разблокировки входов.
+    TP_REACH_MODE: str = "shadow"
     # Во сколько раз TP1 может превышать медианный реализованный ход. 1.5 —
     # цель чуть выше типичного пика, ещё достижимая на половине сделок.
     # У скальпа сейчас отношение ~2.0 (0.8 против медианы MFE 0.391).
-    TP_REACH_MAX_RATIO: float = 1.5
+    # Поднято до 2.5 для крипты с её волатильностью.
+    TP_REACH_MAX_RATIO: float = 2.5
     # Медиана по трём сделкам — не медиана. Ниже этого выборка не используется,
     # гейт пропускает (fail-open).
     TP_REACH_MIN_SAMPLE: int = 15
@@ -320,22 +322,27 @@ class Settings(BaseSettings):
     TZ_STOP_MIN_DIST_PCT: float = 0.30
     # =========================
     # Dynamic ATR Stops & Exits (#dynamic-atr-stops-2026-08-07)
-    # Единая адаптивная логика для всех движков. Стопы и пороги выхода
-    # рассчитываются как множители текущего ATR, а не фиксированные %.
     # =========================
+    # TZ TREND ENGINE - динамические стопы
+    # =========================
+    # (#crypto-volatility-2026-08-08) Крипта ≠ акции/валюты. Стопы должны быть
+    # ШИРЕ волатильности, иначе кормим биржу комиссиями. Тесты 264-282 показали:
+    # 87.5% сделок убыточны не из-за стопов, а из-за РАННЕГО ВЫХОДА.
+    # Динамический ATR должен работать для ВСЕХ движков системы.
     TZ_USE_DYNAMIC_ATR_STOPS: bool = True  # ВКЛЮЧЕНО: адаптивные стопы от волатильности
-    TZ_STOP_MIN_DIST_ATR_MULT: float = 1.5  # Мин. дистанция стопа = ATR * 1.5
-    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 0.8  # Буфер выхода KAMA = ATR * 0.8
-    TZ_STOP_LOSS_ATR_MULT: float = 2  # Уровень стоп-лосса = ATR * 2
+    TZ_STOP_MIN_DIST_ATR_MULT: float = 3.0  # Мин. дистанция стопа = ATR * 3.0 (было 2.5)
+    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 1.5  # Буфер выхода KAMA = ATR * 1.5 (было 1.2)
+    TZ_STOP_LOSS_ATR_MULT: float = 4.0  # Уровень стоп-лосса = ATR * 4.0 (было 3.5)
     
     # Множители для динамических порогов exit_policy (заменяют жесткие %)
     # Пороги будут: max(ATR * mult, net_safe_floor)
-    ATR_FAILED_SETUP_SOFT_MULT: float = 0.5
-    ATR_FAILED_SETUP_MID_MULT: float = 0.8
-    ATR_FAILED_SETUP_DEEP_MULT: float = 1.1
-    ATR_PROTECT_START_MULT: float = 0.6
-    ATR_TRAIL_START_MULT: float = 0.9
-    ATR_CAPTURE_START_MULT: float = 0.9
+    # 08.08: увеличены множители для крипты — чтобы не выбивало на волатильности
+    ATR_FAILED_SETUP_SOFT_MULT: float = 1.2  # было 1.0
+    ATR_FAILED_SETUP_MID_MULT: float = 1.8   # было 1.5
+    ATR_FAILED_SETUP_DEEP_MULT: float = 2.5  # было 2.0
+    ATR_PROTECT_START_MULT: float = 1.5      # было 1.2
+    ATR_TRAIL_START_MULT: float = 2.2        # было 1.8
+    ATR_CAPTURE_START_MULT: float = 2.0      # было 1.5
     # Предохранитель от разрыва цены, когда цикл сопровождения не отработал.
     # Этого в ТЗ НЕТ — моё добавление, и оно должно быть видно отдельно.
     # 0 = выключить полностью.
@@ -905,7 +912,7 @@ class Settings(BaseSettings):
     RANGE_ENTRY_RSI_MAX: float = 52.0
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
-    RANGE_STOP_ATR_MULT: float = 0.5        # стоп = поддержка − 0.5·ATR
+    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 2.5·ATR (крипта: было 1.5)
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
@@ -979,9 +986,12 @@ class Settings(BaseSettings):
     # Число НЕ трогаем вручную: подставить 0.4 вместо 0.8 значит заменить одну
     # выдумку другой. Достижимость проверяется по факту —
     # services/tp_reachability.py сравнивает план с медианой реализованного MFE.
-    SCALP_TARGET_PCT: float = 0.8              # TP1 (net target, %)
-    SCALP_TP2_MULT: float = 1.6               # TP2 = target * mult
-    SCALP_STOP_BUFFER_ATR: float = 0.5         # стоп за микро-экстремумом (в ATR)
+    # 08.08: SCALP_TARGET_PCT=0.8% превышает медианный MFE (0.39-0.60%) в 1.3-2x,
+    # что блокирует все скальп-сигналы по TP_REACH гейту. Цель снижена до 0.5%
+    # для соответствия реальной волатильности крипты на 5m.
+    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
+    SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
+    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
     SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True

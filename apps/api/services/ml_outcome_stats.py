@@ -1,9 +1,23 @@
 import json
+import math
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from core.config import settings
+
+
+def sanitize_float(value, default=0.0) -> float:
+    """Санитизация float-значений для JSON: nan/inf -> default."""
+    if value is None:
+        return default
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
 
 
 class MLOutcomeStatsService:
@@ -104,8 +118,8 @@ class MLOutcomeStatsService:
             group["side"] = side
             group["count"] += 1
 
-            net_pnl = float(row.get("closed_net_pnl") or 0)
-            costs = float(row.get("closed_total_cost") or 0)
+            net_pnl = sanitize_float(row.get("closed_net_pnl"), 0.0)
+            costs = sanitize_float(row.get("closed_total_cost"), 0.0)
 
             group["net_pnl"] += net_pnl
             group["costs"] += costs
@@ -127,15 +141,15 @@ class MLOutcomeStatsService:
             if labels.get("positive_then_negative"):
                 group["positive_then_negative"] += 1
 
-            mfe = lifecycle.get("mfe_pct")
-            mae = lifecycle.get("mae_pct")
+            mfe = sanitize_float(lifecycle.get("mfe_pct"), 0.0)
+            mae = sanitize_float(lifecycle.get("mae_pct"), 0.0)
 
-            if mfe is not None:
-                group["mfe_sum"] += float(mfe)
+            if lifecycle.get("mfe_pct") is not None:
+                group["mfe_sum"] += mfe
                 group["mfe_count"] += 1
 
-            if mae is not None:
-                group["mae_sum"] += float(mae)
+            if lifecycle.get("mae_pct") is not None:
+                group["mae_sum"] += mae
                 group["mae_count"] += 1
 
         result_groups = []
@@ -364,7 +378,7 @@ class MLOutcomeStatsService:
 
         for r in closed:
             grade = str(r.get("grade") or "unknown").upper()
-            pnl = float(r.get("closed_net_pnl") or 0)
+            pnl = sanitize_float(r.get("closed_net_pnl"), 0.0)
             labels = r.get("labels") or {}
             b = buckets[grade]
             b["count"] += 1
@@ -417,18 +431,43 @@ class MLOutcomeStatsService:
                 "scored_closed": len(closed_with_score),
             }
         
-        # Извлекаем y_true и y_pred
+        # Извлекаем y_true и y_pred с санитизацией
         y_true = []
         y_pred = []
         for r in closed_with_score:
-            pnl = float(r.get("closed_net_pnl") or 0)
+            pnl = sanitize_float(r.get("closed_net_pnl"), 0.0)
             y_true.append(1 if pnl > 0 else 0)
-            y_pred.append(float(r.get("ml_score")))
+            
+            score_raw = r.get("ml_score")
+            if score_raw is None:
+                continue
+            score = sanitize_float(score_raw, 0.5)
+            y_pred.append(score)
+        
+        # Проверка на единственный класс (предупреждение sklearn)
+        n_pos = sum(y_true)
+        n_neg = len(y_true) - n_pos
+        if n_pos == 0 or n_neg == 0:
+            # Только один класс - AUC не определен, возвращаем 0.5
+            return {
+                "status": "single_class",
+                "message": "Все сделки одного класса (только прибыли или только убытки). AUC не определен.",
+                "scored_closed": len(closed_with_score),
+                "all_wins": n_pos == len(y_true),
+                "all_losses": n_neg == len(y_true),
+                "fallback_auc": 0.5,
+            }
         
         # Считаем live AUC
         try:
             from sklearn.metrics import roc_auc_score
-            live_auc = round(roc_auc_score(y_true, y_pred), 4)
+            live_auc_raw = roc_auc_score(y_true, y_pred)
+            # Санитизация: nan/inf -> 0.5 (случайное угадывание)
+            import math
+            if live_auc_raw is None or (isinstance(live_auc_raw, float) and (math.isnan(live_auc_raw) or math.isinf(live_auc_raw))):
+                live_auc = 0.5
+            else:
+                live_auc = round(max(0.0, min(1.0, live_auc_raw)), 4)
         except Exception:
             # Fallback: простая эвристика AUC
             live_auc = self._simple_auc(y_true, y_pred)
