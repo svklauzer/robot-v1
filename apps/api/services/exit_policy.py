@@ -373,6 +373,7 @@ class ExitPolicyService:
                     obv=tz_context.get("obv"),
                     obv_ema=tz_context.get("obv_ema20"),
                     atr=tz_context.get("atr"),  # Передаем ATR для динамического буфера
+                    entry_price=entry_price,  # Передаем цену входа для аварийного стопа                   
                 )
                 if verdict.exit:
                     return ExitDecision(

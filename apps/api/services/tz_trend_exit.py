@@ -1,5 +1,5 @@
 """Выходы трендового движка по ТЗ. (#tz-trend-engine-2026-08-03)
-
+это файл tz_trend_exit.py
 Что говорит ТЗ
 --------------
 Три условия закрытия, все три — про слом тренда, а не про дистанцию цены:
@@ -99,8 +99,9 @@ def evaluate(
     obv: float | None,
     obv_ema: float | None,
     atr: float | None = None,  # <-- Новый параметр: текущая волатильность
+    entry_price: float | None = None,  # <-- Новый параметр: цена входа (для аварийного стопа)    
 ) -> TZExit:
-    """Пора ли закрывать по условиям ТЗ + Dynamic ATR Buffer."""
+    """Пора ли закрывать по условиям ТЗ + Dynamic ATR Buffer + Hard Stop."""
     is_long = str(side or "").lower() in ("long", "buy")
     close_v = _num(close)
     kama_v = _num(kama)
@@ -109,8 +110,23 @@ def evaluate(
     obv_v = _num(obv)
     obv_ema_v = _num(obv_ema)
     atr_v = _num(atr)
+    entry_v = _num(entry_price)
 
     triggers: list[str] = []
+
+    # 0. АВАРИЙНЫЙ СТОП (Hard Stop) - Защита от краха/сквиза
+    # Если цена ушла против нас больше чем на X% от входа, выходим немедленно.
+    # Это страховка, если KAMA не успела развернуться.
+    if entry_v is not None and close_v is not None:
+        max_loss_pct = float(getattr(settings, "TZ_HARD_STOP_LOSS_PCT", 5.0)) / 100.0
+        if is_long:
+            hard_stop_level = entry_v * (1 - max_loss_pct)
+            if close_v < hard_stop_level:
+                triggers.append(f"hard_stop_loss:{max_loss_pct*100:.1f}%")
+        else:
+            hard_stop_level = entry_v * (1 + max_loss_pct)
+            if close_v > hard_stop_level:
+                triggers.append(f"hard_stop_loss:{max_loss_pct*100:.1f}%")
 
     # 1. Экстренный выход: цена ПРОБИЛА KAMA с буфером.
     if close_v is not None and kama_v is not None and kama_v > 0:
@@ -119,7 +135,8 @@ def evaluate(
         
         if use_atr and atr_v is not None and atr_v > 0:
             # Динамический буфер: ATR * множитель
-            mult = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_ATR_MULT", 0.8))
+            # Увеличен дефолт с 0.8 до 2.0, чтобы не выбивало шумом
+            mult = float(getattr(settings, "TZ_EXIT_KAMA_BUFFER_ATR_MULT", 2.0))
             buffer_value = atr_v * mult
             level = kama_v - buffer_value if is_long else kama_v + buffer_value
         else:
@@ -132,9 +149,9 @@ def evaluate(
         if broken:
             triggers.append("kama_broken")
 
-    # 2. Ослабление тренда (ADX) - порог увеличен до 6.0 для устойчивости
+    # 2. Ослабление тренда (ADX) - порог снижен до 4.0 для более раннего выхода
     peak_min = float(getattr(settings, "TZ_EXIT_ADX_PEAK_MIN", 50.0))
-    fade = float(getattr(settings, "TZ_EXIT_ADX_FADE", 6.0)) # <-- Hardcoded fix или через settings
+    fade = float(getattr(settings, "TZ_EXIT_ADX_FADE", 4.0))
     if adx_v is not None and peak_v is not None and peak_v >= peak_min:
         if (peak_v - adx_v) >= fade:
             triggers.append(f"adx_fading_from_peak:{peak_v:.1f}->{adx_v:.1f}")
@@ -154,7 +171,7 @@ def evaluate(
         for x in str(getattr(settings, "TZ_EXIT_CONDITIONS", "kama") or "").split(",")
         if x.strip()
     }
-    fired = [t for t in triggers if _family(t) in armed]
+    fired = [t for t in triggers if _family(t) in armed or t.startswith("hard_stop")]
 
     return TZExit(
         exit=bool(fired),

@@ -296,7 +296,7 @@ class Settings(BaseSettings):
     # условие вырождается в «ADX < 50» и закрывало бы каждую сделку, не дошедшую
     # до 50. Закрываем, когда ADX упал от своего пика на TZ_EXIT_ADX_FADE.
     TZ_EXIT_ADX_PEAK_MIN: float = 50.0
-    TZ_EXIT_ADX_FADE: float = 6.0  # Увеличено для устойчивости к шуму
+    TZ_EXIT_ADX_FADE: float = 4.0  # Увеличено для устойчивости к шуму
     # Выход ТОЛЬКО по приборам, стоп-ордера нет. Основание — замер:
     #   107 стопов из 342 сделок, −223.76 USDT, НИ ОДНОЙ прибыльной (76% всего
     #   убытка). При этом средний MAE −0.618%, а стопы стоят на 1–3%: типичная
@@ -325,8 +325,12 @@ class Settings(BaseSettings):
     # =========================
     TZ_USE_DYNAMIC_ATR_STOPS: bool = True  # ВКЛЮЧЕНО: адаптивные стопы от волатильности
     TZ_STOP_MIN_DIST_ATR_MULT: float = 3  # Мин. дистанция стопа = ATR * 3
-    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 1.5  # Буфер выхода KAMA = ATR * 0.8
+    TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 2.0  # Буфер выхода KAMA = ATR * 2.0
     TZ_STOP_LOSS_ATR_MULT: float = 4  # Уровень стоп-лосса = ATR * 4
+
+    # Аварийный жесткий стоп (% от цены входа) - защита от краха/сквиза
+    # Срабатывает независимо от KAMA/ADX/OBV, если цена ушла против нас на X%
+    TZ_HARD_STOP_LOSS_PCT: float = 5.0  # Максимальная потеря от входа в %
     
     # Множители для динамических порогов exit_policy (заменяют жесткие %)
     # Пороги будут: max(ATR * mult, net_safe_floor)
@@ -979,9 +983,12 @@ class Settings(BaseSettings):
     # Число НЕ трогаем вручную: подставить 0.4 вместо 0.8 значит заменить одну
     # выдумку другой. Достижимость проверяется по факту —
     # services/tp_reachability.py сравнивает план с медианой реализованного MFE.
-    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %)
-    SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult
-    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR)
+    # 08.08: SCALP_TARGET_PCT=0.8% превышает медианный MFE (0.39-0.60%) в 1.3-2x,
+    # что блокирует все скальп-сигналы по TP_REACH гейту. Цель снижена до 0.5%
+    # для соответствия реальной волатильности крипты на 5m.
+    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
+    SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
+    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
     SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
