@@ -251,58 +251,6 @@ class ExitPolicyService:
         flow_against: bool = False,
         regime: str | None = None,
         tz_context: dict | None = None,
-        atr: float | None = None,  # <--- НОВЫЙ ПАРАМЕТР
-    ) -> ExitDecision:
-        # ... начало метода без изменений ...
-        side = str(side).lower()
-        entry_price = float(entry_price)
-        current_price = float(current_price)
-        mfe = float(mfe_pct or 0.0)
-        current_pct = self._result_pct(side, entry_price, current_price)
-
-        # ... (liquidity guard без изменений) ...
-
-        # Расчет дистанции стопа
-        stop_distance_pct = (
-            abs(entry_price - float(stop_price)) / entry_price * 100
-            if stop_price is not None and float(stop_price) > 0
-            else None
-        )
-        
-        drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
-        net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
-        
-        # Передаем ATR и цену в расчет порогов
-        thr, threshold_source = self._get_thresholds(
-            stop_distance_pct, 
-            self._net_safe_floor_pct(fee_rate),
-            atr=atr,
-            price=current_price # Используем текущую цену для конвертации ATR в %
-        )
-        
-        # ... остальной код метода без изменений, кроме передачи atr в tz_context если нужно ...
-        
-        # Внутри блока TZ_TREND_EXIT_ONLY можно также передать ATR, если tz_trend_exit будет его использовать
-        # Но пока tz_trend_exit работает по буферу %, который мы изменили в config.py через TZ_EXIT_KAMA_BUFFER_ATR_MULT
-        # Нужно убедиться, что tz_trend_exit.py тоже читает этот новый конфиг.
-
-    def before_tp1_decision(
-        self,
-        side: str,
-        entry_price: float,
-        current_price: float,
-        stop_price: float | None = None,
-        tp1_price: float | None = None,
-        mfe_pct: float | None = None,
-        max_profit_price: float | None = None,
-        symbol: str | None = None,
-        market_type: str | None = None,
-        position_notional_usdt: float | None = None,
-        signal_age_sec: float | None = None,
-        trade_mode: str = "default",
-        flow_against: bool = False,
-        regime: str | None = None,
-        tz_context: dict | None = None,
     ) -> ExitDecision:
         side = str(side).lower()
         entry_price = float(entry_price)
