@@ -65,7 +65,7 @@ services:
           name: robot-db
           property: connectionString
 
-      # ── Redis — авто-привязка к robot-redis (Key Value) ───────────────────
+      # ── Redis — авто-прязка к robot-redis (Key Value) ───────────────────
       - key: REDIS_URL
         fromService:
           name: robot-redis
@@ -239,27 +239,31 @@ services:
       # 0 выключает полностью.
       - key: TZ_DISASTER_STOP_PCT
         value: "5.0"
+      
       # ── Dynamic ATR Stops (#dynamic-atr-stops-2026-08-07) ─────────────────
       # Включает адаптивный расчет стопов и буферов выхода на основе волатильности (ATR).
       # Защищает от ложных выносов на шумовых откатах и ретестах.
       - key: TZ_USE_DYNAMIC_ATR_STOPS
         value: "true"
+      
       # Множители для расчета дистанций в единицах ATR:
       - key: TZ_STOP_MIN_DIST_ATR_MULT
         value: "3.0"       # Мин. дистанция стопа = 3.0 × ATR (увеличено для крипты)
+      
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
         value: "2.0"       # Буфер выхода по KAMA = 2.0 × ATR (увеличено для защиты от шума)
+      
       - key: TZ_STOP_LOSS_ATR_MULT
         value: "4.0"       # Уровень стоп-лосса = 4.0 × ATR (увеличено для крипты)
+      
       # Смягчение фильтра ADX для устойчивости к шуму:
+      # (Единственное правильное значение — 4.0, дубль удалён)
       - key: TZ_EXIT_ADX_FADE
         value: "4.0"       # Снижено с 6.0 до 4.0 для более раннего выхода
+      
       # Аварийный жесткий стоп (% от цены входа):
       - key: TZ_HARD_STOP_LOSS_PCT
         value: "5.0"       # Максимальная потеря от входа в %
-      # Смягчение фильтра ADX для устойчивости к шуму (было 3.0):
-      - key: TZ_EXIT_ADX_FADE
-        value: "6.0"
 
       # ── Достижимость цели ─────────────────────────────────────────────────
       # Достижимость TP1 включена в enforce: не берём сетап, где цель далеко
@@ -436,7 +440,7 @@ services:
     plan: free               # 25 MB, без персистентности; starter ($10) при росте
     region: singapore
     maxmemoryPolicy: noeviction
-    ipAllowList: []          # только приватная сеть (доступ изнутри Render)
+    ipAllowList: []          # только привятная сеть (доступ изнутри Render)
 
   # ── Daily owner report (Render Cron Job) ─────────────────────────────────────
   # Серверный планировщик — работает 24/7 независимо от Cowork.
