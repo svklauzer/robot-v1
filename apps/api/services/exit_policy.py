@@ -428,7 +428,7 @@ class ExitPolicyService:
         # полу (floor) — фиксируем здесь, у безубытка, сохраняя комиссии.
         # Это напрямую лечит positive_then_negative (был 50-64%).
         be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
-        be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.80))
+        be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.45))
         # (#be-floor-cost-2026-07-25) Пол замка ДОЛЖЕН покрывать round-trip издержки,
         # иначе «безубыток» математически не может закрыться в плюс.
         # Факт по телеметрии 19–25.07: round-trip = 0.15% нотионала, а пол стоял
@@ -440,13 +440,13 @@ class ExitPolicyService:
         # плюс буфер: замок обязан оставлять хотя бы символический плюс.
         be_cost_pct = (float(fee_rate or 0.0) * 2 + float(settings.SLIPPAGE_BUFFER_PCT)) * 100
         be_floor = max(
-            float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+            float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.18)),
             be_cost_pct + float(getattr(settings, "BREAKEVEN_LOCK_COST_BUFFER_PCT", 0.05)),
         )
         # (#wick) Вик-фильтр: мягкие выходы только при подтверждённом развороте
         # (flow_against) ИЛИ реальном уходе в минус. Иначе тонкий откат = вик, держим.
-        require_flow = bool(getattr(settings, "EXIT_REQUIRE_FLOW_CONFIRM", True))
-        be_hard_floor = float(getattr(settings, "BREAKEVEN_LOCK_HARD_FLOOR_PCT", -0.35))
+        require_flow = bool(getattr(settings, "EXIT_REQUIRE_FLOW_CONFIRM", False))
+        be_hard_floor = float(getattr(settings, "BREAKEVEN_LOCK_HARD_FLOOR_PCT", -0.10))
         soft_exit_confirmed = (not require_flow) or bool(flow_against)
         # (#2 консолидация экзита) В ТРЕНДЕ failed_setup_exit отключён: он рубил в
         # шумовой полосе РАНЬШЕ структурного smart-стопа, часто на вике, после
