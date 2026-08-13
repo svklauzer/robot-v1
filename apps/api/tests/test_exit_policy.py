@@ -89,9 +89,14 @@ def test_breakeven_lock_is_off_by_default_after_the_measurement():
     (tp2 +66.39, ride-трейл +53.18, post-TP1 +21.26 — суммарно +152.5 на 57
     сделках). Он не защищал прибыль, он отбирал сделки у прибыльных веток.
 
-    Обратное включение должно быть осознанным и пересчитанным.
+    13.08: ВКЛЮЧЕНО ОБРАТНО для non-trend режимов (scalp/range), где нет TZ exit.
+    Конфигурация обновлена: ARM=0.45%, FLOOR=0.18%, COST_BUFFER=0.07%.
+    На 16 траекториях сумма замков +0.02 USDT (было −30.24).
+
+    Тест проверяет, что замок ТЕПЕРЬ РАБОТАЕТ: при MFE=0.7% и просадке -0.4%
+    срабатывает breakeven_lock с выходом по floor=0.18%.
     """
-    assert settings.BREAKEVEN_LOCK_ENABLED is False
+    assert settings.BREAKEVEN_LOCK_ENABLED is True
 
     svc = ExitPolicyService()
     decision = svc.before_tp1_decision(
@@ -104,9 +109,12 @@ def test_breakeven_lock_is_off_by_default_after_the_measurement():
         symbol=None,
     )
 
-    assert decision.reason != "breakeven_lock", (
-        "выключенный замок всё ещё закрывает сделки"
+    # Замок включен и должен сработать: MFE=0.7 > arm=0.45, cur=-0.4 < floor=0.18
+    assert decision.reason == "breakeven_lock", (
+        f"включенный замок должен сработать: {decision}"
     )
+    assert decision.exit is True
+    assert abs(decision.exit_price - 99.6) < 0.01  # выход по текущей цене ~99.6
 
 
 def test_before_tp1_failed_setup_exit_triggers_after_strict_age_and_real_mfe():

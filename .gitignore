@@ -29,6 +29,16 @@ wheels/
 venv/
 ENV/
 
+# Logs
+*.log
+
+# Testing
+.coverage
+coverage/
+htmlcov/
+.nosetests
+.pytest_cache/
+
 # IDE
 .vscode/
 .idea/
@@ -36,13 +46,10 @@ ENV/
 *.swo
 *.tmp
 
-# Logs
-*.log
+# OS
+.DS_Store
+Thumbs.db
 
-# Coverage
-.coverage
-htmlcov/
-.coverage.*
-.cov
-coverage.xml
+# Data files
+*.jsonl
 ```
