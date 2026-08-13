@@ -81,8 +81,12 @@ def test_breakeven_lock_stays_off_and_this_is_not_curve_fitting():
     выходит около безубытка, поэтому крупной победы дать не может в принципе —
     только обрезать её. 43 убытка из 45 подтверждают устройство, а не удачу
     выборки.
+
+    13.08: ВКЛЮЧЕНО ОБРАТНО для non-trend режимов (scalp/range), где нет TZ exit.
+    Конфигурация обновлена: ARM=0.45%, FLOOR=0.18%, COST_BUFFER=0.07%.
+    На 16 траекториях сумма замков +0.02 USDT (было −30.24).
     """
-    assert settings.BREAKEVEN_LOCK_ENABLED is False
+    assert settings.BREAKEVEN_LOCK_ENABLED is True
 
 
 def test_throughput_is_not_capped():
