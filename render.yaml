@@ -211,11 +211,11 @@ services:
       - key: TREND_TRIGGER_MODE
         value: enforce
       - key: TREND_MAX_EXTENSION_ATR
-        value: "2.2"
+        value: "3.5"
       - key: TZ_ADX_MIN
-        value: "18.0"
+        value: "15.0"
       - key: TZ_STOCH_ZONE
-        value: "35.0"
+        value: "45.0"
       - key: TZ_MODE
         value: enforce
       # Фильтры входа: цена на верной стороне KAMA, ADX растёт и не ниже 18,
@@ -273,13 +273,17 @@ services:
       - key: BREAKEVEN_LOCK_ENABLED
         value: "true"
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.45"       # СНИЖЕНО с 0.80 — вооружаем на скальпах 0.45%+
+        value: "0.35"       # СНИЖЕНО с 0.80 — вооружаем на скальпах 0.35%+
       - key: BREAKEVEN_LOCK_FLOOR_PCT
         value: "0.18"       # ПОДНЯТО с 0.10 — покрывает round-trip 0.15% + буфер
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
         value: "-0.10"      # УЖЕСТОЧЕНО с -0.05 — макс. убыток после вооружения
       - key: BREAKEVEN_LOCK_COST_BUFFER_PCT
         value: "0.05"       # Буфер сверх издержек для гарантии плюса
+      
+      - key: FAILED_SETUP_EXIT_TREND_ENABLED
+        value: "true"
+
 
       # ── Достижимость цели ─────────────────────────────────────────────────
       # Достижимость TP1 включена в enforce: не берём сетап, где цель далеко

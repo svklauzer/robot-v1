@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 2
+    TREND_MAX_EXTENSION_ATR: float = 3.5
     # shadow — считать и писать в план, вход НЕ блокировать.
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -214,8 +214,8 @@ class Settings(BaseSettings):
     # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h"
     TZ_ENTRY_TF: str = "15m"
-    TZ_ADX_MIN: float = 18.0        # СНИЖЕНО с 23 до 18: телеметрия показала, что ADX 16-19 — норма для 1h/15m
-    TZ_STOCH_ZONE: float = 35.0     # лонг: %K <= 35; шорт: %K >= 65
+    TZ_ADX_MIN: float = 15.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
+    TZ_STOCH_ZONE: float = 45.0     # лонг: %K <= 35; шорт: %K >= 65
 
     # (#tz-enforce-2026-08-03) Ввод условий в бой — с двумя предохранителями.
     # Первый замер: ADX по трендовым сетапам 16.1 / 18.0 / 19.4 при пороге 23.
@@ -679,7 +679,7 @@ class Settings(BaseSettings):
     # записи в отчёт. Причина, по которой её тогда включили обратно, — дыра в
     # фиксации тренда; она закрыта штатно ярусом TREND_CAPTURE_BAND, а не
     # реанимацией ветки, которую уже признали вредной.
-    FAILED_SETUP_EXIT_TREND_ENABLED: bool = False
+    FAILED_SETUP_EXIT_TREND_ENABLED: bool = True
 
     # =========================
     # БЕЗУБЫТОК-ЗАМОК (#1/#2)
@@ -714,7 +714,7 @@ class Settings(BaseSettings):
     # MFE≥1.2) → сделка держалась до полного хард-стопа −4.5 вместо ~безубытка.
     # 0.45 ловит откатчиков в диапазоне 0.45–1.2%. Над-килла нет: выход всё равно
     # требует flow_against ИЛИ ухода за hard_floor (−0.35%), т.е. не по вику.
-    BREAKEVEN_LOCK_ARM_PCT: float = 0.45  # СНИЖЕНО с 0.35 — ловим скальпы 0.25%+
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.35  # СНИЖЕНО с 0.45 — ловим скальпы 0.25%+
     # Уровень результата (%), на котором фиксируемся после вооружения:
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
@@ -919,7 +919,7 @@ class Settings(BaseSettings):
     # движок работает и в Render env стоит True. Держать в коде False —
     # значит иметь конфиг, который не описывает систему.
     ENABLE_RANGE_STRATEGY: bool = True
-    RANGE_MIN_WIDTH_PCT: float = 2.5        # мин. ширина коридора (нужно куда ехать после комиссий)
+    RANGE_MIN_WIDTH_PCT: float = 1.8        # мин. ширина коридора (нужно куда ехать после комиссий)
     RANGE_SUPPORT_ZONE: float = 0.30        # входим, если цена в нижних 30% диапазона (0=поддержка)
     RANGE_ENTRY_RSI_MIN: float = 25.0       # зона разворота у поддержки
     RANGE_ENTRY_RSI_MAX: float = 52.0
@@ -956,7 +956,7 @@ class Settings(BaseSettings):
     # (TP1 = сразу край, TP2 — за диапазоном): телеметрия CRT — missed_profit
     # avg 1.12%, capture −76% — до целей доезжали редко, пик отдавали.
     # "range" = инструкция (с RR-полом CRT_MIN_RR_TP1), "extended" = старое.
-    CRT_TARGETS_MODE: str = "range"
+    CRT_TARGETS_MODE: str = "extended"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
@@ -1005,7 +1005,7 @@ class Settings(BaseSettings):
     SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
     SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
     SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
-    SCALP_MIN_OBI: float = 0.15               # подтверждение потоком (OBI)
+    SCALP_MIN_OBI: float = 0.10               # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
     SCALP_MIN_SETUP_SCORE: float = 50.0
@@ -1577,7 +1577,7 @@ class Settings(BaseSettings):
     # почасовую пилу на монетах у EMA (ETH/AAVE флипали ~раз в час по -0.05..-0.6,
     # съедая заработок BTC/XRP/AVAX). Регайм сетки считается на 1h ТФ — суб-часовые
     # флипы это шум by design, поэтому дефолт = 1 час. 0 = выключено.
-    GRID_FLIP_COOLDOWN_SEC: int = 3600
+    GRID_FLIP_COOLDOWN_SEC: int = 7200
     # (#grid-mean-revert) NEUTRAL (боковик) — РОДНАЯ среда сетки: двусторонний грид
     # (buy ниже + sell выше) зарабатывает именно на осцилляции в диапазоне. Заморозка
     # (True) гасила добор ровно в neutral → настоящий двусторонний грид открывался и
@@ -1770,7 +1770,7 @@ class Settings(BaseSettings):
     # 0.55 → 0.40: эффективный порог = max(arm, floor/(1-give)). Пока arm стоял
     # 0.55, снижение пола ничего не меняло — связывал именно arm. Теперь порог
     # задаёт пол (0.30/0.75 = 0.40), а arm просто не мешает.
-    TREND_CAPTURE_ARM_PCT: float = 0.40
+    TREND_CAPTURE_ARM_PCT: float = 0.25
     TREND_CAPTURE_GIVEBACK_SHARE: float = 0.25
     # (#band-floor-2026-07-27) Собственный пол яруса 2, НИЖЕ общего
     # MIN_PROTECTIVE_EXIT_PCT. Замер после 3 суток в бою: band не сработал НИ РАЗУ.
