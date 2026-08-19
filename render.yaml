@@ -20,9 +20,6 @@ services:
     healthCheckPath: /health   # Render ждёт 200 здесь перед маршрутизацией
 
     # Alembic миграции запускаются до каждого деплоя.
-    # Запускаем через скрипт: Render разбивает preDeployCommand по пробелам
-    # без обработки кавычек/флагов, поэтому "alembic -c ... upgrade head"
-    # терял сабкоманду ("too few arguments"). sh migrate.sh — надёжно.
     preDeployCommand: sh migrate.sh
 
     # Persistent disk — хранит trade_outcomes.jsonl между деплоями
@@ -36,14 +33,11 @@ services:
         value: production
       - key: DB_AUTO_CREATE_SCHEMA
         value: "false"
-      # Прод-домен дашборда для CORS (браузер robot-web → API)
+      # Прод-домен дашборда для CORS
       - key: CORS_ORIGINS
         value: https://robot-web-ap8n.onrender.com
       - key: TRADE_OUTCOMES_PATH
         value: /app/storage/ml/trade_outcomes.jsonl
-      # Состояние сетки — на persistent-диск (тот же ml-disk), иначе деплой стирает
-      # storage/grid и сетка сбрасывается/выключается. Один диск на сервис у Render,
-      # поэтому переиспользуем ml-mount /app/storage/ml.
       - key: GRID_STATE_PATH
         value: /app/storage/ml/grid_state.json
       - key: NEWS_ENABLED
@@ -51,21 +45,21 @@ services:
 
       # ── Secrets (заполнить в Render Dashboard → Environment) ──────────────
       - key: JWT_SECRET
-        sync: false          # openssl rand -hex 32
+        sync: false
       - key: OWNER_API_TOKEN
-        sync: false          # openssl rand -hex 32
+        sync: false
       - key: OWNER_PASSWORD
         sync: false
       - key: OWNER_EMAIL
         sync: false
 
-      # ── Database — авто-привязка к robot-db (ничего вводить вручную) ───────
+      # ── Database ───────────────────────────────────────────────────────────
       - key: DATABASE_URL
         fromDatabase:
           name: robot-db
           property: connectionString
 
-      # ── Redis — авто-прязка к robot-redis (Key Value) ───────────────────
+      # ── Redis ──────────────────────────────────────────────────────────────
       - key: REDIS_URL
         fromService:
           name: robot-redis
@@ -77,14 +71,8 @@ services:
         sync: false
       - key: TELEGRAM_BOT_USERNAME
         value: finmt_bot
-      # ОБЯЗАТЕЛЬНО. Общий секрет вебхука: задаётся здесь и передаётся в
-      # setWebhook(secret_token=...) вызовом POST /telegram/set-webhook.
-      # Telegram возвращает его заголовком X-Telegram-Bot-Api-Secret-Token.
-      # Пока пусто — апдейт непроверенный, и successful_payment отклоняется:
-      # без этого подписку можно активировать поддельным запросом.
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
-      # Собственный публичный адрес — на него регистрируется вебхук.
       - key: PUBLIC_API_URL
         value: https://robot-api-1rgi.onrender.com
       - key: TELEGRAM_OWNER_CHAT_ID
@@ -103,47 +91,24 @@ services:
         sync: false
       - key: HTX_API_SECRET
         sync: false
-      # AWS-оптимизированный хост HTX (сервера HTX в AWS Tokyo) — ниже задержка
-      # из региона Singapore. Если окажется хуже — поставь api.huobi.pro.
       - key: HTX_API_HOSTNAME
         value: api-aws.huobi.pro
-      # defaultType для ccxt. Рынок КОНКРЕТНОЙ сделки выбирает market_routing
-      # (лонг → спот, шорт → контракт), эта переменная на маршрут не влияет.
       - key: HTX_MARKET_TYPE
         value: spot
-      # Боевая вселенная. Значение совпадает с тем, что работает сейчас:
-      # менять состав инструментов заодно с правкой конфига нельзя — эффект
-      # смешается с остальными изменениями. LINK/DOT добавлять отдельным шагом.
       - key: HTX_SYMBOLS
         value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT
 
-      # ── Trading mode (paper для старта) ───────────────────────────────────
+      # ── Trading mode ──────────────────────────────────────────────────────
       - key: ROBOT_MODE
-        value: paper         # → live_shadow → live
+        value: paper
       - key: TRADING_MODE
-        value: paper_trade   # → live_limited → live
+        value: paper_trade
       - key: ENABLE_LIVE_ORDERS
         value: "false"
 
       # ── Рынок исполнения ──────────────────────────────────────────────────
-      # Рынок выбирает market_routing по СТОРОНЕ сделки:
-      #   лонг  → спот  (BTC/USDT,      taker 0.20%, round-trip 0.42%)
-      #   шорт  → контракт (BTC/USDT:USDT, taker 0.05%, round-trip 0.12% + фандинг)
-      #
-      # (#futures-longs-2026-08-03) true — лонги тоже на контракт. Замер по 302
-      # закрытым: валовый edge лонга 0.084% от нотионала против спотового
-      # round-trip 0.42% — комиссия впятеро больше самого движения, лонг на споте
-      # не окупается математически. Перевод на контракт стоил +24.02 USDT на той
-      # же истории (разность двух прогонов backfill_routing_costs).
-      #
-      # ВАЖНО: значение здесь и в env robot-api должно совпадать. Blueprint со
-      # старым "false" при Apply молча возвращал лонги на спот.
       - key: ENABLE_FUTURES_EXECUTION
         value: "true"
-
-      # Книга — от ТОГО ЖЕ инструмента, которым торгуем. Спот и перпетуал это
-      # разные книги: OBI, CVD, стенки и перенос входа в entry_zone по чужой
-      # книге описывают не тот инструмент. Пустой OB_WS_URL → эндпоинт по типу.
       - key: OB_MARKET_TYPE
         value: "swap"
       - key: OB_WS_URL
@@ -151,37 +116,25 @@ services:
       - key: ENABLE_SMART_LEVERAGE
         value: "false"
 
-      # ── Движки ────────────────────────────────────────────────────────────
+      # ── ДВИЖКИ (ВСЕ ВКЛЮЧЕНЫ) ─────────────────────────────────────────────
       - key: ENABLE_ORDERBOOK_ENGINE
         value: "true"
       - key: ENABLE_CRT_STRATEGY
-        value: "true"
+        value: "true"       # ВКЛЮЧЕН
       - key: ENABLE_RANGE_STRATEGY
-        value: "true"
+        value: "true"       # ВКЛЮЧЕН
       - key: ENABLE_SCALP_STRATEGY
-        value: "true"
+        value: "true"       # ВКЛЮЧЕН
       - key: CORR_CLUSTER_ENABLED
         value: "true"
-      # (#engine-slots-2026-08-03) Лимит направления считается ВНУТРИ движка.
-      # Замер 03.08: trend_down дал 60% ленты решений на медвежьем рынке и
-      # занимал оба шортовых слота первым; CRT блокировался cluster_direction_cap
-      # в 24 случаях из 44 при ожидании +0.134R против −0.012R у trend_down.
-      # Слот доставался худшему режиму по очереди прихода, а не по ожиданию.
       - key: CORR_CLUSTER_PER_ENGINE
         value: "true"
-      # Портфельный потолок — не дележ слотов, а предохранитель: 5 стопов в одну
-      # сторону при RISK_PER_TRADE_PCT=0.4 дают 2% эквити против лимита дня 3%.
       - key: CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR
         value: "5"
-      # Карантин после стопа — за повтор СВОЕГО сетапа. Свип CRT и продолжение
-      # тренда это разные гипотезы на одном символе.
       - key: REENTRY_COOLDOWN_PER_ENGINE
         value: "true"
-      # off | shadow | advisory | full_auto. В shadow score считается и пишется
-      # рядом с сигналом, но размер позиции не трогает.
-      # Держим shadow: 51 положительный пример на 18 признаков = 2.83 события
-      # на переменную при минимуме 10. Живой AUC 0.5683 против валидационных
-      # 0.7718 — ровно то, что предсказывает такое переобучение.
+      
+      # ML Mode
       - key: ML_MODE
         value: shadow
       - key: REGIME_EXP_SIZING_ENABLED
@@ -191,13 +144,7 @@ services:
       - key: DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE
         value: "1.0"
 
-      # ── KAMA (ER-период, fast, slow) ─────────────────────────────────────
-      # Наша линия enforce/выхода считается на 1h (TZ_TREND_TF) — свинг. Для
-      # 1ч/4ч стандарт (10,2,30) оптимален, оставляем. Крутить по факту графика:
-      #   KAMA срезает половину сильного тренда (далеко) → slow вниз (25/20);
-      #   цена пилит линию туда-обратно внутри тренда (близко) → slow вверх(35/40);
-      #   KAMA дёргается во флэте → ER вверх (10→12/14).
-      # Для скальпа на 1м/5м быстрее (slow 20/24) — но это уже не трендовый гейт.
+      # ── KAMA ──────────────────────────────────────────────────────────────
       - key: KAMA_ER_PERIOD
         value: "10"
       - key: KAMA_FAST
@@ -205,9 +152,7 @@ services:
       - key: KAMA_SLOW
         value: "30"
 
-      # ── Условия входа по ТЗ (ADX/DMI, Stoch RSI, OBV) ─────────────────────
-      # Enforce трендового входа: блокируем растянутые входы, а в TZ-гейте
-      # вооружены KAMA/ADX/DI/Stoch/OBV с мягким ADX=18 и зоной Stoch=35.
+      # ── TREND ENGINE (Настройка на забор движения + защита от шума) ───────
       - key: TREND_TRIGGER_MODE
         value: enforce
       - key: TREND_MAX_EXTENSION_ATR
@@ -218,76 +163,48 @@ services:
         value: "45.0"
       - key: TZ_MODE
         value: enforce
-      # Фильтры входа: цена на верной стороне KAMA, ADX растёт и не ниже 18,
-      # DI за сторону сделки, StochRSI показывает откат/пересечение, OBV за поток.
       - key: TZ_ENFORCE_CONDITIONS
         value: kama,di,obv
-      # 0 = предохранитель снят. Он защищал от МОИХ подобранных порогов;
-      # пороги ТЗ заданы извне, подгонять в них нечего.
       - key: TZ_ENFORCE_MIN_SAMPLE
         value: "0"
-      # Выход: пробой KAMA (тренда нет) + затухание ADX от пика. OBV убран из
-      # выхода — тем же порогом, что вход (obv>ema), он churn-ил позицию у линии
-      # (TRX #362: открылась и закрылась через 10с по tz_obv в ноль). Стоп-ордера
-      # нет. OBV остаётся фильтром ВХОДА.
       - key: TZ_EXIT_CONDITIONS
         value: kama,adx
       - key: TZ_TREND_EXIT_ONLY
         value: "true"
-      # Стоп-ордера нет, но размер позиции считается как risk / дистанция —
-      # якорем стала дистанция до KAMA. Ограничители обязательны: цена вплотную
-      # к линии дала бы дистанцию 0.05% и позицию в разы больше расчётной.
+      
+      # Стопы и выходы (Увеличены буферы чтобы не выбивало шумом)
       - key: TZ_STOP_MIN_DIST_PCT
         value: "0.4"
-      # Предохранитель от разрыва цены. В ТЗ его НЕТ — добавлен отдельно,
-      # 0 выключает полностью.
       - key: TZ_DISASTER_STOP_PCT
         value: "5.0"
-      
-      # ── Dynamic ATR Stops (#dynamic-atr-stops-2026-08-07) ─────────────────
-      # Включает адаптивный расчет стопов и буферов выхода на основе волатильности (ATR).
-      # Защищает от ложных выносов на шумовых откатах и ретестах.
       - key: TZ_USE_DYNAMIC_ATR_STOPS
         value: "true"
-      
-      # Множители для расчета дистанций в единицах ATR:
       - key: TZ_STOP_MIN_DIST_ATR_MULT
-        value: "3.0"       # Мин. дистанция стопа = 3.0 × ATR (увеличено для крипты)
-      
+        value: "3.0"       # Надежный стоп
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
-        value: "2.0"       # Буфер выхода по KAMA = 2.0 × ATR (увеличено для защиты от шума)
-      
+        value: "2.0"       # Буфер выхода
       - key: TZ_STOP_LOSS_ATR_MULT
-        value: "4.0"       # Уровень стоп-лосса = 4.0 × ATR (увеличено для крипты)
-      
-      # Смягчение фильтра ADX для устойчивости к шуму:
-      # (Единственное правильное значение — 4.0, дубль удалён)
+        value: "4.0"       # Глубокий стоп для удержания позиции
       - key: TZ_EXIT_ADX_FADE
-        value: "2.0"       # СНИЖЕНО с 4.0 — выход при первых признаках слабости
-      
-      # Аварийный жесткий стоп (% от цены входа):
+        value: "2.0"       # Чувствительный выход при затухании
       - key: TZ_HARD_STOP_LOSS_PCT
-        value: "3.0"       # СНИЖЕНО с 5.0 — лимит убытка на сделку
-
-      # ── Устранение утечки капитала (Breakeven Lock v2 12.08.2026) ────────────────
+        value: "3.0"
+      
+      # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED
         value: "true"
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.35"       # СНИЖЕНО с 0.80 — вооружаем на скальпах 0.35%+
+        value: "0.35"      # Быстрое вооружение
       - key: BREAKEVEN_LOCK_FLOOR_PCT
-        value: "0.18"       # ПОДНЯТО с 0.10 — покрывает round-trip 0.15% + буфер
+        value: "0.18"      # Покрытие комиссий
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
-        value: "-0.10"      # УЖЕСТОЧЕНО с -0.05 — макс. убыток после вооружения
+        value: "-0.10"
       - key: BREAKEVEN_LOCK_COST_BUFFER_PCT
-        value: "0.05"       # Буфер сверх издержек для гарантии плюса
-      
+        value: "0.05"
       - key: FAILED_SETUP_EXIT_TREND_ENABLED
         value: "true"
 
-
-      # ── Достижимость цели ─────────────────────────────────────────────────
-      # Достижимость TP1 включена в enforce: не берём сетап, где цель далеко
-      # за историческим медианным MFE режима/символа.
+      # Достижимость цели
       - key: TP_REACH_MODE
         value: enforce
       - key: TP_REACH_MAX_RATIO
@@ -299,27 +216,68 @@ services:
       - key: LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION
         value: "8.0"
 
-      # ── Сетка ─────────────────────────────────────────────────────────────
+      # ── CRT ENGINE (Настройка на вход без жестких фильтров) ───────────────
+      # CRT часто молчит из-за слишком строгих требований к подтверждению (CISD)
+      # и высокому RR. Снижаем планку входа.
+      - key: CRT_MIN_RR_TP1
+        value: "0.50"      # Допускаем меньший RR для входа
+      - key: CRT_MIN_SETUP_SCORE
+        value: "45.0"      # Снижен порог качества сетапа
+      - key: CRT_REQUIRE_CISD
+        value: "false"     # Не требуем жесткого CISD, торгуем по структуре
+      - key: CRT_STOP_BUFFER_PCT
+        value: "0.08"      # Адекватный буфер стопа
+      - key: CRT_TP2_RR
+        value: "1.5"       # Цель на продолжение
+
+      # ── SCALP ENGINE (Настройка на частые сделки) ─────────────────────────
+      # Scalp не торговал из-за нереалистичных требований к RR и Target %
+      - key: SCALP_MIN_NET_RR_TP2
+        value: "0.70"      # Снижено с 1.5+ до реалистичного 0.7
+      - key: SCALP_TARGET_PCT
+        value: "0.40"      # Реалистичная цель скальпа (0.4%)
+      - key: SCALP_MIN_SETUP_SCORE
+        value: "45.0"      # Порог входа
+      - key: SCALP_BREAKEVEN_ARM_PCT
+        value: "0.25"      # Быстрый выход в БЗ
+      - key: SCALP_TIME_STOP_MIN
+        value: "60.0"      # Тайм-стоп 1 час
+
+      # ── RANGE ENGINE (Консервативный) ─────────────────────────────────────
+      - key: RANGE_MIN_TP1_NET_PCT
+        value: "0.40"
+      - key: RANGE_MIN_SETUP_SCORE
+        value: "50.0"
+      - key: RANGE_ENTRY_RSI_MIN
+        value: "30.0"
+      - key: RANGE_ENTRY_RSI_MAX
+        value: "55.0"
+      - key: RANGE_STOP_ATR_MULT
+        value: "2.0"
+
+      # ── GRID ENGINE (Защита от слива) ─────────────────────────────────────
+      # Grid лил деньги из-за агрессивного плеча и усреднения в сильный тренд.
+      # Теперь: меньше маржи, меньше ордеров усреднения, шире шаг.
       - key: GRID_ENABLED
         value: "true"
       - key: GRID_SYMBOLS
-        value: BTC/USDT,ETH/USDT,TRX/USDT
+        value: BTC/USDT,ETH/USDT
       - key: GRID_KILL_SWITCH_ENABLED
         value: "false"
       - key: GRID_REGIME_EMA_BAND_PCT
-        value: "0.80"
+        value: "0.70"      # Строгий фильтр флэта (уже 0.8 было)
       - key: GRID_TP_PCT
-        value: "0.6"
+        value: "0.4"       # Быстрый фикс профита (0.4%)
       - key: GRID_SL_ATR_MULT
-        value: "1.6"
+        value: "2.0"       # Стоп по волатильности
       - key: GRID_MAX_SAFETY_ORDERS
-        value: "3"
+        value: "2"         # МАКСИМУМ 2 усреднения (было 3)
       - key: GRID_MAX_USED_MARGIN_PCT
-        value: "10.0"
+        value: "5.0"       # ЛИМИТ МАРЖИ 5% (было 10% - риск!)
       - key: GRID_BREAKOUT_ATR_DIST
-        value: "1.6"
+        value: "2.0"       # Не открывать если пробой > 2 ATR
       - key: GRID_RANGE_ATR_DIST
-        value: "0.8"
+        value: "1.2"       # Шаг сетки
 
       # ── Продукт / подписки ────────────────────────────────────────────────
       - key: AFFILIATE_FREE_VIP_DAYS
@@ -340,37 +298,22 @@ services:
         value: "950"
       - key: RISK_PER_TRADE_PCT
         value: "0.4"
-      # Кэп нотионала ОДНОГО ордера. Заведён в сайзинг (trade_plan + арбитраж):
-      # бумага и live берут один размер, ни один ордер не упирается в кэп на
-      # отправке. 250 покрывает обычный сайзинг (trend/scalp $123–190, арб $100),
-      # экстрим (dynamic all-in ~$807, арб-макс $500) ужимает до потолка. 0=выкл.
       - key: LIVE_MAX_ORDER_NOTIONAL_USDT
         value: "250"
-      # NB: MAX_OPEN_POSITIONS здесь раньше стоял, но такого поля в Settings нет
-      # и pydantic его игнорирует (extra="ignore") — переменная создавала
-      # видимость лимита, которого не существует. Реальный лимит ниже.
       - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
         value: "5"
-      # Снят как ограничитель: он не создаёт edge, а тормозит набор статистики.
-      # Фактический потолок держат ANTI_DRAIN_MAX_OPEN_POSITIONS=5, маржа
-      # (0.70/0.13 ≈ 5) и MAX_ACTIVE_SIGNALS_PER_SYMBOL=1 × 7 символов.
       - key: MAX_ACTIVE_SIGNALS
         value: "100"
-      # Предохранитель от чурна: сколько сделок разрешено открыть за 24 ч.
-      # Работал молча на дефолте 3 — теперь виден, странно что кто то поставил ранее ограничение на 3 - сказочный идиот.
       - key: MAX_TRADES_PER_DAY
-        value: "100"
+        value: "100"       # Разблокировано (было 3)
       - key: MAX_DAILY_LOSS_PCT
         value: "3"
       - key: MAX_DRAWDOWN_PCT
         value: "15"
 
-      # ── Symbol guard (calibrated v2026-06) ────────────────────────────────
+      # ── Symbol guard ──────────────────────────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE
         value: "48.0"
-      # 48.0 = то, что работает сейчас. Подъём до 55 включит weak-множитель на
-      # заметно большем числе символов; это отдельное решение, а не побочный
-      # эффект правки конфига.
       - key: SYMBOL_PERF_REDUCE_MAX_WINRATE
         value: "48.0"
       - key: SYMBOL_PERF_COOLDOWN_STREAK
@@ -385,11 +328,6 @@ services:
         value: "76.0"
       - key: PROD_GATE_A_PLUS_MIN_CONFIDENCE
         value: "68.0"
-      # Paper-пороги RR на TP1 — санити, а не гейт: награда судится по TP2.
-      # Значения равны текущим рабочим. Их ужесточение (0.75/0.80) нельзя
-      # ставить одновременно с переходом на честную модель издержек: net_rr
-      # и так упал у лонгов вчетверо по комиссии, и два изменения сразу не
-      # дадут понять, что именно сократило поток сделок.
       - key: PROD_GATE_A_PLUS_MIN_RR_TP1_PAPER
         value: "0.10"
       - key: PROD_GATE_A_MIN_SETUP
@@ -399,9 +337,7 @@ services:
       - key: PROD_GATE_A_MIN_RR_TP1_PAPER
         value: "0.10"
 
-      # ── Live-shadow (Phase 3 — раскомментировать при переключении) ─────────
-      # - key: ROBOT_MODE
-      #   value: live_shadow
+      # ── Live-shadow ───────────────────────────────────────────────────────
       - key: LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT
         value: "0.35"
       - key: LIVE_SHADOW_SLIPPAGE_PCT
@@ -437,18 +373,10 @@ services:
     autoDeploy: true
 
     envVars:
-      # Backend URL для серверного прокси (app/api/proxy). Читается на сервере
-      # в рантайме — пересборка не требуется при смене значения.
       - key: API_BASE_URL
         value: https://robot-api-1rgi.onrender.com
-      # Owner-токен — ТОЛЬКО на сервере (без NEXT_PUBLIC), в клиент не попадает.
-      # Должен совпадать с OWNER_API_TOKEN у robot-api.
       - key: OWNER_API_TOKEN
         sync: false
-      # HTTP Basic перед страницами И перед /api/proxy. Прокси сам подставляет
-      # owner-токен, поэтому без этой пары любой посетитель публичного URL
-      # получает права владельца. middleware пропускает всех, если они не
-      # заданы, — держать заполненными обязательно.
       - key: BASIC_AUTH_USER
         sync: false
       - key: BASIC_AUTH_PASS
@@ -457,14 +385,12 @@ services:
   # ── Redis (Render Key Value) ────────────────────────────────────────────────
   - type: keyvalue
     name: robot-redis
-    plan: free               # 25 MB, без персистентности; starter ($10) при росте
+    plan: free
     region: singapore
     maxmemoryPolicy: noeviction
-    ipAllowList: []          # только привятная сеть (доступ изнутри Render)
+    ipAllowList: []
 
-  # ── Daily owner report (Render Cron Job) ─────────────────────────────────────
-  # Серверный планировщик — работает 24/7 независимо от Cowork.
-  # ВНИМАНИЕ: Render cron считает время в UTC. 0 3 * * * = 08:00 при UTC+5.
+  # ── Daily owner report ──────────────────────────────────────────────────────
   - type: cron
     name: robot-daily-report
     runtime: docker
@@ -474,18 +400,16 @@ services:
     region: singapore
     branch: main
     schedule: "0 3 * * *"
-    dockerCommand: python send_daily_report.py   # 2 токена — безопасно для парсера Render
+    dockerCommand: python send_daily_report.py
     envVars:
       - key: OWNER_API_TOKEN
-        sync: false          # тот же токен, что у robot-api
+        sync: false
       - key: REPORT_API_URL
         value: https://robot-api-1rgi.onrender.com
 
 databases:
-
-  # ── PostgreSQL ─────────────────────────────────────────────────────────────
   - name: robot-db
-    plan: basic-256mb        # $6/мес; basic-1gb при росте, free для теста
+    plan: basic-256mb
     databaseName: robot
     user: robot
     region: singapore
