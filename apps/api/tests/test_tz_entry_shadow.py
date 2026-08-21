@@ -39,12 +39,14 @@ def test_strong_trend_in_pullback_passes():
     assert _long().would_pass is True
 
 
-def test_weak_trend_is_flagged():
-    """Порог ТЗ: ниже 23 движения нет, входить не во что.
+def test_weak_trend_is_flagged(monkeypatch):
+    """ADX ниже порога = движения нет, входить не во что.
 
-    Раньше меры силы в системе не было вовсе — `price > ema20 > ema50`
-    одинаково истинно и в импульсе, и в вялом дрейфе.
+    Порог ПРИБИВАЕМ в тесте, а не берём боевой: он калибруется по данным
+    (23 → 15 и далее), и тест, зашивший конкретное число, падал бы при каждой
+    калибровке, хотя механизм цел. Проверяем поведение, а не константу.
     """
+    monkeypatch.setattr(settings, "TZ_ADX_MIN", 23.0, raising=False)
     result = _long(adx=15.0)
     assert result.would_pass is False
     assert any(f.startswith("adx_below_min") for f in result.failed)
@@ -116,7 +118,9 @@ def test_missing_data_is_not_a_verdict(timeframes):
     assert result.would_pass is None
 
 
-def test_result_is_serialisable_for_the_plan():
+def test_result_is_serialisable_for_the_plan(monkeypatch):
+    # Порог прибит: тест про ФОРМУ payload, а не про калибровку ADX.
+    monkeypatch.setattr(settings, "TZ_ADX_MIN", 23.0, raising=False)
     payload = _long(adx=15.0).as_dict()
     assert isinstance(payload["failed"], list)
     assert payload["evaluated"] is True

@@ -31,9 +31,17 @@ def test_current_paper_equity_reproduces_old_constant():
 
 # ── границы ─────────────────────────────────────────────────────────────────
 def test_tiny_equity_clamps_to_exchange_minimum():
-    assert arb_capital.funding_arb_notional(equity=50.0) == pytest.approx(
-        float(settings.FUNDING_ARB_MIN_NOTIONAL_USDT)
-    )
+    """Эквити ВЫВОДИМ из настроек, а не зашиваем.
+
+    Было `equity=50` при минимуме 20: доля 10.5% давала 5.25 → клэмп срабатывал.
+    После снижения минимума до 5 те же 5.25 стали ВЫШЕ него, и тест падал, хотя
+    клэмп цел. Берём заведомо малое эквити относительно текущих настроек —
+    проверяем механизм, а не совпадение констант.
+    """
+    share = float(getattr(settings, "FUNDING_ARB_NOTIONAL_PCT", 0.105)) or 0.105
+    floor = float(settings.FUNDING_ARB_MIN_NOTIONAL_USDT)
+    tiny_equity = floor / share / 2.0      # доля от него заведомо ниже пола
+    assert arb_capital.funding_arb_notional(equity=tiny_equity) == pytest.approx(floor)
 
 
 def test_huge_equity_clamps_to_ceiling():
