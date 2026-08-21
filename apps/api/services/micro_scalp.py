@@ -95,7 +95,14 @@ class MicroScalpService:
 
         pos = (price - low) / (high - low)   # 0 = микро-поддержка, 1 = микро-сопротивление
         m5_trend = str(_v(m5, "trend", "mixed"))
-        fee_round_pct = float(settings.SPOT_TAKER_FEE) * 2 * 100.0
+        # Комиссия круга по ФАКТИЧЕСКОМУ маршруту. Для скальпа это решающе:
+        # цель ~0.5%, и захардкоженные спотовые 0.4% против своповых 0.12%
+        # съедали net_tp1 (0.5−0.4=0.10 < порога 0.3 → отказ на КАЖДОМ сетапе,
+        # тогда как по факту 0.5−0.12=0.38 проходит).
+        _mkt = str(getattr(settings, "execution_market_type", "spot"))
+        _taker = float(settings.FUTURES_TAKER_FEE if _mkt == "swap" else settings.SPOT_TAKER_FEE)
+        _slip = float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0) or 0.0)
+        fee_round_pct = (_taker * 2 + _slip) * 100.0
         buf = atr * sp.stop_buffer_atr
 
         # 3. Определение направления по микро-краям и OBI

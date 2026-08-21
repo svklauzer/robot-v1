@@ -58,7 +58,42 @@ class MLController:
                 f"полномочия отозваны до shadow"
             )
             return "shadow"
+
+        # (#ml-unreliable-auc-2026-08-21) Порога по AUC НЕДОСТАТОЧНО. Ретрейн
+        # 21.08 дал val_auc 0.6612 — выше порога 0.55 — при 13 положительных в
+        # валидации и 2.17 события на признак. Обучение само пометило метрику
+        # `auc_is_reliable=false`: доверительный интервал ±0.15, то есть 0.66
+        # неотличим от монетки. Переобученная модель на малой выборке даёт
+        # ЗАВЫШЕННЫЙ AUC — ровно тот случай, когда старый гейт пропускал бы её
+        # к деньгам. Полномочия требуют не «красивого числа», а числа, которому
+        # можно верить.
+        reliable = self._metric("auc_is_reliable")
+        if reliable is False:
+            epv = self._metric("events_per_feature")
+            vpos = self._metric("val_positives")
+            self._last_demote_reason = (
+                f"val_auc={auc:.4f} формально выше {min_auc}, но обучение пометило "
+                f"метрику НЕНАДЁЖНОЙ (events_per_feature={epv}, val_positives={vpos}) — "
+                f"переобучение по построению, полномочия отозваны до shadow"
+            )
+            return "shadow"
         return mode
+
+    def _metric(self, key: str):
+        """Значение из блока metrics последнего обучения. None — нет метрики."""
+        try:
+            labeler = self._get_labeler()
+            meta = getattr(labeler, "metadata", None)
+            if callable(meta):
+                meta = meta()
+            if not isinstance(meta, dict):
+                return None
+            metrics = meta.get("metrics")
+            if isinstance(metrics, dict) and key in metrics:
+                return metrics.get(key)
+            return meta.get(key)
+        except Exception:  # noqa: BLE001 — метрика не критична, fail-open
+            return None
 
     def _val_auc(self) -> float | None:
         """Валидационный AUC последнего обучения. None — метрики нет (fail-open)."""
@@ -89,6 +124,11 @@ class MLController:
             "val_auc": auc,
             "min_auc_for_auto": float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55)),
             "auto_demote_enabled": bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)),
+            # Надёжность метрики видна рядом с самой метрикой: AUC выше порога
+            # при auc_is_reliable=false — не допуск к деньгам, а повод ждать данных.
+            "auc_is_reliable": self._metric("auc_is_reliable"),
+            "events_per_feature": self._metric("events_per_feature"),
+            "val_positives": self._metric("val_positives"),
         }
 
     def _get_labeler(self):

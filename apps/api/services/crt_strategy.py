@@ -156,7 +156,13 @@ class CRTStrategyService:
         if mode == "either" and not (mss or fvg):
             return None
 
-        fee_round_pct = float(settings.SPOT_TAKER_FEE) * 2 * 100.0
+        # Комиссия круга по ФАКТИЧЕСКОМУ маршруту (своп 0.05%×2 + проскальзывание),
+        # а не по захардкоженной спотовой ставке 0.2%×2 — завышение вчетверо
+        # резало живые сетапы гейтом min_tp1_net.
+        _mkt = str(getattr(settings, "execution_market_type", "spot"))
+        _taker = float(settings.FUTURES_TAKER_FEE if _mkt == "swap" else settings.SPOT_TAKER_FEE)
+        _slip = float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0) or 0.0)
+        fee_round_pct = (_taker * 2 + _slip) * 100.0
         min_tp1 = float(getattr(settings, "CRT_MIN_TP1_NET_PCT", 0.5))
         buf = rng * float(getattr(settings, "CRT_STOP_BUFFER_PCT", 0.05))
         rr = float(getattr(settings, "CRT_TP2_RR", 2.0))

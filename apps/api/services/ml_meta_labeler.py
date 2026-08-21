@@ -38,15 +38,38 @@ class MetaLabeler:
 
     # ── данные ────────────────────────────────────────────────────────────────
     def _load_rows(self) -> list[dict]:
+        """Строки датасета. Битые строки СЧИТАЮТСЯ, а не глотаются молча.
+
+        Раньше `except: continue` делал повреждённую строку невидимой: датасет
+        мог быть наполовину нечитаем, а train() показывал бы только «мало
+        данных». Счётчик кладём в self._load_report, чтобы train() отдал его
+        наружу — иначе о порче узнать неоткуда.
+        """
+        self._load_report = {"lines": 0, "parsed": 0, "bad_json": 0, "not_dict": 0,
+                             "bad_samples": []}
         if not self.dataset_path.exists():
             return []
         rows: list[dict] = []
         with self.dataset_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
+            for lineno, line in enumerate(f, 1):
+                if not line.strip():
                     continue
+                self._load_report["lines"] += 1
+                try:
+                    obj = json.loads(line)
+                except Exception as exc:  # noqa: BLE001
+                    self._load_report["bad_json"] += 1
+                    if len(self._load_report["bad_samples"]) < 5:
+                        self._load_report["bad_samples"].append(
+                            {"line": lineno, "error": str(exc)[:120],
+                             "preview": line.strip()[:120]}
+                        )
+                    continue
+                if not isinstance(obj, dict):
+                    self._load_report["not_dict"] += 1
+                    continue
+                self._load_report["parsed"] += 1
+                rows.append(obj)
         # хронологический порядок для time-aware сплита
         rows.sort(key=lambda r: str(r.get("closed_at") or r.get("created_at") or ""))
         return rows
@@ -102,14 +125,29 @@ class MetaLabeler:
         return kept, dropped
 
     def _xy(self, rows: list[dict], label_kind: str):
+        """Фичи и метки. Строки без метки СЧИТАЮТСЯ по причине.
+
+        `beats_costs` требует и закрытый P&L, и плановый риск (`net_pnl_stop`).
+        Раньше строка без любого из них исчезала молча, и «411 сделок» могли
+        превратиться в 40 без единого следа — отсюда «данных мало» при полном
+        датасете. Причину кладём в self._label_report.
+        """
         min_r = float(getattr(settings, "ML_LABEL_MIN_R", 0.3))
+        report = {"no_label": 0, "no_pnl": 0, "no_risk": 0}
         X, y = [], []
         for r in rows:
             lbl = row_to_label(r, label_kind, min_r=min_r)
             if lbl is None:
+                report["no_label"] += 1
+                if r.get("closed_net_pnl") is None:
+                    report["no_pnl"] += 1
+                else:
+                    # P&L есть, значит метку убил отсутствующий плановый риск
+                    report["no_risk"] += 1
                 continue
             X.append(row_to_features(r))
             y.append(int(lbl))
+        self._label_report = report
         return X, y
 
     # ── обучение ──────────────────────────────────────────────────────────────
@@ -123,18 +161,29 @@ class MetaLabeler:
         n = len(y)
 
         if n < min_samples:
+            _load = getattr(self, "_load_report", {})
+            _lbl = getattr(self, "_label_report", {})
             return {
                 "status": "insufficient_data",
                 "samples": n,
                 "needed": min_samples,
                 "rows_total": len(raw_rows),
                 "dropped": dropped,
+                # Полная воронка: файл → распарсено → пережило фильтры → размечено.
+                # Без неё «мало данных» не отличить от «датасет побит» и от
+                # «метка не считается».
+                "dataset": _load,
+                "label_drop": _lbl,
+                "label_kind": label_kind,
                 "message": (
-                    f"Нужно ≥{min_samples} размеченных сделок для обучения (есть {n} "
-                    f"из {len(raw_rows)} в датасете). Отброшено: фантомных филлов "
-                    f"{dropped['phantom']}, отключённых режимов {dropped['regime_off']}, "
-                    f"старше окна {dropped['too_old']}. Это не ошибка — учить на "
-                    "исходах несуществующей логики хуже, чем не учить вовсе."
+                    f"Нужно ≥{min_samples} размеченных сделок (есть {n} из "
+                    f"{len(raw_rows)} прочитанных). Файл: строк "
+                    f"{_load.get('lines', '?')}, битых JSON {_load.get('bad_json', 0)}. "
+                    f"Фильтры: фантомных {dropped['phantom']}, режим off "
+                    f"{dropped['regime_off']}, старше окна {dropped['too_old']}. "
+                    f"Без метки ({label_kind}): {_lbl.get('no_label', 0)} "
+                    f"(нет P&L {_lbl.get('no_pnl', 0)}, нет планового риска "
+                    f"{_lbl.get('no_risk', 0)})."
                 ),
             }
         if len(set(y)) < 2:

@@ -88,7 +88,15 @@ class RangeStrategyService:
         atr_mult = rp.stop_atr_mult
         mid = (low + high) / 2.0
         tp2_buf = (high - low) * rp.tp2_resistance_buffer
-        fee_round_pct = float(settings.SPOT_TAKER_FEE) * 2 * 100.0
+        # Комиссия круга по ФАКТИЧЕСКОМУ маршруту исполнения. Была захардкожена
+        # спотовая ставка (0.2%×2 = 0.4%), тогда как торгуем свопом (0.05%×2 +
+        # проскальзывание = 0.12%) — издержки завышались вчетверо, и гейт
+        # min_tp1_net резал живые боковики. Та же ошибка, что когда-то книжила
+        # шорты по спотовой ставке.
+        _mkt = str(getattr(settings, "execution_market_type", "spot"))
+        _taker = float(settings.FUTURES_TAKER_FEE if _mkt == "swap" else settings.SPOT_TAKER_FEE)
+        _slip = float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0) or 0.0)
+        fee_round_pct = (_taker * 2 + _slip) * 100.0
         min_tp1_net = rp.min_tp1_net_pct
         vol_state = str(_v(m15, "volume_state", "weak"))
         vol_score = {"strong": 10.0, "normal": 6.0}.get(vol_state, 2.0)
