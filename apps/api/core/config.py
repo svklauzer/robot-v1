@@ -1312,6 +1312,20 @@ class Settings(BaseSettings):
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
     ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 15.0
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
+
+    # ── Конверты капитала (#capital-envelopes-2026-08-21) ────────────────────
+    # Три контура претендовали на депозит независимо: 70% направленные + ~42%
+    # арбитраж (2 хеджа × 10.5% × 2 ноги) + 5% сетка ≈ 117% при капитале 950.
+    # Связи между ними не было — used_margin() видит только Signal, но не
+    # FundingArbPosition и не корзины сетки. В бумаге безвредно (эквити —
+    # константа), в live отказ по марже получил бы случайный контур.
+    #
+    # Теперь доля задаётся на контур, а размеры позиций ВЫВОДЯТСЯ из неё
+    # (см. capital_envelopes.arb_leg_notional). Сумма ≤ 100 проверяется тестом.
+    # Остаток до 100 — намеренный запас на просадку и комиссии.
+    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0
+    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0
+    CAPITAL_ENVELOPE_GRID_PCT: float = 5.0
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 2.0

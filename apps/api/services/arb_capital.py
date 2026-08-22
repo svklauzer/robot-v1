@@ -69,14 +69,25 @@ def notional_from_share(
     return round(max(floor, min(value, ceiling)), 2)
 
 
-def funding_arb_notional(equity: float | None = None) -> float:
-    """Нотионал одной ноги внутрибиржевого хеджа (спот-лонг = своп-шорт)."""
-    return notional_from_share(
-        share_key="FUNDING_ARB_NOTIONAL_PCT", share_default=0.105,
-        min_key="FUNDING_ARB_MIN_NOTIONAL_USDT", min_default=20.0,
-        max_key="FUNDING_ARB_MAX_NOTIONAL_USDT", max_default=500.0,
-        equity=equity,
-    )
+def funding_arb_notional(equity: float | None = None, db=None) -> float:
+    """Нотионал одной ноги внутрибиржевого хеджа (спот-лонг = своп-шорт).
+
+    (#capital-envelopes-2026-08-21) Размер выводится из КОНВЕРТА контура, а не
+    из собственной доли эквити. Раньше `FUNDING_ARB_NOTIONAL_PCT=10.5%` жил
+    отдельно от всего, и два хеджа занимали ~42% депозита (каждый ≈2 нотионала:
+    спотовая нога без плеча). Конверт и доля были двумя числами про одно и то
+    же — ровно та конструкция, которая уже расходилась в
+    `_assumed_hold_periods`. Второго числа больше нет.
+
+    Пол и потолок биржи по-прежнему обязательны: доля может дать сумму ниже
+    минимального лота.
+    """
+    from services.capital_envelopes import arb_leg_notional
+
+    value = arb_leg_notional(equity=equity, db=db)
+    floor = float(getattr(settings, "FUNDING_ARB_MIN_NOTIONAL_USDT", 20.0))
+    ceiling = float(getattr(settings, "FUNDING_ARB_MAX_NOTIONAL_USDT", 500.0))
+    return round(max(floor, min(value, ceiling)), 2)
 
 
 def cross_farb_notional(equity: float | None = None) -> float:

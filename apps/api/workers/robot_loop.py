@@ -1481,7 +1481,18 @@ class RobotLoop:
             equity = LIVE_EXECUTOR.effective_equity_usdt()
         except Exception:
             equity = float(getattr(settings, "RISK_EQUITY_USDT", balance_usdt))
-        used_pct = float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))
+        # (#capital-envelopes-2026-08-21) Потолок направленных — их КОНВЕРТ, а не
+        # доля «всего эквити». Раньше 70% брались от полного депозита, при том что
+        # арбитраж и сетка независимо претендовали ещё на ~47%: сумма обещаний
+        # превышала капитал. Конверт же отдаёт направленным долю выключенных и
+        # ПУСТЫХ контуров, поэтому при GRID_ENABLED=false и ENABLE_FUNDING_ARB=false
+        # они получают все 95%, а не сидят на 70% при простаивающих деньгах.
+        try:
+            from services import capital_envelopes as envelopes
+
+            used_pct = envelopes.envelope_pct(envelopes.DIRECTIONAL, db=db)
+        except Exception:  # noqa: BLE001 — учёт капитала не должен ронять цикл
+            used_pct = float(getattr(settings, "ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 70.0))
         ceiling = equity * used_pct / 100.0
         try:
             used = float(self.exposure_guard.used_margin(db, bot.id) or 0.0)
