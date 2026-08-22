@@ -244,7 +244,39 @@ class RobotLoop:
                         payload={**_tz.as_dict(), "enforce_reason": _tz_reason},
                     )
                     db.flush()
-                continue
+
+                # (#cascade-second-pass-2026-08-22) Второй проход каскада.
+                #
+                # Каскад (trend → CRT → range → scalp) отрабатывает ВНУТРИ
+                # analyze_symbol, а этот гейт — здесь, то есть позже. Трендовый
+                # approve останавливал каскад, потом вход блокировался по KAMA, и
+                # альтернативные движки по символу не пробовались вообще.
+                # Замер 22.08: аптренд переваливал (ADX 37→22, DI в минусе, цена
+                # под KAMA) — тренду входить нельзя и правильно, но именно такой
+                # переходный рынок и есть территория range/scalp.
+                #
+                # Просим разбор БЕЗ трендового пути. Снимок ТФ переиспользуется
+                # из кэша, второй выкачки OHLCV не будет.
+                _alt = None
+                try:
+                    _alt = await asyncio.to_thread(
+                        self.intelligence.analyze_symbol, symbol, skip_trend=True
+                    )
+                except Exception as exc:  # noqa: BLE001 — фолбэк не критичен
+                    print(f"[CASCADE FALLBACK ERROR] {symbol}: {exc}")
+
+                if (
+                    _alt is None
+                    or _alt.action == "hold"
+                    or _alt.setup_decision != "approve"
+                    or str(getattr(_alt, "regime", "")) == _regime
+                ):
+                    continue
+
+                # Альтернатива нашлась — дальше символ идёт по ней, через ВСЕ
+                # обычные гейты (quality, production, depth, anti-drain).
+                result = _alt
+                _regime = str(getattr(result, "regime", "") or "")
 
             is_range = str(getattr(result, "regime", "")) in ("range", "crt", "scalp")
 

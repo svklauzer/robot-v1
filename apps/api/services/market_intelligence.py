@@ -202,7 +202,30 @@ class MarketIntelligenceEngine:
         self._cur_symbol = None          # текущий разбираемый символ (для VP-подгонки уровней)
         self._vp_cache = {}              # {symbol: (ts, volume_profile|None)} — кэш профиля
 
-    def analyze_symbol(self, symbol: str) -> MarketIntelligenceResult:
+    def _snapshot_cached(self, symbol: str):
+        """Снимок ТФ с коротким TTL.
+
+        (#cascade-second-pass-2026-08-22) Второй проход каскада зовёт
+        `analyze_symbol` повторно по тому же символу в пределах одного тика.
+        Без кэша это удвоило бы выкачку OHLCV по пяти таймфреймам — а egress с
+        Render уже однажды укладывал инстанс. TTL короткий: данные внутри одного
+        прохода те же, между тиками — обновляются.
+        """
+        import time
+
+        ttl = float(getattr(settings, "MTF_SNAPSHOT_TTL_SEC", 20.0))
+        cache = getattr(self, "_snap_cache", None)
+        if cache is None:
+            cache = self._snap_cache = {}
+        now = time.time()
+        hit = cache.get(symbol)
+        if hit and (now - hit[0]) < ttl:
+            return hit[1]
+        snap = self.market.multi_timeframe_snapshot(symbol)
+        cache[symbol] = (now, snap)
+        return snap
+
+    def analyze_symbol(self, symbol: str, *, skip_trend: bool = False) -> MarketIntelligenceResult:
         """
         Реальный multi-timeframe анализ:
         1m  — микродвижение
@@ -213,7 +236,7 @@ class MarketIntelligenceEngine:
         """
 
         self._cur_symbol = symbol  # для VP-подгонки уровней (HVN/LVN) ниже по стеку
-        snap = self.market.multi_timeframe_snapshot(symbol)
+        snap = self._snapshot_cached(symbol)
         source = snap.get("source", "unknown")
         tf_data = snap["timeframes"]
 
@@ -238,6 +261,21 @@ class MarketIntelligenceEngine:
             scores=scores,
             regime=regime,
         )
+
+        # (#cascade-second-pass-2026-08-22) Трендовый кандидат уже отвергнут
+        # гейтом входа (TZ/KAMA) — не даём ему занимать символ.
+        #
+        # Каскад решает В market_intelligence, а TZ-гейт — в robot_loop, то есть
+        # ПОЗЖЕ. Из-за этого трендовый approve останавливал каскад, затем вход
+        # блокировался по KAMA, и CRT/range/scalp по символу не пробовались
+        # вовсе. Замер 22.08: аптренд переваливал (ADX 37→22, DI ушёл в минус,
+        # цена под KAMA), тренд входить не мог и правильно, но альтернативы
+        # шанса не получали — а переходный рынок как раз их территория.
+        #
+        # Помечаем кандидата отвергнутым, и дальнейшие ветки каскада отработают
+        # штатно, без дублирования их условий.
+        if skip_trend:
+            candidate.setup_decision = "trend_blocked_by_entry_gate"
 
         # ── CRT (Candle Range Theory) — приоритетнее грубого range ──────────
         # Трендовый путь не дал approve → пробуем 3-свечной CRT (свип + close-back
