@@ -106,19 +106,50 @@ export default function ConfigPage() {
             />
           </div>
 
-          {data.redundant_env_keys?.length > 0 && (
-            <div className="mb-6 rounded-xl border border-amber-700/40 bg-amber-950/20 p-4">
-              <div className="flex items-center gap-2 text-amber-300 text-sm font-medium">
-                <AlertTriangle className="w-4 h-4" />
-                В blueprint {data.redundant_env_keys.length} ключей дублируют дефолт
+          {data.pinned_env_keys?.length > 0 && (
+            <div className="mb-6 space-y-3">
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+                <div className="text-sm font-medium text-neutral-200">
+                  Совпадает с дефолтом кода: {data.pinned_env_keys.length}
+                </div>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Это <b>не</b> автоматически мусор. Запись в blueprint при совпадающем
+                  значении — <b>закрепление</b>: поменяется дефолт в config.py, а прод
+                  останется прежним. Удалять можно только то, что закреплять незачем.
+                </p>
               </div>
-              <p className="text-xs text-neutral-400 mt-1">
-                Значение совпадает с config.py — перекрытия по смыслу нет, только шум.
-                Кандидаты на удаление из render.yaml.
-              </p>
-              <div className="text-xs text-neutral-500 mt-2 font-mono break-all">
-                {data.redundant_env_keys.join(", ")}
-              </div>
+
+              {data.protected_env_keys?.length > 0 && (
+                <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 p-4">
+                  <div className="text-sm font-medium text-emerald-300">
+                    Закреплено намеренно — не удалять ({data.protected_env_keys.length})
+                  </div>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Выключатели реальных денег, аварийные стопы, лимиты убытка и гейты
+                    течи капитала. Часть из них закреплена тестом блупринта — удаление
+                    уронит сборку.
+                  </p>
+                  <div className="text-xs text-neutral-500 mt-2 font-mono break-all">
+                    {data.protected_env_keys.join(", ")}
+                  </div>
+                </div>
+              )}
+
+              {data.removable_env_keys?.length > 0 && (
+                <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-4">
+                  <div className="flex items-center gap-2 text-amber-300 text-sm font-medium">
+                    <AlertTriangle className="w-4 h-4" />
+                    Можно вычистить из render.yaml ({data.removable_env_keys.length})
+                  </div>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Совпадает с дефолтом и закреплять незачем — ни выключатель, ни лимит.
+                    Удаление ничего не меняет в поведении, только уменьшает шум.
+                  </p>
+                  <div className="text-xs text-neutral-500 mt-2 font-mono break-all">
+                    {data.removable_env_keys.join(", ")}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -60,6 +60,35 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Ключи, которые ОБЯЗАНЫ стоять в блупринте явно, даже если значение совпадает
+# с дефолтом кода. Совпадение сегодня не делает их лишними: смысл записи не
+# «перекрыть», а ЗАКРЕПИТЬ. Поменяется дефолт в config.py — прод не поедет.
+#
+# (#pinning-2026-08-21) Метрика «дубликат дефолта» изначально предлагала их к
+# удалению, и это был опасный совет: в списке оказались ENABLE_LIVE_ORDERS и
+# ROBOT_MODE (переключатели реальных денег), лимиты убытка и семь ключей, на
+# которые прямо ссылается test_render_blueprint_enforces_capital_leak_entry_gates.
+_PINNED_ON_PURPOSE: frozenset[str] = frozenset({
+    # Реальные деньги: значение по умолчанию не должно решать за нас
+    "ENABLE_LIVE_ORDERS", "ROBOT_MODE", "TRADING_MODE", "ENABLE_FUTURES",
+    "LIVE_MAX_ORDER_NOTIONAL_USDT",
+    # Аварийные выключатели
+    "GRID_ENABLED", "GRID_KILL_SWITCH_ENABLED", "CROSS_FARB_ENABLED",
+    "ENABLE_FUNDING_ARB", "ENABLE_RANGE_STRATEGY", "ENABLE_CRT_STRATEGY",
+    "ENABLE_SCALP_STRATEGY", "ENABLE_ORDERBOOK_ENGINE", "ML_MODE",
+    # Лимиты потерь и капитала
+    "MAX_DAILY_LOSS_PCT", "MAX_DRAWDOWN_PCT", "RISK_EQUITY_USDT",
+    "RISK_PER_TRADE_PCT", "MAX_POSITION_MARGIN_PCT",
+    "ANTI_DRAIN_MAX_OPEN_POSITIONS", "MAX_TRADES_PER_DAY", "MAX_ACTIVE_SIGNALS",
+    # Гейты течи капитала — закреплены тестом блупринта
+    "TREND_TRIGGER_MODE", "TZ_MODE", "TP_REACH_MODE", "TP_REACH_MAX_RATIO",
+    "REGIME_EXP_SIZING_ENABLED", "DYNAMIC_MARGIN_FAIR_SHARE",
+    "DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE",
+    # Что и где торгуем
+    "HTX_SYMBOLS", "HTX_MARKET_TYPE",
+})
+
+
 def _group_of(name: str) -> str:
     for label, prefixes in _GROUPS:
         if any(name.startswith(p) for p in prefixes):
@@ -94,7 +123,8 @@ def effective_config(include_secrets_presence: bool = True) -> dict:
     defaults = _field_defaults()
     groups: dict[str, list[dict]] = {}
     env_count = 0
-    redundant: list[str] = []
+    pinned: list[str] = []
+    removable: list[str] = []
 
     for name, default in sorted(defaults.items()):
         from_env = name in os.environ
@@ -115,11 +145,16 @@ def effective_config(include_secrets_presence: bool = True) -> dict:
         else:
             row["value"] = _jsonable(current)
             row["default"] = _jsonable(default)
-            # env, повторяющий дефолт: перекрытия по смыслу нет, только шум
-            # в блупринте. Помечаем, чтобы такие ключи можно было вычистить.
+            # env, повторяющий дефолт. Это НЕ автоматически мусор: для
+            # выключателей и лимитов запись в блупринте — закрепление, а не
+            # перекрытие. Удалять можно только то, что закреплять незачем.
             if from_env and _jsonable(current) == _jsonable(default):
-                row["redundant"] = True
-                redundant.append(name)
+                protected = name in _PINNED_ON_PURPOSE
+                row["pinned"] = True
+                row["protected"] = protected
+                pinned.append(name)
+                if not protected:
+                    removable.append(name)
 
         groups.setdefault(_group_of(name), []).append(row)
 
@@ -127,9 +162,13 @@ def effective_config(include_secrets_presence: bool = True) -> dict:
         "total": len(defaults),
         "from_env": env_count,
         "from_default": len(defaults) - env_count,
-        # Ключи, где env дублирует дефолт один в один — кандидаты на удаление
-        # из render.yaml. Не ошибка, но лишний шум в блупринте.
-        "redundant_env_keys": sorted(redundant),
+        # Совпадает с дефолтом кода. Делится на две ЗАЩИЩЁННЫЕ группы:
+        #   protected — закреплено намеренно (выключатели, лимиты, гейты течи);
+        #                удаление вернёт власть дефолту кода, это опасно;
+        #   removable — закреплять нечего, можно вычистить из блупринта.
+        "pinned_env_keys": sorted(pinned),
+        "removable_env_keys": sorted(removable),
+        "protected_env_keys": sorted(set(pinned) & _PINNED_ON_PURPOSE),
         "groups": [
             {"name": label, "items": groups[label]}
             for label, _ in _GROUPS

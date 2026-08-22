@@ -50,6 +50,29 @@ def test_source_reflects_environment(monkeypatch):
     assert row["source"] == "default"
 
 
+def test_safety_pins_are_never_offered_for_removal():
+    """Совпадение с дефолтом не делает выключатель лишним (#pinning-2026-08-21).
+
+    Первая версия метрики предлагала к удалению ENABLE_LIVE_ORDERS, ROBOT_MODE,
+    лимиты убытка и семь ключей, закреплённых тестом блупринта. Удалить их —
+    значит вернуть власть над реальными деньгами дефолту в config.py.
+    """
+    payload = ci.effective_config()
+    removable = set(payload["removable_env_keys"])
+
+    for name in ("ENABLE_LIVE_ORDERS", "ROBOT_MODE", "GRID_KILL_SWITCH_ENABLED",
+                 "MAX_DAILY_LOSS_PCT", "MAX_DRAWDOWN_PCT", "ML_MODE",
+                 "TZ_MODE", "TREND_TRIGGER_MODE", "TP_REACH_MODE"):
+        assert name not in removable, f"{name} — предохранитель, удалять нельзя"
+
+
+def test_removable_and_protected_partition_pinned():
+    payload = ci.effective_config()
+    pinned = set(payload["pinned_env_keys"])
+    assert set(payload["removable_env_keys"]) | set(payload["protected_env_keys"]) == pinned
+    assert not (set(payload["removable_env_keys"]) & set(payload["protected_env_keys"]))
+
+
 def test_totals_add_up():
     payload = ci.effective_config()
     assert payload["from_env"] + payload["from_default"] == payload["total"]
