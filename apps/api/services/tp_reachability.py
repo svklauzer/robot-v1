@@ -121,6 +121,32 @@ def _load_mfe(ttl_sec: float = 900.0) -> tuple[dict, dict]:
     return _CACHE["by_key"], _CACHE["by_regime"]
 
 
+def typical_move_pct(symbol: str, regime: str) -> float | None:
+    """Медианный MFE — сколько цена РЕАЛЬНО проходит в свою сторону.
+
+    (#tp1-from-measured-move-2026-08-22) Тем же числом, которым гейт ПРОВЕРЯЕТ
+    достижимость TP1, теперь эта цель и СТАВИТСЯ. Раньше это были две
+    независимые величины про один вопрос, и они спорили: при отсутствии
+    структуры в коридоре TP1 падал на константу `TP1_DEFAULT_PCT=1.2%`, а
+    медианный ход по режиму — 0.49–0.54%. Отношение 2.2–3.1 при потолке 1.5, и
+    гейт резал вход за цель, которую поставила сама же система (XRP и ADA,
+    21–22.08, десятки блокировок `tp1_beyond_typical_move`).
+
+    None — данных не хватает; вызывающий сам решает, чем заменить.
+    """
+    by_key, by_regime = _load_mfe()
+    min_sample = int(getattr(settings, "TP_REACH_MIN_SAMPLE", 20))
+
+    values = by_key.get((str(symbol), str(regime)))
+    if not values or len(values) < min_sample:
+        values = by_regime.get(str(regime))
+    if not values or len(values) < min_sample:
+        return None
+
+    median_mfe = _median(values)
+    return float(median_mfe) if median_mfe and median_mfe > 0 else None
+
+
 def evaluate(*, symbol: str, regime: str, tp1_dist_pct: float | None) -> TPReach:
     """Достижима ли TP1 при типичном ходе этого инструмента в этом режиме.
 

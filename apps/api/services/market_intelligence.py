@@ -656,7 +656,41 @@ class MarketIntelligenceEngine:
             radar_state="none",
         )
 
-    def _reachable_tp1(self, side: str, last: float, m5, m15) -> float:
+    def _fallback_tp1_pct(self, regime: str | None) -> float:
+        """Доля хода для TP1, когда структуры в коридоре не нашлось.
+
+        (#tp1-from-measured-move-2026-08-22) Была константа `TP1_DEFAULT_PCT=1.2%`.
+        В аптренде структуры в коридоре нет почти никогда: `resistance` считается
+        как максимум последних баров, а в растущем рынке он остаётся ПОЗАДИ цены
+        и не попадает в [+0.6%; +1.8%]. Значит константа была не запасным
+        вариантом, а основным — и это видно в данных: у XRP `tp1_dist_pct`
+        держался 1.197–1.206, то есть ровно 1.2%.
+
+        При медианном ходе режима 0.49–0.54% такая цель недостижима, и гейт
+        `tp_reachability` резал вход с отношением 2.2–3.1 при потолке 1.5.
+        Система ставила цель, которую сама же признавала невозможной.
+
+        Берём ИЗМЕРЕННЫЙ типовой ход — тот же, которым гейт проверяет. Одно
+        число вместо двух спорящих; пол и потолок коридора остаются.
+        """
+        default_pct = float(getattr(settings, "TP1_DEFAULT_PCT", 1.2))
+        if not regime:
+            return default_pct
+        # Замер MFE ключуется парой (символ, режим); символ берём из текущего
+        # разбора — он выставляется в analyze_symbol перед построением уровней.
+        try:
+            from services.tp_reachability import typical_move_pct
+
+            typical = typical_move_pct(str(self._cur_symbol or ""), str(regime))
+        except Exception:  # noqa: BLE001 — постановка цели не на крит-пути замера
+            typical = None
+        if not typical or typical <= 0:
+            return default_pct
+        mult = float(getattr(settings, "TP1_TYPICAL_MOVE_MULT", 1.0))
+        return typical * max(0.1, mult)
+
+    def _reachable_tp1(self, side: str, last: float, m5, m15,
+                       regime: str | None = None) -> float:
         """(#9) TP1 = ближайшая ВСТРЕЧНАЯ структура в достижимом коридоре,
         РАСЦЕПЛЕНО от ширины стопа. Раньше TP1 = risk*1.7 уезжал на 2.3-5% и не
         достигался → машина TP1→breakeven→TP2 не включалась, победителями рулил
@@ -667,7 +701,14 @@ class MarketIntelligenceEngine:
         (награда на TP2)."""
         min_pct = float(getattr(settings, "TP1_MIN_PCT", 0.6)) / 100.0
         max_pct = float(getattr(settings, "TP1_MAX_PCT", 1.8)) / 100.0
-        default_pct = float(getattr(settings, "TP1_DEFAULT_PCT", 1.2)) / 100.0
+        # Режим выводим из стороны, если не передан: билдеры уровней вызываются
+        # из семи мест, и тянуть параметр через все — больше риска, чем пользы.
+        # Замер MFE всё равно падает на общережимный, если по паре данных мало.
+        if not regime:
+            regime = "trend_up_candidate" if side == "long" else "trend_down_candidate"
+        # Запасная цель — по измеренному ходу, зажатая тем же коридором.
+        default_pct = self._fallback_tp1_pct(regime) / 100.0
+        default_pct = max(min_pct, min(default_pct, max_pct))
         buf = 0.0005  # не доходя тик до уровня — чтобы цель исполнялась
         if side == "long":
             lo, hi = last * (1 + min_pct), last * (1 + max_pct)
