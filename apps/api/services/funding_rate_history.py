@@ -85,6 +85,50 @@ def _load(symbol: str, window_hours: float) -> list[dict]:
     return out
 
 
+# Записи ближе этого интервала друг к другу — один и тот же скан, а не разные
+# замеры. Наблюдения через час — РАЗНЫЕ данные (ставка меняется внутри периода),
+# схлопывать их нельзя: потеряем реальную волатильность ставки.
+_SCAN_DEDUPE_SEC = 60.0
+
+
+def _dedupe_scan_writes(rows: list[dict]) -> list[dict]:
+    """Схлопывает повторные записи ОДНОГО скана, не трогая разные замеры.
+
+    `record()` вызывается несколько раз за проход: в журнале лежат строки с
+    разницей 0.2–0.3 секунды и побайтово одинаковыми значениями. Информации в
+    них нет, а счётчик наблюдений они множат вдвое-втрое.
+
+    Последствие было тихим и опасным: `min_obs` удовлетворялся числом ЗАПИСЕЙ,
+    а не числом замеров, то есть гейт подтверждения считал ставку «наблюдавшейся
+    достаточно», посмотрев на неё вдвое меньше раз, чем думал. Хуже того,
+    `conservative_rate_pct` (нижний квартиль) смещался к самому часто
+    записанному значению вместо худшего — защита от всплеска слабела именно там,
+    где она нужна.
+
+    Схлопываем ТОЛЬКО соседние строки с идентичными r и b в пределах
+    `_SCAN_DEDUPE_SEC`. Замер через час останется отдельным наблюдением.
+    """
+    window = float(getattr(settings, "FUNDING_SCAN_DEDUPE_SEC", _SCAN_DEDUPE_SEC) or 0.0)
+    if window <= 0:
+        return list(rows)
+
+    out: list[dict] = []
+    for row in rows:
+        try:
+            ts = float(row.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if out:
+            prev = out[-1]
+            same_value = (row.get("r") == prev.get("r") and row.get("b") == prev.get("b"))
+            close_in_time = abs(ts - float(prev.get("ts") or 0.0)) <= window
+            if same_value and close_in_time:
+                out[-1] = row      # оставляем последнюю строку скана
+                continue
+        out.append(row)
+    return out
+
+
 def _percentile(values: list[float], q: float) -> float:
     """Нижний перцентиль без numpy — зависимость тут не нужна."""
     if not values:
@@ -100,12 +144,15 @@ def stability(symbol: str, window_hours: float | None = None) -> dict[str, Any]:
         window_hours if window_hours is not None
         else getattr(settings, "FUNDING_ARB_OBSERVATION_WINDOW_HOURS", 72.0)
     )
-    rows = _load(symbol, window_hours)
+    raw = _load(symbol, window_hours)
+    # Считаем ЗАМЕРЫ, а не записи в файл: повторы одного скана — это по-прежнему
+    # один замер, и выдавать их за несколько значит обманывать собственный гейт.
+    rows = _dedupe_scan_writes(raw)
     rates = [float(r["r"]) for r in rows]
     bases = [float(r.get("b") or 0.0) for r in rows]
     n = len(rates)
     if n == 0:
-        return {"observations": 0, "window_hours": window_hours,
+        return {"observations": 0, "raw_writes": len(raw), "window_hours": window_hours,
                 "note": "наблюдений нет — история копится на каждом скане"}
 
     positive = sum(1 for v in rates if v > 0)
@@ -115,6 +162,17 @@ def stability(symbol: str, window_hours: float | None = None) -> dict[str, Any]:
 
     return {
         "observations": n,
+        # Сколько записей стояло за этими наблюдениями: разрыв показывает,
+        # насколько журнал дублировал сам себя.
+        "raw_writes": len(raw),
+        # За какой СРОК набраны наблюдения. Число замеров и охват — разные вещи:
+        # шесть замеров за час говорят о ставке куда меньше, чем шесть за двое
+        # суток, а гейт `min_obs` считает только первое. Метрика выведена наружу,
+        # чтобы решение о пороге принималось по данным (сейчас НЕ блокирует).
+        "span_hours": round(
+            (max(float(r.get("ts") or 0.0) for r in rows)
+             - min(float(r.get("ts") or 0.0) for r in rows)) / 3600.0, 2
+        ),
         "window_hours": window_hours,
         "mean_rate_pct": round(mean, 6),
         "min_rate_pct": round(min(rates), 6),

@@ -138,6 +138,23 @@ def system_exchange_diagnostics(timeout: float = 8.0):
     return diagnose(timeout=timeout)
 
 
+@router.get("/config-effective", dependencies=[Depends(require_owner_action)])
+def system_config_effective():
+    """(#config-visibility-2026-08-21) Что реально действует и откуда взято.
+
+    Настройка живёт в двух местах — дефолт в config.py и перекрытие в
+    render.yaml → env, — и по коду не видно, какое из двух работает. Здесь по
+    каждому параметру: действующее значение, дефолт кода и победитель.
+
+    ТОЛЬКО ЧТЕНИЕ. Пороги торговли правятся коммитом: так у каждой правки
+    остаются ревью, тесты и записанная причина. Секреты отдаются как факт
+    «задан/не задан», без значений.
+    """
+    from services.config_inspector import effective_config
+
+    return effective_config()
+
+
 @router.get("/egress-history", dependencies=[Depends(require_owner_action)])
 def system_egress_history(hours: float = 24.0):
     """(#egress-monitor-2026-07-26) Доказательная база для тикета в поддержку.

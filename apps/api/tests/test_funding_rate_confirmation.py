@@ -54,6 +54,43 @@ def test_stable_positive_rate_is_confirmed(rate_log):
     assert res["stressed_net_carry_pct"] > 0
 
 
+def test_repeated_writes_of_one_scan_count_as_one_observation(rate_log):
+    """Повторы одного скана не должны надувать счётчик наблюдений.
+
+    `record()` вызывается несколько раз за проход и пишет побайтово одинаковые
+    строки с разницей в доли секунды. Раньше они считались за независимые
+    замеры: `min_obs=6` удовлетворялся двумя сканами, и гейт подтверждения
+    считал ставку проверенной, посмотрев на неё вдвое меньше раз, чем думал.
+    """
+    now = time.time()
+    with rate_log.open("w", encoding="utf-8") as f:
+        # два скана, каждый записан трижды — как в боевом журнале
+        for scan_ts, rate in ((now - 3600, 0.09), (now, 0.10)):
+            for dup in range(3):
+                f.write(json.dumps({
+                    "ts": scan_ts + dup * 0.2, "s": "BTC/USDT", "r": rate, "b": 0.02,
+                }) + "\n")
+
+    st = frh.stability("BTC/USDT")
+
+    assert st["raw_writes"] == 6      # строк в журнале
+    assert st["observations"] == 2    # реальных замеров
+
+
+def test_hourly_observations_are_not_collapsed(rate_log):
+    """Замеры через час — РАЗНЫЕ данные: ставка меняется внутри периода.
+
+    Схлопывать их нельзя, иначе потеряем волатильность ставки — ровно ту, из-за
+    которой гейт подтверждения и существует.
+    """
+    _seed(rate_log, "BTC/USDT", [0.09, 0.10, 0.11, 0.10, 0.09, 0.12, 0.10])
+
+    st = frh.stability("BTC/USDT")
+
+    assert st["observations"] == 7
+    assert st["span_hours"] == pytest.approx(6.0, abs=0.1)
+
+
 def test_sign_flipping_rate_is_rejected(rate_log):
     """Ставка, менявшая знак, carry не даёт: часть периодов платим мы."""
     _seed(rate_log, "BTC/USDT", [0.12, -0.03, 0.10, -0.05, 0.11, 0.09, -0.02])

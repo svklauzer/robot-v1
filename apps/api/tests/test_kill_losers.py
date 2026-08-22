@@ -44,14 +44,19 @@ def test_all_entry_engines_are_enabled():
     assert settings.ENABLE_SCALP_STRATEGY is True
 
 
-def test_cross_arb_is_back_with_a_carry_floor():
-    """10 убытков из 10 — но причина была в ВЫХОДЕ, а не в экономике входа.
+def test_cross_arb_trading_is_off_observation_stays():
+    """Межбиржевой выключен по замеру, а не по настроению (#cross-farb-off-2026-08-21).
 
-    Round-trip 0.20 USDT фиксирован, carry за срок удержания набирал 0.006–0.18.
-    Выход по развороту спреда срабатывал раньше окупаемости. Теперь разворот
-    прекращает накопление, но не платит комиссию дважды.
+    Правка выхода 28.07 (carry floor) не помогла: 14 закрытых, −1.25 USDT, ВСЕ по
+    `spread_flipped`. Причина структурная — опрос REST отстаёт от колокации, и к
+    моменту, когда спред виден, его уже нет. Настройками не лечится.
+
+    Наблюдение при этом ОСТАЁТСЯ живым: снятие спреда — проверка качества фида
+    HTX, полезная независимо от арбитража. Тест фиксирует именно эту развилку,
+    чтобы «выключено» не превратилось в «удалено» по невнимательности.
     """
-    assert settings.CROSS_FARB_ENABLED is True
+    assert settings.CROSS_FARB_ENABLED is False
+    # Пол carry не удалён: при возврате (смена тарифа) он снова понадобится.
     assert settings.CROSS_FARB_CARRY_FLOOR_ENABLED is True
 
 

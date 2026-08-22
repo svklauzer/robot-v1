@@ -26,7 +26,9 @@ const GROUPS: { title: string; items: Item[] }[] = [
       // (#regimes-back-on-2026-07-28) Снова живые: причины убытков найдены и
       // исправлены в логике, а не заглушены выключателем.
       { href: "/grid", label: "Grid" },
-      { href: "/venues", label: "Venues" },
+      // (#cross-farb-off-2026-08-21) Торговля выключена: 14 закрытых, −1.25, все
+      // по spread_flipped. Наблюдение за спредом живо — это проверка фида HTX.
+      { href: "/venues", label: "Venues", off: "торговля выкл · только наблюдение" },
     ],
   },
   {
@@ -43,6 +45,8 @@ const GROUPS: { title: string; items: Item[] }[] = [
     title: "Система",
     items: [
       { href: "/health", label: "Здоровье" },
+      // Только чтение: что действует и откуда взято (env против дефолта кода).
+      { href: "/config", label: "Конфигурация" },
       { href: "/clients", label: "Клиенты" },
       { href: "/payments", label: "Платежи" },
     ],
