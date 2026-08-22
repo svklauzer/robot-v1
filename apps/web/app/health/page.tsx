@@ -8,6 +8,8 @@ import { Activity, Bot, Database, RefreshCw, Radio, ShieldAlert, ShieldCheck, Wi
 export default function HealthPage() {
   const [health, setHealth] = useState<any>(null);
   const [readiness, setReadiness] = useState<any>(null);
+  // (#capital-envelopes-2026-08-21) Распределение депозита по контурам.
+  const [envelopes, setEnvelopes] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [killSwitchSmoke, setKillSwitchSmoke] = useState<any>(null);
   // (#egress-monitor-2026-07-26) Витрина инцидента 26.07: статус-страница
@@ -24,12 +26,15 @@ export default function HealthPage() {
     loadingRef.current = true;
     setLoading(true);
     try {
-      const [healthRes, readinessRes] = await Promise.all([
+      const [healthRes, readinessRes, envelopesRes] = await Promise.all([
         apiGet("/system/health"),
         apiGet("/system/readiness"),
+        // Сбой учёта капитала не должен гасить всю страницу здоровья.
+        apiGet("/system/capital-envelopes").catch(() => null),
       ]);
       setHealth(healthRes);
       setReadiness(readinessRes);
+      if (envelopesRes) setEnvelopes(envelopesRes);
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -256,6 +261,109 @@ export default function HealthPage() {
           {exchangeReconciliation?.error && <InfoRow label="Error" value={exchangeReconciliation.error} danger />}
         </Panel>
       </section>
+
+      {/* (#capital-envelopes-2026-08-21) Кто на какую долю депозита претендует.
+          До конвертов три контура делили счёт вслепую: направленные 70% +
+          арбитраж ~42% (2 хеджа × 10.5% × 2 ноги) + сетка 5% ≈ 117% при
+          капитале 950. Связи не было — used_margin() видит только Signal.
+          В бумаге безвредно (эквити константа), в live отказ по марже получил
+          бы не «лишний» контур, а тот, кто открылся последним. */}
+      {envelopes && (
+        <section className="rounded-2xl border border-emerald-900/70 bg-emerald-950/10 p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-emerald-200">Конверты капитала</h2>
+              <p className="mt-1 text-xs text-emerald-100/60">
+                У каждого контура своя доля эквити. Размеры позиций выводятся из доли —
+                превысить конверт нельзя. Выключенный и пустой контур отдаёт долю направленным.
+              </p>
+            </div>
+            <div className="text-right text-sm">
+              <div className="text-emerald-100/60">Эквити</div>
+              <div className="text-xl font-semibold text-emerald-200">
+                {formatNumber(envelopes.equity_usdt)} USDT
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MiniStat label="Задано всего" value={`${envelopes.configured_total_pct}%`} tone="good" />
+            {/* Больше 100% — контуры обещают больше, чем есть на счёте */}
+            <MiniStat
+              label="Действует"
+              value={`${envelopes.effective_total_pct}%`}
+              tone={envelopes.effective_total_pct > 100 ? "bad" : "good"}
+            />
+            <MiniStat
+              label="Передано направленным"
+              value={`${envelopes.released_pct}%`}
+              tone="good"
+            />
+            {/* Нулевой запас — нет буфера на просадку и комиссии */}
+            <MiniStat
+              label="Запас"
+              value={`${envelopes.reserve_pct}%`}
+              tone={envelopes.reserve_pct <= 0 ? "warn" : "good"}
+            />
+          </div>
+
+          <div className="space-y-2">
+            {(envelopes.contours || []).map((c: any) => {
+              const usedPct =
+                c.used_usdt != null && c.envelope_usdt > 0
+                  ? Math.min(100, (c.used_usdt / c.envelope_usdt) * 100)
+                  : null;
+              return (
+                <div key={c.contour} className="rounded-xl border border-emerald-900/50 bg-slate-950/40 p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-sm text-emerald-100">{c.label}</span>
+                    <span className="text-sm text-emerald-100/70">
+                      {c.effective_pct !== c.configured_pct && (
+                        <span className="mr-2 text-xs text-emerald-100/40 line-through">
+                          {c.configured_pct}%
+                        </span>
+                      )}
+                      <span className={c.effective_pct === 0 ? "text-slate-500" : "text-emerald-200"}>
+                        {c.effective_pct}%
+                      </span>
+                      <span className="ml-2 text-emerald-100/50">
+                        · {formatNumber(c.envelope_usdt)} USDT
+                      </span>
+                    </span>
+                  </div>
+
+                  {/* Занятость показываем только там, где её умеем считать:
+                      used_margin() перебирает Signal, то есть направленные. */}
+                  {usedPct != null && (
+                    <div className="mt-2">
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-500"
+                          style={{ width: `${usedPct}%` }}
+                        />
+                      </div>
+                      <div className="mt-1 text-[11px] text-emerald-100/50">
+                        занято {formatNumber(c.used_usdt)} из {formatNumber(c.envelope_usdt)} USDT
+                      </div>
+                    </div>
+                  )}
+
+                  {c.note && (
+                    <div className="mt-1 text-[11px] text-sky-300/70">{c.note}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 text-[11px] text-emerald-100/50">
+            Нотионал ноги funding arb: {formatNumber(envelopes.arb_leg_notional_usdt)} USDT
+            <span className="text-emerald-100/30">
+              {" "}— выводится из конверта (конверт ÷ хеджи ÷ 2 ноги), отдельной настройки больше нет
+            </span>
+          </div>
+        </section>
+      )}
 
       {/* (#egress-monitor-2026-07-26) Доступность исходящей сети — замеры с
           самого инстанса. Контрольная группа (Cloudflare/Google/Telegram)
