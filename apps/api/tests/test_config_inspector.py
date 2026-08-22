@@ -66,6 +66,25 @@ def test_safety_pins_are_never_offered_for_removal():
         assert name not in removable, f"{name} — предохранитель, удалять нельзя"
 
 
+def test_calibrated_trading_params_stay_pinned():
+    """Активно калибруемые пороги — тоже не шум.
+
+    Владелец крутит TZ_ADX_MIN, зону Stoch и стопы движка по данным. Убрать их
+    из блупринта — значит спрятать поведение системы в дефолты кода, где его
+    никто не читает, и потерять защиту от случайной правки дефолта.
+    """
+    payload = ci.effective_config()
+    removable = set(payload["removable_env_keys"])
+
+    for name in ("TZ_ADX_MIN", "TZ_STOCH_ZONE", "TZ_DISASTER_STOP_PCT",
+                 "TZ_STOP_MIN_DIST_ATR_MULT", "TZ_EXIT_CONDITIONS",
+                 "TREND_MAX_EXTENSION_ATR", "KAMA_SLOW",
+                 "CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR", "NEWS_ENABLED",
+                 "PROD_GATE_A_MIN_SETUP", "BREAKEVEN_LOCK_ENABLED",
+                 "SYMBOL_PERF_BLOCK_MAX_WINRATE"):
+        assert name not in removable, f"{name} — параметр поведения, закрепляем"
+
+
 def test_removable_and_protected_partition_pinned():
     payload = ci.effective_config()
     pinned = set(payload["pinned_env_keys"])

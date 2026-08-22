@@ -88,6 +88,39 @@ _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
     "HTX_SYMBOLS", "HTX_MARKET_TYPE",
 })
 
+# Правило вместо перечня: закрепляем ЛЮБОЙ выключатель, лимит и параметр
+# торгового поведения. Перечислять поимённо бессмысленно — новый порог движка
+# появится раньше, чем кто-то вспомнит дополнить список, и молча уедет в
+# «можно удалять».
+#
+# Смысл закрепления: блупринт должен оставаться местом, по которому ЧИТАЕТСЯ
+# поведение системы. Вычистив из него интересные ручки, мы не наведём порядок,
+# а спрячем состояние в дефолты кода — ровно то, от чего уходим.
+_PINNED_PREFIXES: tuple[str, ...] = (
+    "TZ_", "KAMA_", "TREND_",          # трендовый контур: активно калибруется
+    "PROD_GATE_",                       # гейты входа в деньги
+    "BREAKEVEN_", "MFE_", "PROTECTIVE_",  # защита прибыли на выходе
+    "CORR_CLUSTER", "SYMBOL_PERF_", "REENTRY_", "POST_LOSS", "ANTI_DRAIN",
+    "RISK_", "MAX_", "MIN_",            # лимиты
+    "ENABLE_", "ALLOW_",                # выключатели
+    "LEARNING_",                        # условия входа в learning-режиме
+    "SCALP_", "RANGE_", "CRT_",         # пороги альт-движков
+    "GRID_", "FUNDING_ARB", "CROSS_FARB",
+)
+_PINNED_SUFFIXES: tuple[str, ...] = (
+    "_ENABLED",   # любой тумблер поведения
+    "_MODE",      # shadow/enforce и режимы исполнения
+)
+
+
+def is_pinned_on_purpose(name: str) -> bool:
+    """Закреплять ли ключ в блупринте, даже если значение совпало с дефолтом."""
+    if name in _PINNED_ON_PURPOSE:
+        return True
+    if any(name.startswith(p) for p in _PINNED_PREFIXES):
+        return True
+    return any(name.endswith(s) for s in _PINNED_SUFFIXES)
+
 
 def _group_of(name: str) -> str:
     for label, prefixes in _GROUPS:
@@ -149,7 +182,7 @@ def effective_config(include_secrets_presence: bool = True) -> dict:
             # выключателей и лимитов запись в блупринте — закрепление, а не
             # перекрытие. Удалять можно только то, что закреплять незачем.
             if from_env and _jsonable(current) == _jsonable(default):
-                protected = name in _PINNED_ON_PURPOSE
+                protected = is_pinned_on_purpose(name)
                 row["pinned"] = True
                 row["protected"] = protected
                 pinned.append(name)
@@ -168,7 +201,7 @@ def effective_config(include_secrets_presence: bool = True) -> dict:
         #   removable — закреплять нечего, можно вычистить из блупринта.
         "pinned_env_keys": sorted(pinned),
         "removable_env_keys": sorted(removable),
-        "protected_env_keys": sorted(set(pinned) & _PINNED_ON_PURPOSE),
+        "protected_env_keys": sorted(n for n in pinned if is_pinned_on_purpose(n)),
         "groups": [
             {"name": label, "items": groups[label]}
             for label, _ in _GROUPS
