@@ -81,10 +81,6 @@ services:
         sync: false
       - key: TELEGRAM_VIP_SIGNALS_CHAT_ID
         sync: false
-      - key: TELEGRAM_CONNECT_TIMEOUT
-        value: "15.0"
-      - key: TELEGRAM_READ_TIMEOUT
-        value: "30.0"
 
       # ── HTX API ───────────────────────────────────────────────────────────
       - key: HTX_API_KEY
@@ -111,8 +107,6 @@ services:
         value: "true"
       - key: OB_MARKET_TYPE
         value: "swap"
-      - key: OB_WS_URL
-        value: ""
       - key: ENABLE_SMART_LEVERAGE
         value: "false"
 
@@ -280,14 +274,10 @@ services:
         value: "1.2"       # Шаг сетки
 
       # ── Продукт / подписки ────────────────────────────────────────────────
-      - key: AFFILIATE_FREE_VIP_DAYS
-        value: "30"
       - key: VIP_STARS_PRICE_30
         value: "4900"
       - key: VIP_STARS_PRICE_90
         value: "12900"
-      - key: VIP_INVITE_EXPIRE_HOURS
-        value: "24"
       - key: VIP_INVITE_LINK
         sync: false
       - key: HTX_AFFILIATE_LINK
@@ -337,19 +327,13 @@ services:
       - key: PROD_GATE_A_MIN_RR_TP1_PAPER
         value: "0.10"
 
-      # ── Live-shadow ───────────────────────────────────────────────────────
-      - key: LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT
-        value: "0.35"
-      - key: LIVE_SHADOW_SLIPPAGE_PCT
-        value: "0.10"
+      # ── Сверка с биржей ───────────────────────────────────────────────────
       - key: EXCHANGE_RECONCILIATION_ENABLED
         value: "false"
 
       # ── Validation thresholds ─────────────────────────────────────────────
       - key: VALIDATION_MIN_CLOSED_SIGNALS
         value: "50"
-      - key: MARKET_CONNECTIVITY_MAX_LATENCY_MS
-        value: "15000"
 
       # ── Funding arb ───────────────────────────────────────────────────────
       - key: ENABLE_FUNDING_ARB

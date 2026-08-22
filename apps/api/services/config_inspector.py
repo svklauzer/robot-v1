@@ -99,6 +99,8 @@ _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
 _PINNED_PREFIXES: tuple[str, ...] = (
     "TZ_", "KAMA_", "TREND_",          # трендовый контур: активно калибруется
     "PROD_GATE_",                       # гейты входа в деньги
+    "TP_", "TP1_", "TP2_",              # цели и гейт достижимости TP
+    "VALIDATION_",                      # пороги вердикта готовности к live
     "BREAKEVEN_", "MFE_", "PROTECTIVE_",  # защита прибыли на выходе
     "CORR_CLUSTER", "SYMBOL_PERF_", "REENTRY_", "POST_LOSS", "ANTI_DRAIN",
     "RISK_", "MAX_", "MIN_",            # лимиты
