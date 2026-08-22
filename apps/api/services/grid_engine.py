@@ -84,14 +84,24 @@ class GridEngine:
             return round(qty, 8)
 
     def _envelope(self) -> float:
-        # В LIVE — реальный свободный USDT счёта сетки (swap для USDT-M / spot),
-        # в paper — RISK_EQUITY_USDT. Карман = доля свободного баланса.
+        """Карман сетки — её КОНВЕРТ капитала (#capital-envelopes-2026-08-21).
+
+        Был свой процент `GRID_MAX_USED_MARGIN_PCT` рядом с
+        `CAPITAL_ENVELOPE_GRID_PCT` — два числа про одно и то же, которые
+        разъедутся при первой же правке одного из них. Источник теперь один;
+        старый ключ остался только аварийным фолбэком.
+        """
         try:
             from services.live_executor import LIVE_EXECUTOR
             equity = LIVE_EXECUTOR.effective_equity_usdt()
         except Exception:
             equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
-        return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
+        try:
+            from services import capital_envelopes as envelopes
+
+            return envelopes.envelope_usdt(envelopes.GRID, equity=equity)
+        except Exception:  # noqa: BLE001 — сетка не должна падать из-за учёта
+            return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
 
     def _fresh_market(self, symbol: str):
         """Живые индикаторы + регайм + ATR по grid-ТФ. None при нехватке данных."""

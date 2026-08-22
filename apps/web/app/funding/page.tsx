@@ -311,14 +311,22 @@ export default function FundingArbPage() {
               Candidate = положительный net yield после комиссий и basis
             </p>
           </div>
-          <label className="flex items-center gap-2 text-sm text-emerald-100/60">
-            Notional
-            <input
-              value={notional}
-              onChange={(e) => setNotional(e.target.value)}
-              className="w-24 rounded-lg border border-emerald-900 bg-slate-950 px-3 py-2 text-right text-emerald-100 outline-none focus:border-emerald-400"
-            />
-            <span>USDT</span>
+          {/* Поле кормит ТОЛЬКО ручные действия (Paper smoke и открытие по
+              кнопке). Авто-открытие берёт размер из конверта капитала —
+              подпись раньше вводила в заблуждение. */}
+          <label className="flex flex-col items-end gap-1 text-sm text-emerald-100/60">
+            <span className="flex items-center gap-2">
+              Notional для ручных действий
+              <input
+                value={notional}
+                onChange={(e) => setNotional(e.target.value)}
+                className="w-24 rounded-lg border border-emerald-900 bg-slate-950 px-3 py-2 text-right text-emerald-100 outline-none focus:border-emerald-400"
+              />
+              <span>USDT</span>
+            </span>
+            <span className="text-[11px] text-emerald-100/40">
+              авто-открытие считает размер из конверта капитала, это поле его не меняет
+            </span>
           </label>
         </div>
 

@@ -138,6 +138,73 @@ def system_exchange_diagnostics(timeout: float = 8.0):
     return diagnose(timeout=timeout)
 
 
+@router.get("/capital-envelopes", dependencies=[Depends(require_owner_action)])
+def system_capital_envelopes():
+    """(#capital-envelopes-2026-08-21) Кто на какую долю депозита претендует.
+
+    До этого три контура делили счёт вслепую: направленные 70% + арбитраж ~42%
+    (2 хеджа × 10.5% × 2 ноги) + сетка 5% ≈ 117% при капитале 950. Связи не было
+    — `used_margin()` перебирает только Signal. В live отказ по марже получил бы
+    не «лишний» контур, а тот, кто открылся последним.
+
+    Показывает заданные доли, фактические (с учётом переданных), занято и
+    свободно по каждому контуру.
+    """
+    from services import capital_envelopes as envelopes
+    from services.arb_capital import available_equity
+
+    db = SessionLocal()
+    try:
+        equity = available_equity()
+        shares = envelopes.effective_shares(db=db)
+        configured = envelopes.configured_shares()
+
+        used: dict[str, float] = {}
+        try:
+            from services.exposure_guard import ExposureGuard
+
+            bot = db.query(Bot).first()
+            if bot is not None:
+                used[envelopes.DIRECTIONAL] = float(
+                    ExposureGuard().used_margin(db, bot.id) or 0.0
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        contours = []
+        for key, label in (
+            (envelopes.DIRECTIONAL, "Направленные (тренд/скальп/range/CRT)"),
+            (envelopes.ARB, "Funding arb"),
+            (envelopes.GRID, "Grid"),
+        ):
+            pct = float(shares.get(key, 0.0))
+            contours.append({
+                "contour": key,
+                "label": label,
+                "configured_pct": configured.get(key, 0.0),
+                "effective_pct": pct,
+                "envelope_usdt": round(equity * pct / 100.0, 2),
+                "used_usdt": round(used.get(key, 0.0), 2) if key in used else None,
+                "note": (shares.get("_detail") or {}).get(key),
+            })
+
+        return {
+            "equity_usdt": round(equity, 2),
+            "configured_total_pct": round(sum(configured.values()), 2),
+            "effective_total_pct": round(
+                sum(float(shares.get(k, 0.0))
+                    for k in (envelopes.DIRECTIONAL, envelopes.ARB, envelopes.GRID)), 2
+            ),
+            "released_pct": round(float(shares.get("_released_pct", 0.0)), 2),
+            # Остаток до 100% — намеренный запас на просадку и комиссии.
+            "reserve_pct": round(100.0 - sum(configured.values()), 2),
+            "contours": contours,
+            "arb_leg_notional_usdt": envelopes.arb_leg_notional(equity=equity, db=db),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/config-effective", dependencies=[Depends(require_owner_action)])
 def system_config_effective():
     """(#config-visibility-2026-08-21) Что реально действует и откуда взято.

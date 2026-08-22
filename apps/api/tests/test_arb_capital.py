@@ -19,14 +19,31 @@ def test_notional_scales_with_equity():
     assert large == pytest.approx(small * 4, rel=1e-6)
 
 
-def test_current_paper_equity_reproduces_old_constant():
-    """Дефолт подобран так, чтобы при 950 размер совпал с прежними ~100.
+def test_notional_now_fits_the_capital_envelope():
+    """Размер СОЗНАТЕЛЬНО уменьшен (#capital-envelopes-2026-08-21).
 
-    Механизм меняется, поведение — нет: поднимать долю нужно осознанно,
-    а не получить скачок размера вместе с рефакторингом.
+    Прежний тест закреплял ~99.75 при эквити 950 («механизм меняется, поведение
+    нет»). Но именно поведение и было неверным: доля 10.5% на ногу давала два
+    хеджа по ~2 нотионала капитала каждый — около 42% депозита при конверте 20%.
+    Три контура вместе обещали ~117% счёта.
+
+    Теперь нотионал выводится из конверта, и инвариант такой: ВСЕ хеджи разом
+    умещаются в отведённую долю. Это и проверяем — не конкретное число, а
+    непревышение конверта.
     """
-    assert arb_capital.funding_arb_notional(equity=950.0) == pytest.approx(99.75, abs=0.5)
-    assert arb_capital.cross_farb_notional(equity=950.0) == pytest.approx(99.75, abs=0.5)
+    from services import capital_envelopes as env
+
+    equity = 950.0
+    leg = arb_capital.funding_arb_notional(equity=equity)
+    envelope = env.envelope_usdt(env.ARB, equity=equity, db=None)
+    hedges = int(settings.FUNDING_ARB_MAX_OPEN_HEDGES)
+
+    # хедж занимает ~2 нотионала: спотовая нога без плеча + своп
+    assert leg * hedges * 2 <= envelope + 0.05, (
+        "все хеджи вместе не должны превышать конверт арбитража"
+    )
+    # cross-arb пока считает по своей доле — он выключен, конверт ему не нужен
+    assert arb_capital.cross_farb_notional(equity=equity) > 0
 
 
 # ── границы ─────────────────────────────────────────────────────────────────
@@ -38,9 +55,13 @@ def test_tiny_equity_clamps_to_exchange_minimum():
     клэмп цел. Берём заведомо малое эквити относительно текущих настроек —
     проверяем механизм, а не совпадение констант.
     """
-    share = float(getattr(settings, "FUNDING_ARB_NOTIONAL_PCT", 0.105)) or 0.105
+    from services import capital_envelopes as env
+
+    share = float(env.configured_shares()[env.ARB]) / 100.0 or 0.20
+    hedges = max(1, int(settings.FUNDING_ARB_MAX_OPEN_HEDGES))
     floor = float(settings.FUNDING_ARB_MIN_NOTIONAL_USDT)
-    tiny_equity = floor / share / 2.0      # доля от него заведомо ниже пола
+    # конверт от такого эквити делится на хеджи и ноги → заведомо ниже пола
+    tiny_equity = floor * hedges * 2.0 / share / 2.0
     assert arb_capital.funding_arb_notional(equity=tiny_equity) == pytest.approx(floor)
 
 
@@ -50,15 +71,20 @@ def test_huge_equity_clamps_to_ceiling():
     )
 
 
-def test_zero_share_still_respects_minimum(monkeypatch):
-    monkeypatch.setattr(settings, "FUNDING_ARB_NOTIONAL_PCT", 0.0, raising=False)
+def test_zero_envelope_still_respects_minimum(monkeypatch):
+    """Нулевой конверт не должен давать нулевой лот — только биржевой минимум.
+
+    Крутится теперь КОНВЕРТ: `FUNDING_ARB_NOTIONAL_PCT` удалён как мёртвый
+    (нотионал выводится из конверта, отдельной доли больше нет).
+    """
+    monkeypatch.setattr(settings, "CAPITAL_ENVELOPE_ARB_PCT", 0.0, raising=False)
     assert arb_capital.funding_arb_notional(equity=950.0) == pytest.approx(
         float(settings.FUNDING_ARB_MIN_NOTIONAL_USDT)
     )
 
 
-def test_negative_share_is_treated_as_zero(monkeypatch):
-    monkeypatch.setattr(settings, "FUNDING_ARB_NOTIONAL_PCT", -0.5, raising=False)
+def test_negative_envelope_is_treated_as_zero(monkeypatch):
+    monkeypatch.setattr(settings, "CAPITAL_ENVELOPE_ARB_PCT", -5.0, raising=False)
     assert arb_capital.funding_arb_notional(equity=950.0) > 0
 
 
@@ -101,14 +127,20 @@ class _Opportunity:
     funding_rate = 0.0004
 
 
-def test_hedge_builder_uses_capital_share(monkeypatch):
+def test_hedge_builder_sizes_from_capital_envelope(monkeypatch):
+    """Размер хеджа масштабируется капиталом и укладывается в конверт."""
     from services.funding_arbitrage import HedgeBuilder
+    from services import capital_envelopes as env
 
     # Тест про долю капитала, а не про кэп нотионала ордера — изолируем от него.
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 10000.0, raising=False)
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
+
     built = HedgeBuilder().build(_Opportunity())
-    assert built["notional_usdt"] == pytest.approx(210.0, abs=1.0)
+    envelope = env.envelope_usdt(env.ARB, equity=2000.0, db=None)
+    hedges = int(settings.FUNDING_ARB_MAX_OPEN_HEDGES)
+
+    assert built["notional_usdt"] * hedges * 2 <= envelope + 0.05
 
 
 def test_explicit_notional_overrides_share(monkeypatch):
