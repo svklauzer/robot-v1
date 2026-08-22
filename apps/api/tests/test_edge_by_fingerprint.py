@@ -98,6 +98,31 @@ def test_config_diff_shows_only_changed_keys():
     assert "fingerprint" not in old  # сам отпечаток из дифа исключён
 
 
+def test_grade_thresholds_do_not_split_a_generation():
+    """Одна конфигурация не должна дробиться по грейдам сделок.
+
+    `decision_config` кладёт в снимок фактические пороги production_gate, а они
+    зависят от ГРЕЙДА (A+/A/B). В сыром fingerprint это давало три «поколения»
+    вместо одного: на выгрузке 03.08 пять групп жили одновременно 29.07–02.08,
+    а min_setup скакал 65↔58 не по датам, а по грейду.
+    """
+    a_plus = _row(1, "fp-a", net=1.0)
+    a_plus["plan"]["config"]["entry_gate"] = {"thresholds": {"min_setup": 65.0}}
+    grade_b = _row(2, "fp-b", net=1.0)
+    grade_b["plan"]["config"]["entry_gate"] = {"thresholds": {"min_setup": 58.0}}
+
+    # сырые отпечатки разные, системный ключ — один
+    assert ebf._fingerprint(a_plus) != ebf._fingerprint(grade_b)
+    assert ebf._system_key(a_plus) == ebf._system_key(grade_b)
+
+
+def test_real_setting_change_still_splits_generations():
+    """А вот настройка системы обязана разводить поколения."""
+    old = _row(1, "fp", net=1.0, adx_min=18.0)
+    new = _row(2, "fp", net=1.0, adx_min=15.0)
+    assert ebf._system_key(old) != ebf._system_key(new)
+
+
 def test_rows_without_result_are_ignored():
     """Открытая сделка не должна попадать в статистику как ноль."""
     assert ebf._money({"closed_net_pnl": None}) is None

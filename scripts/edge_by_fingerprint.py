@@ -61,6 +61,37 @@ def _fingerprint(row: dict) -> str | None:
     return str(fp) if fp else None
 
 
+# Ключи, зависящие от ГРЕЙДА конкретной сделки, а не от настроек системы.
+# `decision_config.snapshot()` кладёт сюда фактические пороги production_gate,
+# и они разные для A+/A/B — так и задумано, иначе постфактум их не восстановить.
+#
+# Но для разреза по ПОКОЛЕНИЯМ это яд: одна конфигурация даёт три отпечатка по
+# числу грейдов, поколения дробятся втрое и перекрываются по времени. Видно на
+# выгрузке 03.08: девять «поколений», из них пять живут одновременно 29.07–02.08,
+# а `min_setup` скачет 65↔58 не по датам, а по грейдам.
+_GRADE_DEPENDENT_PREFIX = "entry_gate.thresholds."
+
+
+def _system_key(row: dict) -> str | None:
+    """Отпечаток НАСТРОЕК СИСТЕМЫ: конфиг без грейд-зависимых порогов.
+
+    Сделки разных грейдов при одинаковых настройках попадают в одну группу —
+    это и есть «поколение конфига», о котором имеет смысл спрашивать
+    «работала ли эта настройка».
+    """
+    cfg = _config(row)
+    if not cfg:
+        return None
+    flat = _flatten(cfg)
+    system = {k: v for k, v in flat.items() if not k.startswith(_GRADE_DEPENDENT_PREFIX)}
+    if not system:
+        return None
+    import hashlib
+
+    blob = json.dumps(system, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
 def _engine(row: dict) -> str:
     """Движок по rationale/причине закрытия — теми же правилами, что в разборах."""
     text = f"{row.get('rationale') or ''} {row.get('entry_reason') or ''}".lower()
@@ -162,7 +193,11 @@ def main() -> int:
                     help="сколько сделок считать достаточным для вывода")
     ap.add_argument("--by-engine", action="store_true",
                     help="дополнительно разложить каждое поколение по движкам")
+    ap.add_argument("--raw-fingerprint", action="store_true",
+                    help="группировать по сырому fingerprint (дробит выборку по грейдам)")
     args = ap.parse_args()
+
+    key_of = _fingerprint if args.raw_fingerprint else _system_key
 
     rows = _load(Path(args.export))
     closed = [r for r in rows if str(r.get("status")) == "closed" and _money(r)]
@@ -170,16 +205,22 @@ def main() -> int:
 
     print(f"Закрытых сделок в выгрузке: {len(closed)}")
 
-    no_fp = [r for r in closed if not _fingerprint(r)]
+    no_fp = [r for r in closed if not key_of(r)]
     if no_fp:
         print(f"  без отпечатка конфига: {len(no_fp)} — сделаны до #decision-config, "
               "в разрез по поколениям не попадут")
 
     groups: dict[str, list[dict]] = {}
     for row in closed:
-        fp = _fingerprint(row)
+        fp = key_of(row)
         if fp:
             groups.setdefault(fp, []).append(row)
+
+    if not args.raw_fingerprint:
+        raw = len({_fingerprint(r) for r in closed if _fingerprint(r)})
+        if raw > len(groups):
+            print(f"  сырых отпечатков {raw} → поколений {len(groups)}: "
+                  "склеены группы, отличавшиеся только порогами грейда")
 
     if not groups:
         print("\nОтпечатков конфига нет — выгрузка старая. Разрез невозможен.")
@@ -213,6 +254,10 @@ def main() -> int:
     flat = {fp: _flatten(_config(groups[fp][0])) for fp in order}
     keys = sorted({k for f in flat.values() for k in f})
     changed = [k for k in keys if len({repr(flat[fp].get(k)) for fp in order}) > 1]
+    if not args.raw_fingerprint:
+        # Пороги грейда внутри поколения различаются от сделки к сделке —
+        # показывать их как «отличие поколений» значит врать.
+        changed = [k for k in changed if not k.startswith(_GRADE_DEPENDENT_PREFIX)]
 
     if not changed:
         print("  настройки идентичны — отпечатки различаются по полю вне config")
