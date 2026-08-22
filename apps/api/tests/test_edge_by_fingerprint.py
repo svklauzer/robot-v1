@@ -116,6 +116,30 @@ def test_grade_thresholds_do_not_split_a_generation():
     assert ebf._system_key(a_plus) == ebf._system_key(grade_b)
 
 
+def test_per_trade_parameters_do_not_split_a_generation():
+    """Скальп и направленная сделка при одном конфиге — одно поколение.
+
+    `decision_config.snapshot()` принимает `is_scalp` и `fee_rate` и кладёт их
+    в тот же словарь, что и глобальные настройки. На выгрузке 03.08 это дало
+    девять «поколений» на 44 сделки, из которых пять жили одновременно, —
+    а реальное отличие было ровно одно (`max_trades_per_day` 3 → 100).
+    """
+    scalp = _row(1, "fp-scalp", net=1.0)
+    scalp["plan"]["config"].update({
+        "sizing": {"max_position_margin_pct": 0.20},
+        "anti_drain": {"min_net_rr_tp1": 0.4},
+        "market": {"market_type": "spot", "taker_fee": 0.002},
+    })
+    trend = _row(2, "fp-trend", net=1.0)
+    trend["plan"]["config"].update({
+        "sizing": {"max_position_margin_pct": 0.13},
+        "anti_drain": {"min_net_rr_tp1": 0.1},
+        "market": {"market_type": "swap", "taker_fee": 0.0005},
+    })
+
+    assert ebf._system_key(scalp) == ebf._system_key(trend)
+
+
 def test_real_setting_change_still_splits_generations():
     """А вот настройка системы обязана разводить поколения."""
     old = _row(1, "fp", net=1.0, adx_min=18.0)

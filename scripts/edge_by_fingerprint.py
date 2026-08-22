@@ -61,15 +61,45 @@ def _fingerprint(row: dict) -> str | None:
     return str(fp) if fp else None
 
 
-# Ключи, зависящие от ГРЕЙДА конкретной сделки, а не от настроек системы.
-# `decision_config.snapshot()` кладёт сюда фактические пороги production_gate,
-# и они разные для A+/A/B — так и задумано, иначе постфактум их не восстановить.
+# Ключи, зависящие от КОНКРЕТНОЙ СДЕЛКИ, а не от настроек системы.
 #
-# Но для разреза по ПОКОЛЕНИЯМ это яд: одна конфигурация даёт три отпечатка по
-# числу грейдов, поколения дробятся втрое и перекрываются по времени. Видно на
-# выгрузке 03.08: девять «поколений», из них пять живут одновременно 29.07–02.08,
-# а `min_setup` скачет 65↔58 не по датам, а по грейдам.
-_GRADE_DEPENDENT_PREFIX = "entry_gate.thresholds."
+# `decision_config.snapshot()` принимает `is_scalp`, `fee_rate`, `leverage` и
+# `gate_thresholds` — параметры сделки — и кладёт их в тот же словарь, что и
+# глобальные настройки. Для разбора ОДНОЙ сделки это верно (нужен полный
+# контекст решения), для разреза по ПОКОЛЕНИЯМ — яд: отпечаток начинает
+# различать сделки, сделанные при одинаковой конфигурации.
+#
+# Замер на выгрузке 03.08: девять «поколений» на 44 сделки, пять живут
+# одновременно 29.07–02.08. После вычета этих ключей осталось РЕАЛЬНОЕ отличие
+# ровно одно — `entry_gate.max_trades_per_day` 3 → 100. Всё прочее оказалось
+# разрезом по (движок × сторона), а не по версиям конфига:
+#
+#   is_scalp   → sizing.max_position_margin_pct, anti_drain.min_net_rr_*,
+#                anti_drain.min_edge_after_costs_usdt
+#   сторона    → market.* (лонг шёл на спот 0.2%, шорт на своп 0.05%)
+#                и производные от неё пороги выхода
+#   грейд      → entry_gate.thresholds.*
+#
+# Разрез по движку и стороне никуда не девается — он остаётся в `--by-engine`,
+# где ему и место, а не подменяет собой поколение конфига.
+_PER_TRADE_PREFIXES: tuple[str, ...] = (
+    "entry_gate.thresholds.",   # пороги грейда
+    "market.",                  # маршрут исполнения выбирается стороной сделки
+)
+_PER_TRADE_KEYS: frozenset[str] = frozenset({
+    # профиль скальпа против направленного (is_scalp)
+    "sizing.max_position_margin_pct",
+    "anti_drain.min_net_rr_tp1",
+    "anti_drain.min_net_rr_tp2",
+    "anti_drain.min_edge_after_costs_usdt",
+    # выводятся из ставки/маршрута этой сделки
+    "exit.net_safe_floor_pct",
+    "exit.breakeven_lock_effective_floor_pct",
+})
+
+
+def _is_per_trade(key: str) -> bool:
+    return key in _PER_TRADE_KEYS or key.startswith(_PER_TRADE_PREFIXES)
 
 
 def _system_key(row: dict) -> str | None:
@@ -83,7 +113,7 @@ def _system_key(row: dict) -> str | None:
     if not cfg:
         return None
     flat = _flatten(cfg)
-    system = {k: v for k, v in flat.items() if not k.startswith(_GRADE_DEPENDENT_PREFIX)}
+    system = {k: v for k, v in flat.items() if not _is_per_trade(k)}
     if not system:
         return None
     import hashlib
@@ -255,9 +285,9 @@ def main() -> int:
     keys = sorted({k for f in flat.values() for k in f})
     changed = [k for k in keys if len({repr(flat[fp].get(k)) for fp in order}) > 1]
     if not args.raw_fingerprint:
-        # Пороги грейда внутри поколения различаются от сделки к сделке —
+        # Параметры сделки внутри поколения различаются от строки к строке —
         # показывать их как «отличие поколений» значит врать.
-        changed = [k for k in changed if not k.startswith(_GRADE_DEPENDENT_PREFIX)]
+        changed = [k for k in changed if not _is_per_trade(k)]
 
     if not changed:
         print("  настройки идентичны — отпечатки различаются по полю вне config")
