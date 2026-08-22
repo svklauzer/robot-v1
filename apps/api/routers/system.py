@@ -159,37 +159,35 @@ def system_capital_envelopes():
         shares = envelopes.effective_shares(db=db)
         configured = envelopes.configured_shares()
 
-        used: dict[str, float] = {}
-        try:
-            from services.exposure_guard import ExposureGuard
-
-            bot = db.query(Bot).first()
-            if bot is not None:
-                used[envelopes.DIRECTIONAL] = float(
-                    ExposureGuard().used_margin(db, bot.id) or 0.0
-                )
-        except Exception:  # noqa: BLE001
-            pass
-
         contours = []
+        total_used = 0.0
         for key, label in (
             (envelopes.DIRECTIONAL, "Направленные (тренд/скальп/range/CRT)"),
             (envelopes.ARB, "Funding arb"),
             (envelopes.GRID, "Grid"),
         ):
             pct = float(shares.get(key, 0.0))
+            envelope = round(equity * pct / 100.0, 2)
+            used = envelopes.used_usdt(key, db=db)
+            if used is not None:
+                total_used += used
             contours.append({
                 "contour": key,
                 "label": label,
                 "configured_pct": configured.get(key, 0.0),
                 "effective_pct": pct,
-                "envelope_usdt": round(equity * pct / 100.0, 2),
-                "used_usdt": round(used.get(key, 0.0), 2) if key in used else None,
+                "envelope_usdt": envelope,
+                "used_usdt": round(used, 2) if used is not None else None,
+                # Превышение конверта фактом — сигнал, что контур занял больше,
+                # чем ему отведено (возможен, если позиции открыты до правки долей).
+                "over_envelope": bool(used is not None and used > envelope + 0.01),
                 "note": (shares.get("_detail") or {}).get(key),
             })
 
         return {
             "equity_usdt": round(equity, 2),
+            "used_total_usdt": round(total_used, 2),
+            "used_total_pct": round(total_used / equity * 100.0, 2) if equity > 0 else 0.0,
             "configured_total_pct": round(sum(configured.values()), 2),
             "effective_total_pct": round(
                 sum(float(shares.get(k, 0.0))

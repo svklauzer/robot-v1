@@ -160,7 +160,16 @@ class GridStore:
         with _LOCK:
             active = list(self.cycles.values())
             equity = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
-            envelope = round(equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0, 2)
+            # Конверт берём из общего источника, а не по своему проценту:
+            # GRID_MAX_USED_MARGIN_PCT жил рядом с CAPITAL_ENVELOPE_GRID_PCT и
+            # уже расходился с ним (10.0 против 5.0), из-за чего /grid/state
+            # показывал не тот карман, которым пользуется движок.
+            try:
+                from services import capital_envelopes as envelopes
+
+                envelope = round(envelopes.envelope_usdt(envelopes.GRID, equity=equity), 2)
+            except Exception:  # noqa: BLE001
+                envelope = round(equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0, 2)
             used = self.grid_used_margin()
             return {
                 "enabled": self.enabled,

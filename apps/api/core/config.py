@@ -1326,6 +1326,18 @@ class Settings(BaseSettings):
     CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0
     CAPITAL_ENVELOPE_ARB_PCT: float = 20.0
     CAPITAL_ENVELOPE_GRID_PCT: float = 5.0
+
+    # Сводится ли ФАКТИЧЕСКАЯ занятость маржи по всем контурам в одном месте.
+    # (#unified-margin-2026-08-21) РЕАЛИЗОВАНО: `capital_envelopes.used_usdt()`
+    # считает направленные (Signal через exposure_guard), арбитраж (открытые
+    # хеджи × ~2 нотионала — спотовая нога без плеча) и сетку (маржа исполненных
+    # уровней активных корзин). Полосы загрузки на «Здоровье» честны для всех
+    # трёх, `/system/capital-envelopes` отдаёт суммарную занятость.
+    #
+    # Флаг описывает СОСТОЯНИЕ КОДА, а не желание запуститься: если учёт снова
+    # станет неполным (новый контур, потребляющий маржу), его надо вернуть в
+    # false, и production_blockers() снова закроет live.
+    UNIFIED_MARGIN_ACCOUNTING: bool = True
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 2.0
@@ -2032,6 +2044,39 @@ class Settings(BaseSettings):
                 blockers.append("LIVE_MAX_LEVERAGE > 1 requires ENABLE_FUTURES=true")
         if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
             blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
+
+        # (#capital-envelopes-2026-08-21) Конверты ограничивают ОБЕЩАНИЯ, но не
+        # видят ФАКТ. `exposure_guard.used_margin()` перебирает только Signal и
+        # не знает ни о FundingArbPosition, ни о корзинах сетки — именно поэтому
+        # три контура и разъехались на ~117% депозита.
+        #
+        # В бумаге безвредно: эквити — константа, никто ни во что не упирается.
+        # В live это реальные деньги: контуры будут гонкой отъедать один баланс,
+        # и отказ по марже получит не «лишний», а тот, кто открылся последним,
+        # то есть случайный. Пока занятость не сводится в одном месте, включать
+        # live с несколькими активными контурами нельзя.
+        #
+        # Снимается реализацией общего учёта (см. capital_envelopes.used_usdt),
+        # после чего флаг переводится в true ОСОЗНАННО, а не «чтобы не мешал».
+        if self.ENABLE_LIVE_ORDERS and not self.UNIFIED_MARGIN_ACCOUNTING:
+            parallel = [
+                name for name, on in (
+                    ("funding arb", self.ENABLE_FUNDING_ARB),
+                    ("grid", self.GRID_ENABLED and not self.GRID_KILL_SWITCH_ENABLED),
+                    ("cross arb", self.CROSS_FARB_ENABLED),
+                ) if on
+            ]
+            if parallel:
+                blockers.append(
+                    "live orders with parallel capital consumers ("
+                    + ", ".join(parallel)
+                    + ") require unified margin accounting: used_margin() counts "
+                    "only Signal rows, so arb hedges and grid baskets are invisible "
+                    "and contours race for the same balance. Implement "
+                    "capital_envelopes.used_usdt for every contour and set "
+                    "UNIFIED_MARGIN_ACCOUNTING=true, or disable the parallel "
+                    "consumers for the live ramp-up"
+                )
 
         return blockers
 

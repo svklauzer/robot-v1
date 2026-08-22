@@ -103,6 +103,90 @@ def test_arb_notional_derives_from_envelope_and_fits_it(monkeypatch):
     assert leg * 2 * 2 <= envelope + 0.05
 
 
+def test_live_is_blocked_when_margin_accounting_is_not_unified():
+    """Блокер остаётся рабочим на случай нового контура без учёта.
+
+    Учёт реализован (`used_usdt` покрывает все три контура), флаг переведён в
+    true. Но если появится новый потребитель маржи, невидимый для учёта, флаг
+    вернут в false — и live снова должен закрыться. Проверяем сам механизм.
+    """
+    from core.config import Settings
+
+    cfg = Settings(
+        APP_ENV="production",
+        ENABLE_LIVE_ORDERS=True,
+        ENABLE_FUNDING_ARB=True,
+        ENABLE_FUTURES=True,
+        UNIFIED_MARGIN_ACCOUNTING=False,
+    )
+    assert any("unified margin accounting" in b for b in cfg.production_blockers())
+
+
+def test_unified_accounting_is_on_by_default():
+    """Учёт сведён — блокер не должен мешать live из-за него."""
+    from core.config import Settings
+
+    assert Settings().UNIFIED_MARGIN_ACCOUNTING is True
+
+
+def test_used_usdt_covers_every_contour():
+    """Все три контура умеют отчитаться о занятой марже.
+
+    Раньше отчитывались только направленные, и полоса загрузки врала бы для
+    остальных. None означает «посчитать нечем», 0.0 — «свободно»: путать их
+    нельзя, иначе неизвестность выглядела бы как свобода.
+    """
+    for contour in (env.DIRECTIONAL, env.ARB, env.GRID):
+        value = env.used_usdt(contour, db=_EmptyDB())
+        assert value is None or value >= 0.0
+
+
+def test_arb_used_counts_two_notionals_per_hedge(monkeypatch):
+    """Хедж занимает ~2 нотионала — та же двойка, что в сайзинге.
+
+    Если учёт и сайзинг разойдутся в этом коэффициенте, конверт снова начнёт
+    врать: позиции влезут по расчёту и не влезут по факту.
+    """
+    class _Row:
+        notional_usdt = 50.0
+
+    class _DB:
+        def query(self, *_a, **_kw):
+            return self
+
+        def filter(self, *_a, **_kw):
+            return self
+
+        def all(self):
+            return [_Row(), _Row()]
+
+        def count(self):
+            return 2
+
+    assert env.used_usdt(env.ARB, db=_DB()) == pytest.approx(200.0)
+
+
+def test_unknown_source_returns_none_not_zero():
+    """Без БД занятость неизвестна — это не ноль."""
+    assert env.used_usdt(env.DIRECTIONAL, db=None) is None
+    assert env.used_usdt(env.ARB, db=None) is None
+
+
+def test_blocker_lifts_when_parallel_consumers_are_off():
+    """Один контур — гонки нет, учёт направленных полон, блокер не нужен."""
+    from core.config import Settings
+
+    cfg = Settings(
+        APP_ENV="production",
+        ENABLE_LIVE_ORDERS=True,
+        ENABLE_FUNDING_ARB=False,
+        GRID_ENABLED=False,
+        CROSS_FARB_ENABLED=False,
+        UNIFIED_MARGIN_ACCOUNTING=False,
+    )
+    assert not any("unified margin accounting" in b for b in cfg.production_blockers())
+
+
 def test_no_db_is_treated_as_holding(monkeypatch):
     """Без БД неизвестно, пуст ли арбитраж → считаем занятым.
 

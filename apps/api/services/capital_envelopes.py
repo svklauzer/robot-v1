@@ -132,6 +132,62 @@ def effective_shares(db=None) -> dict[str, float]:
     return shares
 
 
+def used_usdt(contour: str, db=None, bot_id: int | None = None) -> float | None:
+    """ФАКТИЧЕСКИ занятая контуром маржа. None — посчитать нечем.
+
+    (#unified-margin-2026-08-21) Конверты ограничивали ОБЕЩАНИЯ, но факт
+    сводить было негде: `exposure_guard.used_margin()` перебирает только
+    `Signal`, поэтому хеджи арбитража и корзины сетки были невидимы — ровно
+    поэтому три контура и разъехались на ~117% депозита.
+
+    Возвращаем None, а не 0.0, когда источник недоступен: ноль означал бы
+    «свободно», и полоса загрузки соврала бы в безопасную сторону.
+    """
+    if contour == DIRECTIONAL:
+        if db is None:
+            return None
+        try:
+            from models.bot import Bot
+            from services.exposure_guard import ExposureGuard
+
+            if bot_id is None:
+                bot = db.query(Bot).first()
+                if bot is None:
+                    return None
+                bot_id = bot.id
+            return round(float(ExposureGuard().used_margin(db, bot_id) or 0.0), 6)
+        except Exception:  # noqa: BLE001
+            return None
+
+    if contour == ARB:
+        if db is None:
+            return None
+        try:
+            from models.funding_arbitrage import FundingArbPosition
+
+            rows = db.query(FundingArbPosition).filter(
+                FundingArbPosition.status == "open"
+            ).all()
+            # Хедж занимает ~2 нотионала: спотовая нога фондируется целиком
+            # (плеча на ней нет) плюс маржа свопа. Та же двойка, что в
+            # arb_leg_notional — иначе учёт и сайзинг разошлись бы.
+            return round(sum(float(r.notional_usdt or 0.0) * 2.0 for r in rows), 6)
+        except Exception:  # noqa: BLE001
+            return None
+
+    if contour == GRID:
+        try:
+            from services.grid_store import GridStore
+
+            # Считает маржу ИСПОЛНЕННЫХ уровней активных циклов — незалитые
+            # уровни капитал ещё не занимают.
+            return round(float(GridStore().grid_used_margin() or 0.0), 6)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return None
+
+
 def envelope_pct(contour: str, db=None) -> float:
     return float(effective_shares(db).get(contour, 0.0))
 

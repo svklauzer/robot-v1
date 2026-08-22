@@ -283,6 +283,18 @@ export default function HealthPage() {
               <div className="text-xl font-semibold text-emerald-200">
                 {formatNumber(envelopes.equity_usdt)} USDT
               </div>
+              {/* Суммарная занятость по ВСЕМ контурам — то, чего раньше не было
+                  видно нигде: used_margin() считал только направленные. */}
+              <div className="mt-1 text-xs text-emerald-100/50">
+                занято {formatNumber(envelopes.used_total_usdt)} USDT
+                <span
+                  className={
+                    envelopes.used_total_pct > 100 ? "ml-1 text-red-300" : "ml-1 text-emerald-100/40"
+                  }
+                >
+                  ({envelopes.used_total_pct}%)
+                </span>
+              </div>
             </div>
           </div>
 
@@ -332,19 +344,30 @@ export default function HealthPage() {
                     </span>
                   </div>
 
-                  {/* Занятость показываем только там, где её умеем считать:
-                      used_margin() перебирает Signal, то есть направленные. */}
-                  {usedPct != null && (
+                  {/* Занятость есть у всех трёх контуров: used_usdt() считает
+                      направленные (Signal), хеджи арбитража (×2 нотионала) и
+                      маржу исполненных уровней сетки. null — посчитать нечем,
+                      и это НЕ ноль: пустая полоса означала бы «свободно». */}
+                  {usedPct != null ? (
                     <div className="mt-2">
                       <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
                         <div
-                          className="h-full rounded-full bg-emerald-500"
+                          className={`h-full rounded-full ${
+                            c.over_envelope ? "bg-red-500" : "bg-emerald-500"
+                          }`}
                           style={{ width: `${usedPct}%` }}
                         />
                       </div>
                       <div className="mt-1 text-[11px] text-emerald-100/50">
                         занято {formatNumber(c.used_usdt)} из {formatNumber(c.envelope_usdt)} USDT
+                        {c.over_envelope && (
+                          <span className="ml-1 text-red-300">— превышает конверт</span>
+                        )}
                       </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-emerald-100/30">
+                      занятость посчитать нечем
                     </div>
                   )}
 
