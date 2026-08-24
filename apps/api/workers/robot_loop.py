@@ -660,28 +660,29 @@ class RobotLoop:
                     db.flush()
                 continue
 
-            # (#tp-reachability-2026-08-03) Достижима ли цель. Замер по 342
-            # закрытым: у скальпа TP1 стоит на 0.8% при медианном ходе 0.391% —
-            # до цели не доходят ~82% сделок. Само по себе это не смертельно,
-            # смертельно то, что net_rr_tp1/tp2 считаются ОТ ЭТОЙ ЦЕЛИ, и гейт
-            # min_rr_tp2 пропускает сделку по геометрии, которой не существует.
-            _tp1_dist_pct = None
-            try:
-                if entry_price and tp1:
-                    _tp1_dist_pct = abs(float(tp1) - float(entry_price)) / float(entry_price) * 100.0
-            except (TypeError, ValueError, ZeroDivisionError):
-                _tp1_dist_pct = None
+            # (#tp-reachability-2026-08-03, переписан 24.08.2026) Бывает ли
+            # заявленная награда достаточно часто, чтобы заявленный RR окупался.
+            # Гейт входа min_rr_tp2 пропускает сделку по геометрии — если до TP2
+            # почти никогда не доходят, геометрии не существует.
+            #
+            # Проверяем TP2, а не TP1: раньше проверяли точку частичной фиксации,
+            # а решение принимается по плечу TP2. Дистанции считаем от того же
+            # entry_price, от которого план считал RR.
+            _tp1_dist_pct = self._dist_pct(entry_price, tp1)
+            _tp2_dist_pct = self._dist_pct(entry_price, tp2)
             _tp_reach = tp_reachability.evaluate(
                 symbol=symbol,
                 regime=str(getattr(result, "regime", "") or ""),
                 tp1_dist_pct=_tp1_dist_pct,
+                tp2_dist_pct=_tp2_dist_pct,
+                net_rr_tp2=getattr(plan, "net_rr_tp2", None),
             )
             if not _tp_reach.allowed:
                 self.decisions.record(
                     db,
                     symbol=symbol,
                     status="blocked",
-                    decision="tp1_beyond_typical_move",
+                    decision="tp2_reached_too_rarely",
                     action=result.action,
                     regime=str(getattr(result, "regime", "") or ""),
                     radar_state=getattr(result, "radar_state", None),
@@ -1366,6 +1367,21 @@ class RobotLoop:
             return {**payload, "allowed": False, "reason": "symbol_policy_rr_tp2_too_low"}
 
         return payload
+
+    @staticmethod
+    def _dist_pct(entry_price, level) -> float | None:
+        """Дистанция до уровня в процентах от входа.
+
+        Считается от того же `entry_price`, от которого план считал RR: гейт
+        достижимости сравнивает частоту достижения с порогом, выведенным из
+        этого RR, и брать разные базы для двух половин одного сравнения нельзя.
+        """
+        try:
+            if entry_price and level:
+                return abs(float(level) - float(entry_price)) / float(entry_price) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return None
 
     def _round_price(self, symbol: str, price: float) -> float:
         """Цена в точность биржи. Уровень, пересчитанный статистикой, обязан

@@ -201,8 +201,8 @@ services:
       # Достижимость цели
       - key: TP_REACH_MODE
         value: enforce
-      - key: TP_REACH_MAX_RATIO
-        value: "1.5"
+      - key: TP_REACH_EV_MARGIN
+        value: "1.0"
       - key: TP_REACH_MIN_SAMPLE
         value: "15"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES

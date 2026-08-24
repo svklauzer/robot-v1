@@ -147,6 +147,29 @@ def test_real_setting_change_still_splits_generations():
     assert ebf._system_key(old) != ebf._system_key(new)
 
 
+def test_tp1_partial_leg_is_counted():
+    """Половина, снятая на TP1, обязана попасть в результат сделки.
+
+    `closed_net_pnl` — только остаток позиции. Частичное закрытие срабатывает
+    ТОЛЬКО у сделок, дошедших до TP1, то есть у победителей, поэтому его
+    пропуск занижал одну сторону выборки систематически, а не случайно.
+    XRP #431: 3.2778 в остатке + 0.5716 на TP1 = 3.8494.
+    """
+    row = _row(1, "fp", net=3.2778, cost=0.3414)
+    row["plan"]["tp1_partial"] = {"net_pnl": 0.5716, "total_cost": 0.1700}
+
+    net, gross = ebf._money(row)
+    assert net == pytest.approx(3.8494)
+    assert gross == pytest.approx(3.8494 + 0.5114)
+
+
+def test_trade_without_partial_is_unchanged():
+    """Сделка без TP1 не должна ничего приобретать от правки."""
+    net, gross = ebf._money(_row(1, "fp", net=-1.8369, cost=0.3404))
+    assert net == pytest.approx(-1.8369)
+    assert gross == pytest.approx(-1.4965)
+
+
 def test_rows_without_result_are_ignored():
     """Открытая сделка не должна попадать в статистику как ноль."""
     assert ebf._money({"closed_net_pnl": None}) is None

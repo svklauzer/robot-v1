@@ -159,7 +159,10 @@ def snapshot(
             # (#tp-reachability-2026-08-03) Порог достижимости цели — тоже ось,
             # меняющая выборку.
             "tp_reach_mode": str(_g("TP_REACH_MODE", "shadow")).lower(),
-            "tp_reach_max_ratio": float(_g("TP_REACH_MAX_RATIO", 0)),
+            # 24.08.2026: `tp_reach_max_ratio` снят вместе с самим отношением.
+            # Порог частоты выводится из RR сделки и осью конфига не является —
+            # осью остаётся запас к нему.
+            "tp_reach_ev_margin": float(_g("TP_REACH_EV_MARGIN", 1.0)),
             "setup_reach_enabled": bool(_g("SETUP_REACH_ENABLED", False)),
             "regime_exp_sizing_enabled": bool(_g("REGIME_EXP_SIZING_ENABLED", False)),
         },

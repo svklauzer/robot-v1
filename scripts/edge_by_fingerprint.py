@@ -149,7 +149,20 @@ def _flatten(cfg: dict, prefix: str = "") -> dict:
 
 
 def _money(row: dict) -> tuple[float, float] | None:
-    """(чистый, валовый). None — сделка без результата."""
+    """(чистый, валовый) по ВСЕЙ сделке, включая частичное закрытие на TP1.
+
+    None — сделка без результата.
+
+    `closed_net_pnl` покрывает только ОСТАТОК позиции. Половина, снятая на TP1,
+    книжится отдельной строкой `plan.tp1_partial` и в поля `closed_*` не входит:
+    XRP #431 — 3.2778 в остатке и ещё 0.5716 на TP1, всего 3.8494.
+
+    Пропуск этой строки не был шумом: частичное закрытие срабатывает ТОЛЬКО у
+    сделок, дошедших до TP1, то есть у победителей. Систематическое занижение
+    одной стороны выборки — ровно тот способ получить «edge≈0» на данных, где
+    его нет или есть. На разрезе 24.08 (10 сделок) правка меняет чистый
+    +0.72 → +2.86, валовый на сделку +0.33 → +0.61.
+    """
     net = row.get("closed_net_pnl")
     if net is None:
         return None
@@ -158,6 +171,14 @@ def _money(row: dict) -> tuple[float, float] | None:
         cost = float(row.get("closed_total_cost") or 0.0)
     except (TypeError, ValueError):
         return None
+
+    partial = _plan(row).get("tp1_partial") or {}
+    try:
+        net += float(partial.get("net_pnl") or 0.0)
+        cost += float(partial.get("total_cost") or 0.0)
+    except (TypeError, ValueError):
+        pass
+
     return net, net + cost
 
 

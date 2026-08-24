@@ -85,7 +85,10 @@ def test_render_blueprint_enforces_capital_leak_entry_gates():
     assert env["TREND_TRIGGER_MODE"] == "enforce"
     assert env["TZ_MODE"] == "enforce"
     assert env["TP_REACH_MODE"] == "enforce"
-    assert env["TP_REACH_MAX_RATIO"] == "1.5"
+    # 24.08.2026: TP_REACH_MAX_RATIO снят — он и создавал безусловный замок
+    # (0.6 / 1.5 = 0.4%: пара с медианой ниже блокировалась навсегда).
+    assert "TP_REACH_MAX_RATIO" not in env
+    assert env["TP_REACH_EV_MARGIN"] == "1.0"
     assert env["REGIME_EXP_SIZING_ENABLED"] == "false"
     assert env["DYNAMIC_MARGIN_FAIR_SHARE"] == "false"
     assert env["DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE"] == "1.0"
