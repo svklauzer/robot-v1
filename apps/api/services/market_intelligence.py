@@ -1400,6 +1400,34 @@ class MarketIntelligenceEngine:
         trend_score = float(scores.get("trend", 0))
         volume_score = float(scores.get("volume", 0))
 
+        # (#short-blindness-2026-08-26) `total` НАПРАВЛЕННЫЙ, а не «качество».
+        # В `_score_context` тренд даёт 75 вверх / 25 вниз, импульс 70 / 30 —
+        # шкала симметрична вокруг 50. Значит одинаково сильный даунтренд даёт
+        # total на 23 пункта НИЖЕ, чем такой же аптренд:
+        #
+        #   идеальный аптренд:   75*0.30 + 70*0.20 + 50*0.20 + 50*0.20 + 50*0.10 = 61.5
+        #   идеальный даунтренд: 25*0.30 + 30*0.20 + 50*0.20 + 50*0.20 + 50*0.10 = 38.5
+        #
+        # Порог `total >= 58` применялся к ОБЕИМ сторонам «для симметрии» — и
+        # делал шорт через эти ветки недостижимым в принципе. Шорты доживали
+        # только через строгую ветку (4h И 1h вниз), где порога по total нет.
+        # Отсюда двое суток без сделок 24–26.08: 4h у XRP/ADA ещё «mixed» после
+        # роста, а 1h/15m/5m уже вниз (ADX 33 и 43, DI −19 и −20) — кандидат мог
+        # родиться только длинным, и его законно резал KAMA/DI.
+        #
+        # Зеркалим НАПРАВЛЕННУЮ часть, оставляя ненаправленную (объём, структура,
+        # волатильность) как есть. Ни одной новой константы: порог тот же,
+        # формула та же, отражены только тренд и импульс. Длинная сторона не
+        # меняется вовсе. Ср. `_detect_regime`, где то же число читается
+        # направленно и правильно: ≥62 вверх, ≤42 вниз.
+        short_total_score = (
+            (100.0 - trend_score) * 0.30
+            + (100.0 - float(scores.get("momentum", 0))) * 0.20
+            + volume_score * 0.20
+            + float(scores.get("structure", 0)) * 0.20
+            + float(scores.get("volatility", 0)) * 0.10
+        )
+
         # Направление задают старшие ТФ (4h+1h). Импульс РАЗРЕШАЕТ и
         # «перегрет/перепродан»: сильный тренд по нижним ТФ именно такой, а
         # тайминг входа (откат) решает тренд-контур ниже (TZ Stoch/KAMA), не
@@ -1440,7 +1468,7 @@ class MarketIntelligenceEngine:
                 and m5_trend in ("trend_down", "flat", "mixed")
                 and m15_momentum in _short_mom
                 and m5_momentum in _short_mom
-                and total_score >= _min_total
+                and short_total_score >= _min_total
                 and trend_score <= 50.0 - _trend_margin
             ):
                 return "trend_down_candidate"
@@ -1451,7 +1479,7 @@ class MarketIntelligenceEngine:
         if trend_up_votes >= 3 and total_score >= _vote_min:
             return "trend_up_candidate"
 
-        if trend_down_votes >= 3 and total_score >= _vote_min:
+        if trend_down_votes >= 3 and short_total_score >= _vote_min:
             return "trend_down_candidate"
 
         # Для learning не называем всё flat слишком рано.
