@@ -98,7 +98,7 @@ def test_gate_reads_trend_not_ema200():
     import inspect
     import re
 
-    src = inspect.getsource(MarketIntelligenceEngine._evaluate_setup_quality)
+    src = inspect.getsource(MarketIntelligenceEngine._score_setup_quality)
     block = re.search(r"HTF_ALIGN_ENABLED.*?htf_against_short_4h_up", src, re.S)
 
     assert block is not None, "блок HTF-выравнивания не найден"

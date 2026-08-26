@@ -30,9 +30,9 @@ def test_tz_context_carries_atr():
     """`_tz_context` обязан класть atr — иначе адаптивный стоп мёртв."""
     import inspect
 
-    from services.signal_lifecycle import SignalLifecycleService
+    from services.signal_lifecycle import SignalLifecycleManager
 
-    src = inspect.getsource(SignalLifecycleService._tz_context)
+    src = inspect.getsource(SignalLifecycleManager._tz_context)
     assert '"atr"' in src, "ключ atr пропал — адаптивный стоп снова отключится"
     assert "atr14" in src, "atr должен браться из контекста таймфрейма"
 
