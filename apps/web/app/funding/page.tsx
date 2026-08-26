@@ -51,6 +51,25 @@ export default function FundingArbPage() {
     () => opportunities.filter((item) => item.status === "candidate"),
     [opportunities]
   );
+
+  /* (#funding-arb-off-2026-08-26) Выключен ли контур — берём из ОТВЕТА бэкенда,
+     а не из хардкода в вёрстке.
+     `funding_arbitrage.evaluate` при ENABLE_FUNDING_ARB=false ставит каждому
+     снимку status="disabled" и reject_reason="funding_arb_disabled". Значит
+     страница показывает фактическое состояние ключа, а не наше представление
+     о нём: перевернут ключ обратно — плашка исчезнет сама.
+
+     Разница не косметическая. Ровно на этом обжигались 26.08 с
+     TZ_USE_DYNAMIC_ATR_STOPS: настройка стояла true, на странице конфига
+     светилась действующей, а входа у неё не было и адаптивный стоп не работал
+     ни разу. Интерфейс, утверждающий состояние независимо от кода, — это тот же
+     дефект, только теперь его видно раньше. */
+  const tradingOff = useMemo(
+    () =>
+      opportunities.length > 0 &&
+      opportunities.every((item) => item.status === "disabled"),
+    [opportunities]
+  );
   const openPositions = useMemo(
     () => positions.filter((item) => item.status === "open"),
     [positions]
@@ -141,6 +160,26 @@ export default function FundingArbPage() {
             Spot long + USDT perpetual short. Доход: funding rate (8h периоды).
             Риск: basis change. Авто-открытие paper позиций при положительном net yield.
           </p>
+
+          {tradingOff && (
+            <div className="mt-3 max-w-3xl rounded-xl border border-slate-600/60 bg-slate-800/50 px-3.5 py-2.5">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                <span className="rounded bg-slate-700/70 px-1.5 py-0.5 text-[10px] font-normal">
+                  торговля выкл · только наблюдение
+                </span>
+                ENABLE_FUNDING_ARB = false
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
+                Сканирование и история живы, новые позиции не открываются.
+                Причина отключения — не пороги, а комиссия спота: круг
+                спот+своп стоит 0.5% (из них 0.4% спот), поэтому при базовой
+                ставке HTX 0.0100%/8ч окупаемость наступает на 50-м периоде,
+                а удержание ограничено 30-ю. Сделка не может выйти в плюс ни
+                при каком развитии. Рычаг здесь — тариф комиссий, а не
+                настройки арбитража.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">

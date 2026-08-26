@@ -22,7 +22,12 @@ const GROUPS: { title: string; items: Item[] }[] = [
       { href: "/signals", label: "Сигналы" },
       { href: "/positions", label: "Позиции" },
       { href: "/intelligence", label: "Решения" },
-      { href: "/funding", label: "Funding Arb" },
+      // (#funding-arb-off-2026-08-26) ENABLE_FUNDING_ARB=false. Отключён не по
+      // порогам, а по комиссии: круг спот+своп 0.5% при базовой ставке HTX
+      // 0.0100%/8ч окупается на 50-м периоде, а удержание ограничено 30-ю.
+      // Метка здесь СТАТИЧЕСКАЯ — сама страница /funding определяет состояние
+      // из ответа бэкенда и является источником правды.
+      { href: "/funding", label: "Funding Arb", off: "торговля выкл · только наблюдение" },
       // (#regimes-back-on-2026-07-28) Снова живые: причины убытков найдены и
       // исправлены в логике, а не заглушены выключателем.
       { href: "/grid", label: "Grid" },
