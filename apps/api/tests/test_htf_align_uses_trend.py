@@ -94,13 +94,25 @@ def test_price_above_ema200_alone_is_not_a_trend():
 
 
 def test_gate_reads_trend_not_ema200():
-    """Страховка от возврата: в коде гейта не должно остаться ema200."""
+    """Страховка от возврата: гейт не должен ЧИТАТЬ ema200.
+
+    Проверяем исполняемые строки, а не текст целиком: упоминание ema200 в
+    комментарии — это запись о том, почему правило меняли, и она должна
+    остаться. Первая версия теста падала на собственном объяснении.
+    """
     import inspect
     import re
 
     src = inspect.getsource(MarketIntelligenceEngine._score_setup_quality)
     block = re.search(r"HTF_ALIGN_ENABLED.*?htf_against_short_4h_up", src, re.S)
-
     assert block is not None, "блок HTF-выравнивания не найден"
-    assert "ema200" not in block.group(0)
-    assert 'trend_down' in block.group(0) and 'trend_up' in block.group(0)
+
+    code = "\n".join(
+        line for line in block.group(0).splitlines()
+        if not line.strip().startswith("#")
+    )
+
+    assert "ema200" not in code, "гейт снова читает ema200 вместо trend"
+    assert "last_close" not in code, "цена больше не участвует в решении"
+    assert '"trend"' in code, "решение принимается по полю trend"
+    assert "trend_down" in code and "trend_up" in code
