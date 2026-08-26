@@ -1974,17 +1974,32 @@ class MarketIntelligenceEngine:
             and decision == "approve"
             and not is_reversal
         ):
+            # (#htf-align-trend-2026-08-26) Спрашиваем УЖЕ ВЫЧИСЛЕННЫЙ `trend`
+            # старшего ТФ, а не собственное определение через цену vs EMA200.
+            #
+            # Раньше здесь стояло `_htf_up = last_close > ema200`, и это спорило
+            # с полем `trend` того же контекста: 26.08 у XRP, ADA, AVAX и TRX
+            # 4h-тренд был `mixed`, то есть аптренда нет, — а гейт считал его
+            # аптрендом и запрещал шорт. Ровно тот же дефект, что с `total` и с
+            # медианой MFE: две величины про одну вещь, и берётся не та.
+            #
+            # Цена выше EMA200 на 4h — это «выше средней за ~33 дня», а не
+            # «тренд вверх». После крупного роста условие держится месяцами: на
+            # 26.08 цена была выше 4h EMA200 у ВСЕХ семи символов (от +1.6% у TRX
+            # до +22.9% у XRP), то есть шорт был структурно невозможен — при том
+            # что 1h уже разворачивался (ADX 33 у XRP, 43 у ADA, DI ≈ −20).
+            #
+            # Теперь блокируем только против ЯВНОГО тренда старшего ТФ. `mixed`
+            # и `flat` больше не считаются направлением: неопределённость на 4h
+            # — не повод запрещать сделку, которую подтверждают 1h и 15m.
             _htf = self._tf(contexts, str(getattr(settings, "HTF_ALIGN_TF", "4h")))
-            _hpx = float(self._ctx_value(_htf, "last_close", 0) or 0)
-            _he200 = float(self._ctx_value(_htf, "ema200", 0) or 0)
-            if _hpx > 0 and _he200 > 0:
-                _htf_up = _hpx > _he200
-                if action == "long" and not _htf_up:
-                    decision = "wait"
-                    comment = "htf_against_long_4h_down"
-                elif action == "short" and _htf_up:
-                    decision = "wait"
-                    comment = "htf_against_short_4h_up"
+            _htf_trend = str(self._ctx_value(_htf, "trend", "") or "")
+            if action == "long" and _htf_trend == "trend_down":
+                decision = "wait"
+                comment = "htf_against_long_4h_down"
+            elif action == "short" and _htf_trend == "trend_up":
+                decision = "wait"
+                comment = "htf_against_short_4h_up"
 
         # Позиция в диапазоне якорного ТФ (0=низ, 1=верх): short только в верхней
         # части, long только в нижней. Range-концепт — reversal и ТРЕНД мимо: в

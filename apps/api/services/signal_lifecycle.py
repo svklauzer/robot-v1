@@ -989,6 +989,27 @@ class SignalLifecycleManager:
                 "adx_peak": peak or None,
                 "obv": float(getattr(ctx, "obv", 0.0) or 0.0) or None,
                 "obv_ema20": float(getattr(ctx, "obv_ema20", 0.0) or 0.0) or None,
+                # (#atr-never-reached-the-exit-2026-08-26) БЕЗ ЭТОЙ СТРОКИ
+                # адаптивный стоп не работал вовсе.
+                #
+                # `exit_policy` зовёт `tz_trend_exit.evaluate(atr=tz_context.get("atr"))`,
+                # а этот словарь ключа "atr" не содержал — значит приходил None,
+                # и условие `if use_atr and atr_v is not None` НИКОГДА не
+                # выполнялось. Буфер под KAMA всегда брался из legacy-ветки:
+                # фиксированные `TZ_EXIT_KAMA_BUFFER_PCT=0.5%` на любой
+                # инструмент.
+                #
+                # При этом `TZ_USE_DYNAMIC_ATR_STOPS=true` и
+                # `TZ_EXIT_KAMA_BUFFER_ATR_MULT=2.0` закреплены в блупринте и
+                # показываются на странице конфига как действующие. Настройка
+                # включена, значение подставлено, вход отсутствует — худший вид
+                # мёртвого ключа: его не найти проверкой на фантомные имена.
+                #
+                # Во что обходилось: 0.5% — это 1.6 ATR для TRX (ATR 1h 0.32%)
+                # и 0.45 ATR для XRP (1.12%). На одном буфер вдвое шире нужного,
+                # на другом вдвое уже, и KAMA-выход срабатывал на обычном шуме:
+                # XRP #423 закрыт `tz_kama` на −1.26%, AVAX #422 на −1.01%.
+                "atr": float(getattr(ctx, "atr14", 0.0) or 0.0) or None,
             }
         except Exception:  # noqa: BLE001
             # Нет приборов — нет выхода по приборам. Возврат None роняет решение
