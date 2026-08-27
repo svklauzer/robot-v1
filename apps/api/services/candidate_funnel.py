@@ -37,12 +37,27 @@ KNOWN_BLOCKING_DECISIONS = {
     "short_candidate_but_shorts_disabled",
     "grade_c_learning_only_not_publishable",
     "grade_c_blocked_before_signal_create",
+    "grade_c_learning_only",
     "a_rr_tp1_too_low",
     "a_plus_rr_tp1_too_low",
     "b_priority_too_low",
     "symbol_cooldown_failed_setup_streak",
     "reentry_cooldown_same_side",
     "initial_telegram_publish_failed",
+    # (#audit-2026-08-27) Список не обновлялся с момента добавления (29.05) —
+    # новые гейты появлялись и добавлялись в decision_counts честно, но не
+    # сюда, поэтому /intelligence/funnel показывал древний net_rr_too_low
+    # вместо реально доминирующих причин. Добавлены коды из живых блокировок:
+    # depth-гейт (12.06), переписанный tp_reachability (24.08),
+    # extended_from_ema20 (trend_trigger.py) и symbol_policy_* гейт.
+    "blocked_depth_gate",
+    "tp2_reached_too_rarely",
+    "extended_from_ema20",
+    "extended_from_ema20_shadow",
+    "symbol_policy_confidence_too_low",
+    "symbol_policy_rr_tp1_too_low",
+    "symbol_policy_rr_tp2_too_low",
+    "symbol_policy_publish_blocked",
 }
 
 

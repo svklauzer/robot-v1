@@ -69,6 +69,17 @@ const IMPORTANT_DECISIONS = [
   // lifecycle: новые выходы
   "breakeven_lock",
   "adaptive_post_tp1_stop",
+
+  // (#audit-2026-08-27) Список не обновлялся под переписанный 24.08 гейт
+  // достижимости TP2 и под extended_from_ema20 — эти коды реально доминируют
+  // среди live-блокировок, но были невидимы на дашборде.
+  "tp2_reached_too_rarely",
+  "extended_from_ema20",
+  "extended_from_ema20_shadow",
+  "symbol_policy_confidence_too_low",
+  "symbol_policy_rr_tp1_too_low",
+  "symbol_policy_rr_tp2_too_low",
+  "symbol_policy_publish_blocked",
 ];
 
 export default function IntelligencePage() {

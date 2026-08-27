@@ -1,5 +1,6 @@
 from core.config import Settings
 from pathlib import Path
+import pytest
 import yaml
 
 
@@ -86,6 +87,22 @@ def test_trend_tp2_geometry_constants_are_declared():
         "TREND_TP1_FLOOR_PCT", "TREND_TP2_FLOOR_PCT",
     ):
         assert name in names, f"{name} must be declared on Settings"
+
+
+def test_trend_tp2_geometry_recalibrated_to_reachable_distance():
+    """(#audit-2026-08-27, часть 2) TREND_TP2_R_MULT/FLOOR_PCT снижены с
+    3.2/2.4 до 2.0/2.0. Живые данные 27.08: гейт tp_reachability (enforce,
+    переписан 24.08) требовал ~25% hit rate, а фактический tp2_hit_rate для
+    trend_up_candidate был 0.0 на выборке 96 сделок — TP2=risk×3.2 давал
+    6-12% дистанции при median_mfe_pct~0.55%, практически недостижимую цель,
+    что и держало почти все входы. Регрессия: держим геометрию в разумных
+    пределах и не даём ей случайно уехать обратно к недостижимой.
+    """
+    cfg = Settings()
+    assert cfg.TREND_TP2_R_MULT == pytest.approx(2.0)
+    assert cfg.TREND_TP2_FLOOR_PCT == pytest.approx(2.0)
+    # Инвариант TP1<TP2 (см. комментарий у TP1_MAX_PCT) не должен ломаться.
+    assert cfg.TP1_MAX_PCT < cfg.TREND_TP2_FLOOR_PCT
 
 
 def test_dynamic_tp2_settings_are_declared_and_off_by_default():
