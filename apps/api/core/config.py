@@ -935,10 +935,25 @@ class Settings(BaseSettings):
     RANGE_ENTRY_RSI_MAX: float = 52.0
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
+    # (#range-tp2-dynamic-2026-08-27) Буфер TP2 (доля ширины диапазона, на
+    # которую TP2 не доходит до дальней границы) СУЖАЕТСЯ при сильном
+    # локальном ADX/ATR-expansion — TP2 приближается к границе диапазона.
+    # ТОЛЬКО приближает TP2 к границе, никогда не отдаляет его дальше
+    # исходного RANGE_TP2_RESISTANCE_BUFFER.
+    RANGE_TP2_DYNAMIC_ENABLED: bool = False
+    RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
+    RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
+    RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
     RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
+    # (#audit-2026-08-27) Раньше читался через strategy_profiles._b(..., True)
+    # без объявления здесь — Settings сконфигурирован extra="ignore", поэтому
+    # любой render.yaml override этого имени молча отбрасывался, а в коде
+    # всегда действовал хардкод True. Объявляем явно — дефолт не меняется,
+    # но теперь его можно реально переопределить из env.
+    RANGE_CONFIRMED_ONLY: bool = True
 
     # --- CRT (Candle Range Theory) — 3-свечной вход A→M→D ---
     # C1(4h)=диапазон CRH/CRL, C2=свип+закрытие обратно внутрь, C3=вход на LTF
@@ -954,7 +969,12 @@ class Settings(BaseSettings):
     # ожидал 15m (fallback), config переопределял на 5m. MSS/FVG на 15m чище.
     CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
-    CRT_LTF_CONFIRM: str = "both"        # "either" | "both" | "off" (MSS/FVG)
+    # (#audit-2026-08-27) Был "either" до commit dd05813 (06.08), тихо ужесточён
+    # до "both" (требует ОДНОВРЕМЕННО MSS и FVG на LTF) без обоснования в
+    # коммите. Более поздняя правка CRT (render.yaml, "снижаем планку") явно
+    # старалась делать CRT менее строгим, но этот параметр не тронула — CRT
+    # почти не торговал с 06.08. Возвращаем "either", как и было исходно.
+    CRT_LTF_CONFIRM: str = "either"      # "either" | "both" | "off" (MSS/FVG)
     # (#crt-part13-2026-07-10) CISD-чек из LTF Sequence (CRT→CISD→OTE→MSS→IDM):
     # манипуляционная свеча C2 должна ЗАКРЫТЬСЯ против свипа (свип CRH →
     # медвежье закрытие ниже открытия; свип CRL → бычье выше открытия) — это и
@@ -970,6 +990,15 @@ class Settings(BaseSettings):
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
+    # (#crt-tp2-dynamic-2026-08-27) Зеркало TREND_TP2_DYNAMIC_* без KAMA-члена
+    # (CRT её не считает). Работает ТОЛЬКО когда CRT_TARGETS_MODE=extended —
+    # в режиме "range" TP2 структурный (CRH/CRL), rr в нём не участвует.
+    # ТОЛЬКО расширяет CRT_TP2_RR вверх, никогда не сужает.
+    CRT_TP2_DYNAMIC_ENABLED: bool = False
+    CRT_TP2_DYNAMIC_MAX_RR: float = 3.5
+    CRT_TP2_DYNAMIC_ADX_BASE: float = 23.0
+    CRT_TP2_DYNAMIC_ADX_SPAN: float = 27.0
+    CRT_TP2_DYNAMIC_ATR_EXP_SPAN: float = 0.35
     CRT_MIN_TP1_NET_PCT: float = 0.5       # мин. чистый ход до TP1 после комиссий
     # (#5) Минимальный RR для TP1: если ликвидность (CRL/CRH) ближе 1R, TP1
     # тянется к 1R. Иначе gross RR_tp1 ~1.06 после комиссий проседает до ~0.43
@@ -983,6 +1012,10 @@ class Settings(BaseSettings):
     # bullish/overheated. Лечит контртрендовые crt_bull_sweep лонги в медвежьей
     # ленте. False → старое поведение (только trend-align).
     CRT_REQUIRE_MOMENTUM_ALIGN: bool = True
+    # (#audit-2026-08-27) Тот же класс бага, что и RANGE_CONFIRMED_ONLY выше:
+    # читался через strategy_profiles._b(..., True) без объявления в Settings,
+    # env override молча игнорировался (extra="ignore"). Дефолт не меняется.
+    CRT_REQUIRE_TREND_ALIGN: bool = True
 
     # --- Scalp ENGINE (micro-flow вход: 5m микроструктура + стакан OBI/CVD) ---
     # ВОССТАНОВЛЕНО: движок (services/micro_scalp.py) и весь downstream (anti-drain/
@@ -1586,7 +1619,14 @@ class Settings(BaseSettings):
     GRID_HTF_EXTREME_VETO: bool = True
     GRID_HTF_RSI_OVERHEAT: float = 72.0
     GRID_HTF_RSI_OVERSOLD: float = 28.0
-    GRID_REARM: bool = True                    # после TP/SL переоткрывать новый цикл
+    # (#audit-2026-08-27) КОСМЕТИЧЕСКИЙ флаг: читается только для отображения
+    # в /grid/state и /grid/config (routers/grid.py) — grid_engine.py его
+    # НЕ читает и не проверяет ни в одном условии. Реальное переоткрытие
+    # цикла после flip/TP/SL уже безусловное — происходит на следующей же
+    # итерации tick() (services/grid_engine.py), независимо от этого флага.
+    # Если понадобится настоящий ручной "не переоткрывать" — это нужно
+    # реализовать в _maybe_open(), этот флаг сам по себе ничего не выключает.
+    GRID_REARM: bool = True                    # после TP/SL переоткрывать новый цикл (сейчас — только для отображения)
     GRID_TICK_INTERVAL_SEC: float = 20.0       # период фонового тика сетки
 
     # ── Адаптивность к живому рынку ───────────────────────────────────────────
@@ -1688,6 +1728,42 @@ class Settings(BaseSettings):
     LEVELS_STRUCT_STOP_BUFFER_PCT: float = 0.15
     # Потолок дистанции стопа (%): не даём стопу разрастись и сильно ужать размер/RR.
     LEVELS_MAX_STOP_PCT: float = 3.0
+
+    # (#audit-2026-08-27) Эти четыре константы читались ТОЛЬКО через
+    # strategy_profiles._f(name, default) — getattr с дефолтом на объекте
+    # settings. Settings сконфигурирован extra="ignore" (см. верх файла),
+    # поэтому необъявленный здесь ключ из render.yaml/.env молча
+    # игнорировался: override никогда не применялся, всегда действовал
+    # хардкод в strategy_profiles.py. Объявляем явно — дефолты НЕ меняются,
+    # только становится возможным переопределить их из env.
+    TREND_TP1_R_MULT: float = 1.7
+    TREND_TP2_R_MULT: float = 3.2
+    TREND_TP1_FLOOR_PCT: float = 1.2
+    TREND_TP2_FLOOR_PCT: float = 2.4
+
+    # =========================
+    # TREND TP2 DYNAMIC — множитель TP2 растёт с силой ЖИВОГО тренда
+    # (ADX / расширение ATR / наклон KAMA), #trend-tp2-dynamic-2026-08-27.
+    # =========================
+    # Источник — ТОЛЬКО текущие индикаторы рынка, НЕ исторический
+    # MFE/outcomes журнал services/tp_reachability.py (см. предостережение в
+    # market_intelligence.py:_dynamic_tp2_r_mult и
+    # tests/test_tp1_from_measured_move.py про циклическую ошибку прошлой
+    # правки). Множитель ТОЛЬКО расширяется вверх от TREND_TP2_R_MULT —
+    # никогда не сужается (см. services/setup_reach.py: сужение цели по
+    # статистике срезало прибыльный хвост, ухудшило P&L, поэтому выключено
+    # по умолчанию).
+    TREND_TP2_DYNAMIC_ENABLED: bool = False   # OFF — включать осознанно после paper-теста
+    TREND_TP2_DYNAMIC_TF: str = "1h"          # ТФ, откуда берём ADX/ATR/KAMA
+    TREND_TP2_DYNAMIC_MAX_R_MULT: float = 6.0 # потолок множителя
+    TREND_TP2_DYNAMIC_ADX_BASE: float = 23.0  # ADX ниже — вклад силы тренда = 0 (порог ТЗ)
+    TREND_TP2_DYNAMIC_ADX_SPAN: float = 27.0  # ADX_BASE+SPAN(=50) — вклад = 1
+    TREND_TP2_DYNAMIC_ATR_EXP_SPAN: float = 0.35   # atr14/atr14_prev-1 сверх этого — вклад = 1
+    TREND_TP2_DYNAMIC_KAMA_SPAN_ATR: float = 0.60  # наклон KAMA (в ATR%/бар) сверх этого — вклад = 1
+    TREND_TP2_DYNAMIC_W_ADX: float = 0.5
+    TREND_TP2_DYNAMIC_W_ATR: float = 0.3
+    TREND_TP2_DYNAMIC_W_KAMA: float = 0.2
+
     # (#tp1-partial-2026-07-09) РЕАЛЬНАЯ частичная фиксация на TP1. Раньше «TP1 =
     # точка частичной фиксации» была фикцией: на TP1 двигался только стоп в
     # безубыток, прибыль НЕ реализовывалась → модальный исход «дошли до TP1 и

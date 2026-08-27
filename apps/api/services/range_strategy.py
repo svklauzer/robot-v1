@@ -48,6 +48,31 @@ def _v(ctx, key, default=0.0):
 _TRENDING = ("trend_up", "trend_down")
 
 
+def _dynamic_tp2_buffer_mult(base_buffer: float, *, adx: float, atr_ratio: float) -> tuple[float, dict]:
+    """(#range-tp2-dynamic-2026-08-27) Буфер TP2 (доля ширины диапазона, на
+    которую TP2 не доходит до дальней границы) сужается — TP2 приближается к
+    границе диапазона — при сильном локальном ADX/ATR-expansion. Источник
+    ТОЛЬКО живые индикаторы этого бара. ТОЛЬКО приближает TP2 к границе,
+    никогда не отдаляет его дальше base_buffer."""
+    if not bool(getattr(settings, "RANGE_TP2_DYNAMIC_ENABLED", False)):
+        return float(base_buffer), {"source": "disabled", "buffer": round(float(base_buffer), 4)}
+
+    adx_base = float(getattr(settings, "RANGE_TP2_DYNAMIC_ADX_BASE", 15.0))
+    adx_span = max(float(getattr(settings, "RANGE_TP2_DYNAMIC_ADX_SPAN", 15.0)), 1e-6)
+    adx_component = min(max((float(adx) - adx_base) / adx_span, 0.0), 1.0)
+    atr_component = min(max(float(atr_ratio) - 1.0, 0.0), 1.0)
+    strength = min(max(0.7 * adx_component + 0.3 * atr_component, 0.0), 1.0)
+
+    min_buffer = min(float(getattr(settings, "RANGE_TP2_DYNAMIC_MIN_BUFFER", 0.0)), float(base_buffer))
+    dynamic_buffer = float(base_buffer) - strength * (float(base_buffer) - min_buffer)
+    dynamic_buffer = max(min(dynamic_buffer, float(base_buffer)), min_buffer)
+
+    return dynamic_buffer, {
+        "source": f"dynamic(adx={adx_component:.2f},atr={atr_component:.2f},strength={strength:.2f})",
+        "buffer": round(dynamic_buffer, 4), "base_buffer": round(float(base_buffer), 4),
+    }
+
+
 class RangeStrategyService:
     """Оценивает символ на range-вход. Возвращает RangeSignal или None."""
 
@@ -87,7 +112,12 @@ class RangeStrategyService:
         rsi_max = rp.rsi_max
         atr_mult = rp.stop_atr_mult
         mid = (low + high) / 2.0
-        tp2_buf = (high - low) * rp.tp2_resistance_buffer
+        atr_prev = float(_v(work, "atr14_prev", 0.0))
+        atr_ratio = (atr / atr_prev) if atr_prev > 0 else 1.0
+        adx = float(_v(work, "adx14", 0.0))
+        dyn_buf_frac, tp2_dyn_meta = _dynamic_tp2_buffer_mult(
+            rp.tp2_resistance_buffer, adx=adx, atr_ratio=atr_ratio)
+        tp2_buf = (high - low) * dyn_buf_frac
         # Комиссия круга по ФАКТИЧЕСКОМУ маршруту исполнения. Была захардкожена
         # спотовая ставка (0.2%×2 = 0.4%), тогда как торгуем свопом (0.05%×2 +
         # проскальзывание = 0.12%) — издержки завышались вчетверо, и гейт
@@ -121,6 +151,7 @@ class RangeStrategyService:
                 "long", price, stop, tp1, tp2, pos, low, high, width_pct,
                 proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
                 comment="range_long_at_support", reason="range_long_support_bounce",
+                tp2_dynamic=tp2_dyn_meta,
             )
 
         # 5) ШОРТ от верхней границы (futures).
@@ -141,13 +172,14 @@ class RangeStrategyService:
                 "short", price, stop, tp1, tp2, pos, low, high, width_pct,
                 proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
                 comment="range_short_at_resistance", reason="range_short_resistance_reject",
+                tp2_dynamic=tp2_dyn_meta,
             )
 
         return None
 
     def _mk_signal(self, action, price, stop, tp1, tp2, pos, low, high, width_pct,
                    proximity, width_score, reversal_ok, vol_score, rsi15, min_score,
-                   *, comment, reason) -> RangeSignal:
+                   *, comment, reason, tp2_dynamic: dict | None = None) -> RangeSignal:
         reversal_score = 20.0 if reversal_ok else 5.0
         final_score = round(proximity + width_score + reversal_score + vol_score, 2)
         decision = "approve" if (final_score >= min_score and reversal_ok) else "wait"
@@ -168,6 +200,7 @@ class RangeStrategyService:
             "final_score": final_score,
             "decision": decision,
             "comment": comment,
+            "tp2_dynamic": tp2_dynamic or {"source": "disabled"},
         }
         return RangeSignal(
             action=action,

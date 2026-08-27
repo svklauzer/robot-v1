@@ -27,6 +27,8 @@ def _config() -> dict:
         "max_safety_orders": settings.GRID_MAX_SAFETY_ORDERS,
         "max_used_margin_pct": settings.GRID_MAX_USED_MARGIN_PCT,
         "leverage": settings.GRID_LEVERAGE,
+        # (#audit-2026-08-27) Дисплей-only: grid_engine.py это поле не читает.
+        # Переоткрытие цикла после flip/TP/SL уже безусловное (см. tick()).
         "rearm": settings.GRID_REARM,
         "market": settings.execution_market_type,
         "flip_confirm_ticks": settings.GRID_FLIP_CONFIRM_TICKS,

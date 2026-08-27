@@ -68,11 +68,39 @@ def detect_mss(candles, direction: str, swing: int = 3, lookback: int = 12) -> b
     return _f(last, "close") > max(_f(c, "high") for c in prior)
 
 
+def _dynamic_tp2_rr(base_rr: float, *, adx: float, atr_ratio: float) -> tuple[float, dict]:
+    """(#crt-tp2-dynamic-2026-08-27) RR TP2 растёт с ADX и расширением ATR на
+    HTF. Зеркало market_intelligence._dynamic_tp2_r_mult без KAMA-члена (CRT
+    её не считает) — источник ТОЛЬКО живые индикаторы, ТОЛЬКО расширяет
+    base_rr, никогда не сужает. Эффект есть только при CRT_TARGETS_MODE=
+    "extended" — в режиме "range" TP2 структурный (CRH/CRL), rr не участвует."""
+    if not bool(getattr(settings, "CRT_TP2_DYNAMIC_ENABLED", False)):
+        return float(base_rr), {"source": "disabled", "rr": round(float(base_rr), 4)}
+
+    adx_base = float(getattr(settings, "CRT_TP2_DYNAMIC_ADX_BASE", 23.0))
+    adx_span = max(float(getattr(settings, "CRT_TP2_DYNAMIC_ADX_SPAN", 27.0)), 1e-6)
+    adx_component = min(max((float(adx) - adx_base) / adx_span, 0.0), 1.0)
+
+    atr_exp_span = max(float(getattr(settings, "CRT_TP2_DYNAMIC_ATR_EXP_SPAN", 0.35)), 1e-6)
+    atr_component = min(max((float(atr_ratio) - 1.0) / atr_exp_span, 0.0), 1.0)
+
+    strength = min(max(0.6 * adx_component + 0.4 * atr_component, 0.0), 1.0)
+    max_rr = max(float(getattr(settings, "CRT_TP2_DYNAMIC_MAX_RR", 3.5)), float(base_rr))
+    dynamic_rr = float(base_rr) + strength * (max_rr - float(base_rr))
+    dynamic_rr = min(max(dynamic_rr, float(base_rr)), max_rr)  # пол = база — никогда не сужаем
+
+    return dynamic_rr, {
+        "source": f"dynamic(adx={adx_component:.2f},atr={atr_component:.2f},strength={strength:.2f})",
+        "rr": round(dynamic_rr, 4), "base_rr": round(float(base_rr), 4),
+    }
+
+
 class CRTStrategyService:
     def evaluate(self, htf_candles, ltf_candles, *, symbol: str | None = None,
                  current_price: float | None = None,
                  htf_trend: str | None = None, mtf_trend: str | None = None,
-                 htf_momentum: str | None = None, mtf_momentum: str | None = None) -> CRTSignal | None:
+                 htf_momentum: str | None = None, mtf_momentum: str | None = None,
+                 htf_adx: float | None = None, htf_atr_ratio: float | None = None) -> CRTSignal | None:
         if not bool(getattr(settings, "ENABLE_CRT_STRATEGY", False)):
             return None
         if not htf_candles or len(htf_candles) < 2 or not ltf_candles or len(ltf_candles) < 5:
@@ -165,7 +193,10 @@ class CRTStrategyService:
         fee_round_pct = (_taker * 2 + _slip) * 100.0
         min_tp1 = float(getattr(settings, "CRT_MIN_TP1_NET_PCT", 0.5))
         buf = rng * float(getattr(settings, "CRT_STOP_BUFFER_PCT", 0.05))
-        rr = float(getattr(settings, "CRT_TP2_RR", 2.0))
+        rr, tp2_dyn_meta = _dynamic_tp2_rr(
+            float(getattr(settings, "CRT_TP2_RR", 2.0)),
+            adx=float(htf_adx or 0.0), atr_ratio=float(htf_atr_ratio or 1.0),
+        )
         # (#5) Пол RR для TP1: ликвидность (CRL/CRH) часто ближе 1R, из-за чего
         # после комиссий net_rr_tp1 проседает <0.40 и CRT блокируется каждый
         # цикл. Тянем TP1 минимум на min_rr1 * risk от входа.
@@ -239,6 +270,7 @@ class CRTStrategyService:
             "confirm_score": confirm_score, "width_score": round(width_score, 2),
             "final_score": final_score, "decision": decision,
             "rr_tp2": rr,
+            "tp2_dynamic": tp2_dyn_meta,
             "targets_mode": targets_mode,
             "cisd_checked": bool(getattr(settings, "CRT_REQUIRE_CISD", True)),
         }
