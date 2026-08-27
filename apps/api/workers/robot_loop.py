@@ -1086,6 +1086,22 @@ class RobotLoop:
                     "net_rr_tp1": plan.net_rr_tp1,
                     "net_rr_tp2": plan.net_rr_tp2,
                     "entry_depth": _ml_depth,
+                    # (#audit-2026-08-27) stop_price/required_margin/entry_price
+                    # были доступны здесь и раньше (тот же объект plan, из
+                    # которого уже брались net_rr_tp1/tp2), но не форвардились —
+                    # ml_features.row_to_features() без них тихо ставил
+                    # stop_distance_pct=0.0 и notional_usdt=0.0 на КАЖДОМ живом
+                    # предсказании, хотя модель обучена на реальных значениях
+                    # этих же полей из trade_outcomes.jsonl (services/
+                    # ml_trade_logger.py логирует stop_price/required_margin/
+                    # lifecycle.entry_price). Train/serve skew — оба поля были
+                    # признаны "решающими" в докстринге ml_features.py, а вживую
+                    # всегда обнулялись. Формат lifecycle.entry_price повторяет
+                    # то, что пишет ml_trade_logger.py, чтобы _entry_price()
+                    # читала его одинаково для лога и для живого кандидата.
+                    "stop_price": plan.stop_price,
+                    "required_margin": plan.required_margin,
+                    "lifecycle": {"entry_price": plan.entry_price},
                 })
             except Exception:
                 pass

@@ -129,21 +129,22 @@ class MLIntelligenceHub:
             return mode
         
         # Проверка качества модели
+        # (#audit-2026-08-27) Было `getattr(labeler, "metadata", None)` —
+        # MetaLabeler такого атрибута/метода не имеет вовсе (есть `.status()`),
+        # поэтому эта проверка всегда была no-op: auc никогда не читался,
+        # демоушен по AUC не срабатывал ни разу, что бы ни показывала модель.
         labeler = self._get_meta_labeler()
         if labeler:
             try:
-                meta = getattr(labeler, "metadata", None)
-                if callable(meta):
-                    meta = meta()
-                if isinstance(meta, dict):
-                    auc = meta.get("val_auc") or meta.get("auc_val") or meta.get("validation_auc")
-                    if auc is not None:
-                        min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-                        if float(auc) < min_auc:
-                            return "shadow"
+                st = labeler.status()
+                auc = (st.get("metrics") or {}).get("val_auc")
+                if auc is not None:
+                    min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
+                    if float(auc) < min_auc:
+                        return "shadow"
             except Exception:
                 pass
-        
+
         return mode
     
     def evaluate_candidate(self, candidate: dict) -> MLDecision:
@@ -495,29 +496,38 @@ class MLIntelligenceHub:
             "warnings": [],
         }
         
+        # (#audit-2026-08-27) Было `getattr(labeler, "metadata", None)` — метода
+        # с таким именем на MetaLabeler нет (есть `.status()`), поэтому этот
+        # блок никогда не выполнялся: /ml/status показывал model_exists=False
+        # и все метрики пустыми ДАЖЕ КОГДА модель реально обучена. Дашборд
+        # читает именно этот endpoint (routers/ml.py:/status → hub.health()) —
+        # это самостоятельная причина "ML выглядит бесполезным", отдельная от
+        # того, обучилась модель или нет.
+        last_attempt = None
         if labeler:
             try:
-                meta = getattr(labeler, "metadata", None)
-                if callable(meta):
-                    meta = meta()
-                if isinstance(meta, dict):
-                    model_info["model_exists"] = True
-                    model_info["trained_at"] = meta.get("trained_at")
-                    model_info["samples"] = meta.get("n_samples") or meta.get("samples")
-                    model_info["win_rate"] = meta.get("win_rate")
-                    model_info["label_kind"] = meta.get("label_kind")
-                    
-                    metrics["val_auc"] = meta.get("val_auc") or meta.get("auc_val")
-                    metrics["val_acc"] = meta.get("val_acc") or meta.get("accuracy")
-                    metrics["auc_is_reliable"] = meta.get("auc_is_reliable")
-                    metrics["baseline_acc"] = meta.get("baseline_acc")
-                    metrics["acc_beats_baseline"] = meta.get("acc_beats_baseline")
-                    metrics["events_per_feature"] = meta.get("events_per_feature")
-                    metrics["positives"] = meta.get("positives")
-                    metrics["features_used"] = meta.get("features_used")
-                    metrics["warnings"] = meta.get("warnings", [])
+                st = labeler.status()
+                model_info["model_exists"] = bool(st.get("model_exists"))
+                model_info["trained_at"] = st.get("trained_at")
+                model_info["samples"] = st.get("samples")
+                model_info["min_train_samples"] = st.get("min_train_samples", model_info["min_train_samples"])
+                model_info["win_rate"] = st.get("win_rate")
+                model_info["label_kind"] = st.get("label_kind")
+                last_attempt = st.get("last_attempt")
+
+                m = st.get("metrics") or {}
+                metrics["val_auc"] = m.get("val_auc")
+                metrics["val_acc"] = m.get("val_acc")
+                metrics["auc_is_reliable"] = m.get("auc_is_reliable")
+                metrics["baseline_acc"] = m.get("baseline_acc")
+                metrics["acc_beats_baseline"] = m.get("acc_beats_baseline")
+                metrics["events_per_feature"] = m.get("events_per_feature")
+                metrics["positives"] = m.get("positives")
+                metrics["features_used"] = m.get("features_used")
+                metrics["warnings"] = m.get("warnings", [])
             except Exception:
                 pass
+        model_info["last_attempt"] = last_attempt
         
         auc = metrics["val_auc"]
         
