@@ -129,9 +129,11 @@ class TrendEngine:
             stop_atr_mult=_f("LEVELS_STOP_ATR_MULT", 2.5),
             min_stop_pct=_f("LEVELS_MIN_STOP_PCT", 0.5),
             tp1_r_mult=_f("TREND_TP1_R_MULT", 1.7),
-            tp2_r_mult=_f("TREND_TP2_R_MULT", 3.2),
+            # (#audit-2026-08-27, часть 2) Фолбэки синхронизированы с новыми
+            # дефолтами core/config.py — было 3.2/2.4, см. комментарий там.
+            tp2_r_mult=_f("TREND_TP2_R_MULT", 2.0),
             tp1_floor_pct=_f("TREND_TP1_FLOOR_PCT", 1.2),
-            tp2_floor_pct=_f("TREND_TP2_FLOOR_PCT", 2.4),
+            tp2_floor_pct=_f("TREND_TP2_FLOOR_PCT", 2.0),
         )
 
 
