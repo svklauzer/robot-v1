@@ -751,6 +751,11 @@ app.include_router(analytics_router)
 app.include_router(audit_router)
 app.include_router(funding_arb_router)
 app.include_router(grid_router)
+# (#audit-2026-08-27) /ml/status и /ml/shadow-report живут ЗДЕСЬ (routers/ml.py,
+# через MLIntelligenceHub) — раньше main.py ниже по файлу объявлял вторые,
+# другие реализации на тех же путях; FastAPI матчит первый зарегистрированный
+# маршрут, так что те версии были мёртвым, никогда не исполняемым кодом.
+# Удалены — не дублируй их обратно здесь.
 app.include_router(ml_router)
 app.include_router(payments_router)
 app.include_router(reports_router)
@@ -1133,34 +1138,6 @@ def ml_outcomes_stats():
         "size_bytes": p.stat().st_size,
         "target_for_training": 200,
     }
-
-
-@app.get("/ml/status", dependencies=[Depends(require_owner_action)])
-def ml_status():
-    """Статус ML-слоя: режим (off/shadow/advisory/full_auto), готовность модели,
-    метрики валидации. Для фронта-пульта и контроля."""
-    from services.ml_meta_labeler import MetaLabeler
-    status = MetaLabeler().status()
-    return {
-        "ml_mode": str(getattr(settings, "ML_MODE", "off")).lower(),
-        "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45)),
-        "size_mult_range": [float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7)),
-                            float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))],
-        "model": status,
-    }
-
-
-@app.get("/ml/shadow-report", dependencies=[Depends(require_owner_action)])
-def ml_shadow_report():
-    """Shadow-валидация: предсказанный ml_score vs РЕАЛЬНЫЙ исход на закрытых
-    сделках. Калибровка по бакетам + live-AUC + эффект порога. На сделки НЕ влияет.
-    Пусто, пока ML_MODE=shadow не накопит закрытий с ml_score."""
-    from services.ml_shadow_report import build as _shadow_build
-    db = SessionLocal()
-    try:
-        return _shadow_build(db)
-    finally:
-        db.close()
 
 
 @app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])

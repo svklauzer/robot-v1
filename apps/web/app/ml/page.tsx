@@ -170,6 +170,31 @@ export default function MLPage() {
               ))}
             </ul>
           )}
+
+          {/* (#audit-2026-08-27) Воронка последней попытки train() — раньше была
+              видна только в разовом ответе кнопки. Без неё "не обучена" неотличимо
+              от "суточный auto-retrain не запускается": на деле он может честно
+              пытаться каждый день и каждый раз упираться в один и тот же фильтр. */}
+          {!ready && model?.last_attempt && (
+            <div className="mt-3 rounded-xl border border-orange-500/30 bg-orange-500/5 p-3 text-xs text-orange-100/90">
+              <div className="mb-1 font-semibold text-orange-200">
+                Последняя попытка обучения ({String(model.last_attempt.attempted_at || "").slice(0, 19).replace("T", " ") || "—"}):
+                {" "}{model.last_attempt.status}
+              </div>
+              {model.last_attempt.message && <div className="mb-2">{model.last_attempt.message}</div>}
+              {model.last_attempt.status === "insufficient_data" && (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 md:grid-cols-3">
+                  <Row k="Прочитано строк" v={model.last_attempt.rows_total ?? "—"} />
+                  <Row k="Размечено" v={`${model.last_attempt.samples ?? "—"} / ${model.last_attempt.needed ?? "—"}`} />
+                  <Row k="Фантомных" v={model.last_attempt.dropped?.phantom ?? 0} />
+                  <Row k="Режим отключён" v={model.last_attempt.dropped?.regime_off ?? 0} />
+                  <Row k="Старше окна" v={model.last_attempt.dropped?.too_old ?? 0} />
+                  <Row k="Без P&L" v={model.last_attempt.label_drop?.no_pnl ?? 0} />
+                  <Row k="Без планового риска" v={model.last_attempt.label_drop?.no_risk ?? 0} />
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={train}
             disabled={training}
@@ -204,17 +229,27 @@ export default function MLPage() {
           <div className="mt-3 space-y-4">
             <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
               <Row k="Закрытых со score" v={shadow.scored_closed} />
-              <Row k="Live AUC" v={shadow.live_auc ?? "—"} highlight={shadow.live_auc != null && shadow.live_auc >= 0.55} />
+              <Row
+                k={`AUC vs ${shadow.train_label_kind || "train label"}`}
+                v={shadow.live_auc_vs_train_label ?? "—"}
+                highlight={shadow.live_auc_vs_train_label != null && shadow.live_auc_vs_train_label >= 0.55}
+              />
+              <Row k="Live AUC (vs is_win)" v={shadow.live_auc ?? "—"} highlight={shadow.live_auc != null && shadow.live_auc >= 0.55} />
               <Row k="Базовый winrate" v={`${shadow.base_winrate_pct}%`} />
               <Row k="Порог входа" v={shadow.threshold} />
             </div>
+            <p className="text-[11px] text-cyan-100/40">
+              Модель обучена предсказывать <code>{shadow.train_label_kind}</code>, не is_win — решение
+              (бейдж вверху) принимается по левой AUC. Live AUC (vs is_win) оставлен для сравнения и
+              может расходиться, т.к. это другая цель.
+            </p>
 
             <div>
               <div className="mb-2 text-xs font-semibold text-cyan-200">Калибровка по ml_score (выше score → должен быть выше winrate)</div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[420px] text-left text-xs">
                   <thead className="text-cyan-100/50">
-                    <tr><th className="py-1 pr-3">Диапазон score</th><th className="pr-3">N</th><th className="pr-3">Winrate</th><th className="pr-3">avg score</th><th>Net PnL</th></tr>
+                    <tr><th className="py-1 pr-3">Диапазон score</th><th className="pr-3">N</th><th className="pr-3">Winrate (is_win)</th><th className="pr-3">{shadow.train_label_kind || "train label"}</th><th className="pr-3">avg score</th><th>Net PnL</th></tr>
                   </thead>
                   <tbody>
                     {(shadow.buckets || []).map((b: any, i: number) => (
@@ -222,6 +257,7 @@ export default function MLPage() {
                         <td className="py-1 pr-3 font-mono text-cyan-100/80">{b.range}</td>
                         <td className="pr-3">{b.count}</td>
                         <td className={"pr-3 " + ((b.winrate_pct ?? 0) >= 50 ? "text-emerald-300" : "text-emerald-100/70")}>{b.winrate_pct == null ? "—" : `${b.winrate_pct}%`}</td>
+                        <td className={"pr-3 " + ((b.train_label_winrate_pct ?? 0) >= 50 ? "text-emerald-300" : "text-emerald-100/70")}>{b.train_label_winrate_pct == null ? "—" : `${b.train_label_winrate_pct}%`}</td>
                         <td className="pr-3 text-cyan-100/60">{b.avg_score ?? "—"}</td>
                         <td className={(b.net_pnl_usdt ?? 0) < 0 ? "text-red-300" : "text-emerald-300"}>{b.net_pnl_usdt}</td>
                       </tr>

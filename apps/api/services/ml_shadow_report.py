@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.signal import Signal
+from services.ml_features import row_to_label
 
 
 def _auc(scores_win: list[float], scores_loss: list[float]) -> float | None:
@@ -65,6 +66,18 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         .all()
     )
 
+    # (#audit-2026-08-27) Модель обучается НЕ на is_win (net_pnl>0), а на
+    # ML_LABEL_KIND (по умолчанию "beats_costs" — вернула ли сделка хотя бы
+    # ML_LABEL_MIN_R риска, см. ml_features.row_to_label). Раньше этот отчёт
+    # сравнивал прогноз с is_win — другой целью, на которую модель не
+    # обучалась: сделка +0.05R (label=0 при обучении, модель ПРАВИЛЬНО ставит
+    # её низко) засчитывалась здесь как "win" и штрафовала верный прогноз.
+    # is_win остаётся как есть — привычная метрика, но `train_label`/
+    # `live_auc_vs_train_label` ниже меряют модель против того, чему её
+    # реально учили.
+    label_kind = str(getattr(settings, "ML_LABEL_KIND", "beats_costs"))
+    min_r = float(getattr(settings, "ML_LABEL_MIN_R", 0.3))
+
     rows: list[dict] = []
     for s in signals:
         plan = _parse_plan_json(s.plan_json)
@@ -78,9 +91,14 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             continue
         net = s.closed_net_pnl
         net = float(net) if net is not None else 0.0
+        train_label = row_to_label(
+            {"closed_net_pnl": s.closed_net_pnl, "net_pnl_stop": s.net_pnl_stop},
+            label_kind, min_r,
+        )
         rows.append({
             "id": s.id, "symbol": s.symbol, "side": s.side, "grade": s.grade,
             "score": score, "win": 1 if net > 0 else 0, "net": net,
+            "train_label": train_label,
             "ml_mode": (ml or {}).get("mode"),
         })
 
@@ -101,6 +119,12 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
     losses = [r for r in rows if r["win"] == 0]
     auc = _auc([r["score"] for r in wins], [r["score"] for r in losses])
 
+    # ── AUC против ЦЕЛИ ОБУЧЕНИЯ (train_label), не против is_win ───────────────
+    labeled = [r for r in rows if r["train_label"] is not None]
+    train_wins = [r for r in labeled if r["train_label"] == 1]
+    train_losses = [r for r in labeled if r["train_label"] == 0]
+    auc_train_label = _auc([r["score"] for r in train_wins], [r["score"] for r in train_losses])
+
     # ── калибровка по бакетам ──────────────────────────────────────────────────
     edges = [0.0, 0.30, thr, 0.60, 0.75, 1.0001]
     edges = sorted(set(edges))
@@ -110,6 +134,9 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         b = [r for r in rows if lo <= r["score"] < hi]
         cnt = len(b)
         bw = sum(r["win"] for r in b)
+        b_labeled = [r for r in b if r["train_label"] is not None]
+        bl_cnt = len(b_labeled)
+        bl_wins = sum(r["train_label"] for r in b_labeled)
         buckets.append({
             "range": f"{lo:.2f}–{hi if hi <= 1.0 else 1.0:.2f}",
             "count": cnt,
@@ -117,6 +144,10 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "winrate_pct": round(bw / cnt * 100, 1) if cnt else None,
             "avg_score": round(sum(r["score"] for r in b) / cnt, 4) if cnt else None,
             "net_pnl_usdt": round(sum(r["net"] for r in b), 4),
+            # Доля сделок, реально оправдавших label_kind (по умолчанию
+            # beats_costs) в этом бакете — то, на что модель обучена отвечать.
+            "train_label_count": bl_cnt,
+            "train_label_winrate_pct": round(bl_wins / bl_cnt * 100, 1) if bl_cnt else None,
         })
 
     # ── эффект порога (full_auto бы отрезал score < thr) ───────────────────────
@@ -142,11 +173,16 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
     taken_wr = threshold_impact["taken_winrate_pct"]
 
     # ── вердикт (с оговоркой на размер выборки) ────────────────────────────────
-    if n < 30:
+    # Вердикт считаем по auc_train_label — метрике против ЦЕЛИ ОБУЧЕНИЯ, а не
+    # против is_win. Если размеченных строк (есть net_pnl_stop) не хватает,
+    # откатываемся на is_win-AUC, но помечаем это в ответе.
+    verdict_auc = auc_train_label if auc_train_label is not None else auc
+    verdict_source = "train_label" if auc_train_label is not None else "is_win_fallback"
+    if n < 30 or len(labeled) < 30:
         verdict = "insufficient_sample"
-    elif auc is not None and auc >= 0.58 and (taken_wr or 0) > base_winrate and threshold_impact["ml_gate_benefit_usdt"] > 0:
+    elif verdict_auc is not None and verdict_auc >= 0.58 and (taken_wr or 0) > base_winrate and threshold_impact["ml_gate_benefit_usdt"] > 0:
         verdict = "edge_visible"
-    elif auc is not None and auc >= 0.53:
+    elif verdict_auc is not None and verdict_auc >= 0.53:
         verdict = "weak_signal"
     else:
         verdict = "no_edge_yet"
@@ -159,13 +195,23 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "losses": len(losses),
         "base_winrate_pct": base_winrate,
         "live_auc": auc,
+        # (#audit-2026-08-27) AUC против label_kind, на который модель РЕАЛЬНО
+        # обучена (по умолчанию beats_costs, см. ML_LABEL_KIND) — не против
+        # is_win. `live_auc` выше остаётся для сравнения/совместимости, но
+        # решение (`verdict`) теперь принимается по этой метрике.
+        "live_auc_vs_train_label": auc_train_label,
+        "train_label_kind": label_kind,
+        "train_label_sample": len(labeled),
         "threshold": thr,
         "buckets": buckets,
         "threshold_impact": threshold_impact,
         "verdict": verdict,
+        "verdict_source": verdict_source,
         "note": (
-            "live_auc>0.55 и монотонные бакеты (выше score → выше winrate) = модель "
-            "видит сигнал. avoided_net>0 = порог отрезал бы убыточные. Выборка мала "
-            "(<30) → не доверять. Это shadow — на сделки НЕ влияет."
+            "live_auc_vs_train_label>0.55 и монотонные train_label_winrate_pct по бакетам "
+            "= модель видит сигнал в том, чему её реально учили. live_auc (против is_win) "
+            "оставлен для сравнения — он не то, что модель предсказывает, и может расходиться "
+            "с live_auc_vs_train_label. avoided_net>0 = порог отрезал бы убыточные. "
+            "Выборка мала (<30) → не доверять. Это shadow — на сделки НЕ влияет."
         ),
     }

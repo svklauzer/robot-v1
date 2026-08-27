@@ -34,6 +34,13 @@ class MetaLabeler:
         base = self.dataset_path.parent
         self.model_path = base / "meta_labeler.pkl"
         self.meta_path = base / "meta_labeler.json"
+        # (#audit-2026-08-27) Воронка train() (dropped/label_drop/rows_total)
+        # раньше была видна ТОЛЬКО в разовом ответе POST /ml/train — карточка
+        # статуса читает meta_path, который пишется лишь при status=trained,
+        # так что дни подряд неуспешных попыток (даже суточного авто-retrain)
+        # были неотличимы от "планировщик не запускался". Пишем последнюю
+        # попытку СЮДА при любом исходе, status() это читает.
+        self.last_attempt_path = base / "meta_labeler_last_attempt.json"
         self._model = None  # лениво загружается
 
     # ── данные ────────────────────────────────────────────────────────────────
@@ -150,8 +157,25 @@ class MetaLabeler:
         self._label_report = report
         return X, y
 
+    def _save_last_attempt(self, result: dict) -> None:
+        """(#audit-2026-08-27) Persist каждой попытки train() — не только
+        успешной. status() читает это, чтобы карточка на дашборде объясняла
+        "не обучена" воронкой (dropped/label_drop), а не голым тире."""
+        try:
+            payload = {**result, "attempted_at": datetime.now(timezone.utc).isoformat()}
+            self.last_attempt_path.parent.mkdir(parents=True, exist_ok=True)
+            self.last_attempt_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # ── обучение ──────────────────────────────────────────────────────────────
     def train(self) -> dict:
+        result = self._train_inner()
+        self._save_last_attempt(result)
+        return result
+
+    def _train_inner(self) -> dict:
         label_kind = str(getattr(settings, "ML_LABEL_KIND", "is_win"))
         min_samples = int(getattr(settings, "ML_MIN_TRAIN_SAMPLES", 150))
 
@@ -403,6 +427,17 @@ class MetaLabeler:
                 meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
             except Exception:
                 meta = {}
+        # (#audit-2026-08-27) Последняя попытка train() (успешная или нет) —
+        # без этого "не обучена" на дашборде неотличима от "планировщик не
+        # запускался": суточный auto-retrain (main.py:background_ml_retrain_loop)
+        # мог честно пытаться и получать insufficient_data каждый день, а
+        # карточка статуса всё равно показывала бы одни тире.
+        last_attempt = {}
+        if self.last_attempt_path.exists():
+            try:
+                last_attempt = json.loads(self.last_attempt_path.read_text(encoding="utf-8"))
+            except Exception:
+                last_attempt = {}
         return {
             "model_exists": self.model_path.exists(),
             "dataset_path": str(self.dataset_path),
@@ -412,4 +447,5 @@ class MetaLabeler:
             "win_rate": meta.get("win_rate"),
             "metrics": meta.get("metrics"),
             "label_kind": meta.get("label_kind"),
+            "last_attempt": last_attempt or None,
         }

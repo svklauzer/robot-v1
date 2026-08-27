@@ -140,6 +140,32 @@ def test_feature_vector_matches_the_contract_length():
     assert vec[idx["rr_asymmetry"]] > 1.0, "TP2 дальше TP1 — асимметрия > 1"
 
 
+def test_robot_loop_forwards_stop_and_size_to_ml_controller():
+    """(#audit-2026-08-27) Train/serve skew: robot_loop.py передавал в
+    ml_controller.evaluate_candidate() confidence/grade/side/regime/net_rr_*,
+    но НЕ stop_price/required_margin/entry — хотя plan (тот же объект, из
+    которого net_rr_tp1/tp2 уже читались) их уже содержал. Результат:
+    row_to_features() тихо ставил stop_distance_pct=0.0 и notional_usdt=0.0
+    на КАЖДОМ живом предсказании, хотя модель обучена на реальных значениях
+    (см. test_decisive_features_are_present выше — обе фичи "решающие").
+    Регрессия по исходнику: дорогой end-to-end тест здесь избыточен, конкретные
+    ключи в буквальном dict-литерале — именно то, что сломалось."""
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "workers" / "robot_loop.py"
+    ).read_text(encoding="utf-8")
+
+    call_start = src.index("self.ml_controller.evaluate_candidate({")
+    call_end = src.index("})", call_start)
+    call_src = src[call_start:call_end]
+
+    for token in ('"stop_price": plan.stop_price',
+                  '"required_margin": plan.required_margin',
+                  '"lifecycle": {"entry_price": plan.entry_price}'):
+        assert token in call_src, f"{token!r} must be forwarded to ml_controller"
+
+
 def test_cvd_is_zeroed_on_a_thin_window_identically_in_train_and_serve():
     """Расхождение train/serve — самый тихий класс ML-багов."""
     thin = {"entry_depth": {"cvd_ratio": 1.0, "cvd_trades": 2}}

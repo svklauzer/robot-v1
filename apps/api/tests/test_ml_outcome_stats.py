@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from services.ml_outcome_stats import MLOutcomeStatsService
 
 
@@ -203,3 +205,69 @@ def test_ml_trade_logger_backfills_unlogged_closed_signals(tmp_path):
         assert rows[0]["closed_reason"] == "failed_setup_exit"
     finally:
         db.close()
+
+
+def _shadow_row(*, score, pnl, net_pnl_stop=-2.0):
+    return {
+        "status": "closed", "symbol": "BTC/USDT", "side": "long",
+        "ml_score": score, "closed_net_pnl": pnl, "net_pnl_stop": net_pnl_stop,
+    }
+
+
+def test_shadow_report_auc_is_measured_against_train_label_not_is_win(tmp_path, monkeypatch):
+    """(#audit-2026-08-27) Модель обучена на ML_LABEL_KIND (по умолчанию
+    beats_costs: pnl/risk >= ML_LABEL_MIN_R), не на is_win (pnl > 0). Раньше
+    shadow_report() мерил AUC только против is_win — целиком другой вопрос.
+    Здесь: B — маленький "царапина"-плюс (+0.1 при риске 2.0 → r=0.05 < 0.3)
+    с САМЫМ высоким score. Против is_win это "верно предсказанный win" —
+    is_win-AUC получается идеальным (1.0). Против beats_costs (реальной цели
+    обучения) это ложноположительный высокий score на сделке, которая риск
+    не отбила — auc_vs_train_label должен быть заметно ниже и не равен 1.0.
+    """
+    from core.config import settings
+    monkeypatch.setattr(settings, "ML_LABEL_KIND", "beats_costs", raising=False)
+    monkeypatch.setattr(settings, "ML_LABEL_MIN_R", 0.3, raising=False)
+
+    path = tmp_path / "trade_outcomes.jsonl"
+    rows = [
+        _shadow_row(score=0.6, pnl=5.0),    # beats_costs=1, is_win=1
+        _shadow_row(score=0.95, pnl=0.1),   # beats_costs=0, is_win=1 (scratch win, highest score)
+        _shadow_row(score=0.2, pnl=-3.0),   # beats_costs=0, is_win=0
+        _shadow_row(score=0.3, pnl=-1.0),   # beats_costs=0, is_win=0
+        _shadow_row(score=0.7, pnl=4.0),    # beats_costs=1, is_win=1
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    report = MLOutcomeStatsService(path=path).shadow_report()
+
+    assert report["status"] == "ok"
+    assert report["live_auc"] == pytest.approx(1.0)  # is_win: perfectly separable by construction
+    assert report["live_auc_vs_train_label"] is not None
+    assert report["live_auc_vs_train_label"] < 1.0  # beats_costs: B corrupts the ranking
+    assert report["live_auc_vs_train_label"] == pytest.approx(2 / 3, abs=0.01)
+    assert report["train_label_kind"] == "beats_costs"
+
+
+def test_shadow_report_net_pnl_and_gate_benefit_are_real_dollars(tmp_path):
+    """(#audit-2026-08-27) net_pnl_usdt в бакетах был TODO-заглушкой (всегда
+    0.0), ml_gate_benefit_usdt — формулой `(winrate_delta/100)*count*10`, не
+    связанной с реальными деньгами. Теперь оба — настоящие суммы closed_net_pnl."""
+    path = tmp_path / "trade_outcomes.jsonl"
+    rows = [
+        _shadow_row(score=0.6, pnl=5.0),
+        _shadow_row(score=0.95, pnl=0.1),
+        _shadow_row(score=0.2, pnl=-3.0),
+        _shadow_row(score=0.3, pnl=-1.0),
+        _shadow_row(score=0.7, pnl=4.0),
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    report = MLOutcomeStatsService(path=path).shadow_report()
+
+    # threshold defaults to ML_MIN_SCORE_TO_TRADE=0.45: taken={.6,.95,.7}=9.1, skipped={.2,.3}=-4.0
+    assert report["threshold_impact"]["taken_net_usdt"] == pytest.approx(9.1)
+    assert report["threshold_impact"]["skipped_net_usdt"] == pytest.approx(-4.0)
+    # gate benefit = taken_net - total_net(5.1) = 4.0, not the old fabricated formula
+    assert report["threshold_impact"]["ml_gate_benefit_usdt"] == pytest.approx(4.0)
+    total_bucket_net = sum(b["net_pnl_usdt"] for b in report["buckets"])
+    assert total_bucket_net == pytest.approx(5.1)

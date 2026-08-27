@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from core.config import settings
+from services.ml_features import row_to_label
 
 def sanitize_float(value, default=0.0) -> float:
     """Санитизация float-значений для JSON: nan/inf -> default."""
@@ -405,41 +406,56 @@ class MLOutcomeStatsService:
 
     def shadow_report(self) -> dict:
         """Отчёт для Shadow mode: калибровка ml_score против фактических исходов.
-        
+
         Возвращает:
-        - live_auc: AUC на реальных сделках
+        - live_auc: AUC против is_win (closed_net_pnl > 0) — для сравнения
+        - live_auc_vs_train_label: AUC против ЦЕЛИ ОБУЧЕНИЯ (ML_LABEL_KIND,
+          по умолчанию beats_costs) — то, что модель реально предсказывает.
+          Вердикт считается по ЭТОЙ метрике.
         - base_winrate: базовый winrate выборки
         - threshold: текущий порог входа
-        - buckets: калибровка по диапазонам ml_score
-        - threshold_impact: оценка выгоды от гейтирования по порогу
+        - buckets: калибровка по диапазонам ml_score (обе метки + РЕАЛЬНЫЙ net PnL)
+        - threshold_impact: оценка выгоды от гейтирования по порогу (реальные USDT)
+
+        (#audit-2026-08-27) Раньше эта функция мерила модель против is_win —
+        цели, на которую модель НЕ обучена (обучена на beats_costs, см.
+        ml_features.row_to_label — сделка +0.05R это win для is_win, но 0 для
+        beats_costs). Плюс net_pnl_usdt/ml_gate_benefit_usdt были не суммой
+        реального PnL, а TODO-заглушкой (всегда 0.0) и грубой формулой
+        `(winrate_delta/100)*count*10` соответственно — не настоящие деньги.
         """
         rows = self._load_rows()
-        
+
         # Фильтруем только закрытые сделки с ml_score
         closed_with_score = [
-            r for r in rows 
-            if str(r.get("status") or "") == "closed" 
+            r for r in rows
+            if str(r.get("status") or "") == "closed"
             and r.get("ml_score") is not None
         ]
-        
+
         if len(closed_with_score) < 5:
             return {
                 "status": "insufficient_sample",
                 "message": f"Нужно минимум 5 сделок с ml_score, сейчас {len(closed_with_score)}",
                 "scored_closed": len(closed_with_score),
             }
-        
-        # Извлекаем y_true и y_pred с санитизацией
-        y_true = []
-        y_pred = []
+
+        label_kind = str(getattr(settings, "ML_LABEL_KIND", "beats_costs"))
+        min_r = float(getattr(settings, "ML_LABEL_MIN_R", 0.3))
+
+        # Извлекаем y_true (is_win), y_pred (ml_score), net (реальный USDT) и
+        # train_label (то, чему модель реально обучена) с санитизацией.
+        y_true: list[int] = []
+        y_pred: list[float] = []
+        nets: list[float] = []
+        train_labels: list[int | None] = []
         for r in closed_with_score:
             pnl = sanitize_float(r.get("closed_net_pnl"), 0.0)
             y_true.append(1 if pnl > 0 else 0)
+            nets.append(pnl)
             score_raw = r.get("ml_score")
-            if score_raw is None:
-                continue
-            score = sanitize_float(score_raw, 0.5)
-            y_pred.append(score)
+            y_pred.append(sanitize_float(score_raw, 0.5) if score_raw is not None else 0.5)
+            train_labels.append(row_to_label(r, label_kind, min_r=min_r))
 
         # Проверка на единственный класс (предупреждение sklearn)
         n_pos = sum(y_true)
@@ -454,53 +470,69 @@ class MLOutcomeStatsService:
                 "all_losses": n_neg == len(y_true),
                 "fallback_auc": 0.5,
             }
-        
-        # Считаем live AUC
-        try:
-            from sklearn.metrics import roc_auc_score
-            live_auc_raw = roc_auc_score(y_true, y_pred)
-            # Санитизация: nan/inf -> 0.5 (случайное угадывание)
-            import math
-            if live_auc_raw is None or (isinstance(live_auc_raw, float) and (math.isnan(live_auc_raw) or math.isinf(live_auc_raw))):
-                live_auc = 0.5
-            else:
-                live_auc = round(max(0.0, min(1.0, live_auc_raw)), 4)
-        except Exception:
-            # Fallback: простая эвристика AUC
-            live_auc = self._simple_auc(y_true, y_pred)
-        
+
+        live_auc = self._safe_auc(y_true, y_pred)
+
+        # AUC против ЦЕЛИ ОБУЧЕНИЯ — только строки, где метка вообще считается
+        # (beats_costs требует net_pnl_stop; строки без него исключены отсюда,
+        # но остаются в is_win-метрике выше).
+        labeled_idx = [i for i, lbl in enumerate(train_labels) if lbl is not None]
+        yt_train = [train_labels[i] for i in labeled_idx]
+        yp_train = [y_pred[i] for i in labeled_idx]
+        live_auc_vs_train_label = (
+            self._safe_auc(yt_train, yp_train)
+            if len(set(yt_train)) >= 2 else None
+        )
+
         # Базовый winrate
         base_winrate = round(sum(y_true) / len(y_true) * 100, 2) if y_true else 0.0
-        
+
         # Порог входа (по умолчанию 0.45)
         threshold = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
-        
-        # Калибровка по бакетам
-        buckets = self._calibration_buckets(y_true, y_pred, threshold)
-        
-        # Оценка выгоды гейта
-        threshold_impact = self._threshold_impact(y_true, y_pred, threshold)
-        
-        # Вердикт
+
+        # Калибровка по бакетам (реальный net PnL + обе метки)
+        buckets = self._calibration_buckets(y_true, y_pred, nets, train_labels, threshold)
+
+        # Оценка выгоды гейта (реальные USDT: taken_net - total_net)
+        threshold_impact = self._threshold_impact(y_true, y_pred, nets, threshold)
+
+        # Вердикт — по AUC против цели обучения; если строк с меткой мало,
+        # откатываемся на is_win-AUC, но помечаем источник.
+        verdict_auc = live_auc_vs_train_label if live_auc_vs_train_label is not None else live_auc
+        verdict_source = "train_label" if live_auc_vs_train_label is not None and len(labeled_idx) >= 20 else "is_win_fallback"
         verdict = "insufficient_sample"
-        if len(closed_with_score) >= 20:
-            if live_auc >= 0.60:
+        if len(closed_with_score) >= 20 and (verdict_source == "is_win_fallback" or len(labeled_idx) >= 20):
+            if verdict_auc >= 0.60:
                 verdict = "edge_visible"
-            elif live_auc >= 0.52:
+            elif verdict_auc >= 0.52:
                 verdict = "weak_signal"
             else:
                 verdict = "no_edge_yet"
-        
+
         return {
             "status": "ok",
             "scored_closed": len(closed_with_score),
             "live_auc": live_auc,
+            "live_auc_vs_train_label": live_auc_vs_train_label,
+            "train_label_kind": label_kind,
+            "train_label_sample": len(labeled_idx),
             "base_winrate_pct": base_winrate,
             "threshold": threshold,
             "buckets": buckets,
             "threshold_impact": threshold_impact,
             "verdict": verdict,
+            "verdict_source": verdict_source,
         }
+
+    def _safe_auc(self, y_true: list[int], y_pred: list[float]) -> float:
+        try:
+            from sklearn.metrics import roc_auc_score
+            raw = roc_auc_score(y_true, y_pred)
+            if raw is None or (isinstance(raw, float) and (math.isnan(raw) or math.isinf(raw))):
+                return 0.5
+            return round(max(0.0, min(1.0, float(raw))), 4)
+        except Exception:
+            return self._simple_auc(y_true, y_pred)
     
     def _simple_auc(self, y_true: list[int], y_pred: list[float]) -> float:
         """Простая оценка AUC без sklearn."""
@@ -522,8 +554,19 @@ class MLOutcomeStatsService:
         auc = (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
         return round(max(0.0, min(1.0, auc)), 4)
     
-    def _calibration_buckets(self, y_true: list[int], y_pred: list[float], threshold: float) -> list[dict]:
-        """Калибровка: группировка по диапазонам ml_score."""
+    def _calibration_buckets(self, y_true: list[int], y_pred: list[float],
+                             nets: list[float] | None = None,
+                             train_labels: list[int | None] | None = None,
+                             threshold: float = 0.45) -> list[dict]:
+        """Калибровка: группировка по диапазонам ml_score.
+
+        (#audit-2026-08-27) net_pnl_usdt раньше был TODO-заглушкой (всегда
+        0.0) — теперь реальная сумма closed_net_pnl по бакету. Добавлен
+        train_label_winrate_pct — доля сделок, оправдавших ЦЕЛЬ ОБУЧЕНИЯ
+        (обычно beats_costs), не is_win.
+        """
+        nets = nets if nets is not None else [0.0] * len(y_pred)
+        train_labels = train_labels if train_labels is not None else [None] * len(y_pred)
         # Диапазоны: [0-0.3), [0.3-0.4), [0.4-0.5), [0.5-0.6), [0.6-0.7), [0.7-1.0]
         ranges = [
             (0.0, 0.3, "0.00–0.30"),
@@ -533,55 +576,71 @@ class MLOutcomeStatsService:
             (0.6, 0.7, "0.60–0.70"),
             (0.7, 1.1, "0.70+"),
         ]
-        
+
         buckets = []
         for low, high, label in ranges:
             indices = [i for i, score in enumerate(y_pred) if low <= score < high]
-            
+
             if not indices:
                 continue
-            
+
             count = len(indices)
             wins = sum(y_true[i] for i in indices)
             winrate_pct = round(wins / count * 100, 1) if count > 0 else 0.0
             avg_score = round(sum(y_pred[i] for i in indices) / count, 3) if count > 0 else 0.0
-            
-            # Net PnL (если доступно)
-            net_pnl_usdt = 0.0  # TODO: восстановить из данных
-            
+            net_pnl_usdt = round(sum(nets[i] for i in indices), 4)
+
+            tl_indices = [i for i in indices if train_labels[i] is not None]
+            tl_count = len(tl_indices)
+            tl_wins = sum(train_labels[i] for i in tl_indices)
+
             buckets.append({
                 "range": label,
                 "count": count,
                 "winrate_pct": winrate_pct,
                 "avg_score": avg_score,
                 "net_pnl_usdt": net_pnl_usdt,
+                "train_label_count": tl_count,
+                "train_label_winrate_pct": round(tl_wins / tl_count * 100, 1) if tl_count else None,
             })
-        
+
         return buckets
-    
-    def _threshold_impact(self, y_true: list[int], y_pred: list[float], threshold: float) -> dict:
-        """Оценка выгоды от применения порога threshold."""
+
+    def _threshold_impact(self, y_true: list[int], y_pred: list[float],
+                          nets: list[float] | None = None, threshold: float = 0.45) -> dict:
+        """Оценка выгоды от применения порога threshold — в РЕАЛЬНЫХ USDT.
+
+        (#audit-2026-08-27) ml_gate_benefit_usdt раньше был грубой формулой
+        `(winrate_delta/100)*count*10` — произвольная оценка "$10 за
+        процентный пункт", не связанная с реальными деньгами сделок. Теперь
+        это taken_net - total_net (та же формула, что в services/
+        ml_shadow_report.py) — сколько РЕАЛЬНО заработали/потеряли бы взятые
+        сделки относительно книги "все сделки".
+        """
+        nets = nets if nets is not None else [0.0] * len(y_pred)
         taken_indices = [i for i, score in enumerate(y_pred) if score >= threshold]
         skipped_indices = [i for i, score in enumerate(y_pred) if score < threshold]
-        
+
         taken_count = len(taken_indices)
         skipped_count = len(skipped_indices)
-        
+
         taken_winrate_pct = round(sum(y_true[i] for i in taken_indices) / taken_count * 100, 1) if taken_count > 0 else 0.0
         skipped_winrate_pct = round(sum(y_true[i] for i in skipped_indices) / skipped_count * 100, 1) if skipped_count > 0 else 0.0
-        
-        # Выгода: насколько улучшили winrate отсечением
-        base_winrate = sum(y_true) / len(y_true) * 100 if y_true else 0.0
-        improvement = taken_winrate_pct - base_winrate
-        
-        # ML gate benefit в USDT (оценка)
-        # TODO: восстановить реальные суммы из данных
-        ml_gate_benefit_usdt = round(improvement / 100 * taken_count * 10, 2)  # Грубая оценка
-        
+
+        taken_net = round(sum(nets[i] for i in taken_indices), 4)
+        skipped_net = round(sum(nets[i] for i in skipped_indices), 4)
+        total_net = round(sum(nets), 4)
+        # ВЫГОДА от ML-гейта = насколько книга "только взятые" лучше книги
+        # "все" = taken_net - total_net = -skipped_net. >0 → гейт отрезал бы
+        # чистый минус.
+        ml_gate_benefit_usdt = round(taken_net - total_net, 4)
+
         return {
             "taken_count": taken_count,
             "taken_winrate_pct": taken_winrate_pct,
+            "taken_net_usdt": taken_net,
             "skipped_count": skipped_count,
             "skipped_winrate_pct": skipped_winrate_pct,
+            "skipped_net_usdt": skipped_net,
             "ml_gate_benefit_usdt": ml_gate_benefit_usdt,
         }
