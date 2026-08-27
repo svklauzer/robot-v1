@@ -80,6 +80,12 @@ class TimeframeContext:
     # Stoch RSI предыдущего бара — пересечение %K/%D требует двух точек.
     stoch_rsi_k_prev: float = 0.0
     stoch_rsi_d_prev: float = 0.0
+    # (#trend-tp2-dynamic-2026-08-27) ATR и KAMA предыдущего бара — измеряют
+    # расширение волатильности (atr14/atr14_prev) и наклон линии тренда за
+    # бар, для динамического TP2 (см. _dynamic_tp2_r_mult). Тот же приём, что
+    # adx14_prev/stoch_rsi_*_prev выше.
+    atr14_prev: float = 0.0
+    kama_prev: float = 0.0
 
 
 @dataclass
@@ -303,10 +309,21 @@ class MarketIntelligenceEngine:
                     if c is None:
                         return ""
                     return str(c.get("momentum", "") if isinstance(c, dict) else getattr(c, "momentum", ""))
+                def _tf_adx(tf):
+                    c = contexts.get(tf) if isinstance(contexts, dict) else None
+                    return float(self._ctx_value(c, "adx14", 0) or 0) if c is not None else 0.0
+                def _tf_atr_ratio(tf):
+                    c = contexts.get(tf) if isinstance(contexts, dict) else None
+                    if c is None:
+                        return 1.0
+                    a = float(self._ctx_value(c, "atr14", 0) or 0)
+                    ap = float(self._ctx_value(c, "atr14_prev", 0) or 0)
+                    return (a / ap) if ap > 0 else 1.0
                 crt_sig = CRTStrategyService().evaluate(
                     htf_c, ltf_c, symbol=symbol, current_price=cur_px,
                     htf_trend=_tf_trend("4h"), mtf_trend=_tf_trend("1h"),
                     htf_momentum=_tf_momentum("4h"), mtf_momentum=_tf_momentum("1h"),
+                    htf_adx=_tf_adx("4h"), htf_atr_ratio=_tf_atr_ratio("4h"),
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"[CRT STRATEGY ERROR] {symbol}: {exc}")
@@ -476,6 +493,19 @@ class MarketIntelligenceEngine:
             k_prev, d_prev = self._stoch_rsi(close[:-1])
         except Exception:  # noqa: BLE001
             k_prev = d_prev = 0.0
+        try:
+            atr_prev = self._atr(high[:-1], low[:-1], close[:-1], 14)
+        except Exception:  # noqa: BLE001
+            atr_prev = 0.0
+        try:
+            kama_prev_value = kama_last(
+                [float(x) for x in close[:-1]],
+                er_period=int(getattr(settings, "KAMA_ER_PERIOD", 10)),
+                fast=int(getattr(settings, "KAMA_FAST", 2)),
+                slow=int(getattr(settings, "KAMA_SLOW", 30)),
+            ) or 0.0
+        except Exception:  # noqa: BLE001
+            kama_prev_value = 0.0
 
         return TimeframeContext(
             timeframe=timeframe,
@@ -514,6 +544,8 @@ class MarketIntelligenceEngine:
             adx14_prev=round(float(adx_prev), 4),
             stoch_rsi_k_prev=round(float(k_prev), 4),
             stoch_rsi_d_prev=round(float(d_prev), 4),
+            atr14_prev=round(float(atr_prev), 8),
+            kama_prev=round(float(kama_prev_value), 8),
         )
 
     def _score_context(self, ctx: TimeframeContext) -> dict[str, float]:
@@ -901,6 +933,87 @@ class MarketIntelligenceEngine:
         meta["dist_pct"] = round(clamped_pct, 4)
         return round(level, 8), meta
 
+    def _dynamic_tp2_r_mult(self, contexts, *, side: str, base_r_mult: float) -> tuple[float, dict]:
+        """(#trend-tp2-dynamic-2026-08-27) Множитель TP2 растёт с силой ЖИВОГО
+        тренда (ADX, расширение ATR, наклон KAMA) — сделка должна забирать
+        больше хода, когда рынок реально трендует сильнее обычного.
+
+        ВАЖНО — это НЕ повторяет две прошлые провалившиеся попытки:
+          * services/setup_reach.py (#setup-reach) считал цель по историческим
+            квантилям MFE/MAE и мог только СУЖАТЬ уровни — отрезал прибыльные
+            "хвосты" и на реальных сделках ухудшил P&L (см. его докстринг).
+          * market_intelligence.py когда-то выводил TP1 из той же исторической
+            медианы MFE, которую использует гейт tp_reachability.evaluate() —
+            получилась циклическая проверка "цель против самой себя",
+            блокировавшая символы с короткой историей навсегда (откачено,
+            см. tests/test_tp1_from_measured_move.py).
+        Здесь источник — ТОЛЬКО текущие индикаторы рынка (ADX/ATR/KAMA этого
+        бара), gate tp_reachability / исторический MFE-журнал не читаются.
+        Множитель может ТОЛЬКО расти относительно base_r_mult, никогда не
+        сужается — пол всегда прежний фиксированный TREND_TP2_R_MULT.
+        """
+        meta: dict = {"source": "disabled", "r_mult": round(float(base_r_mult), 4)}
+        if not bool(getattr(settings, "TREND_TP2_DYNAMIC_ENABLED", False)):
+            return float(base_r_mult), meta
+
+        tf = str(getattr(settings, "TREND_TP2_DYNAMIC_TF", "1h"))
+        ctx = self._tf(contexts, tf) or self._tf(contexts, "1h")
+        if ctx is None:
+            return float(base_r_mult), {"source": "no_context", "r_mult": round(float(base_r_mult), 4)}
+
+        last = float(self._ctx_value(ctx, "last_close", 0) or 0)
+        atr = float(self._ctx_value(ctx, "atr14", 0) or 0)
+        atr_prev = float(self._ctx_value(ctx, "atr14_prev", 0) or 0)
+        adx = float(self._ctx_value(ctx, "adx14", 0) or 0)
+        kama = float(self._ctx_value(ctx, "kama", 0) or 0)
+        kama_prev = float(self._ctx_value(ctx, "kama_prev", 0) or 0)
+
+        if last <= 0 or atr <= 0:
+            return float(base_r_mult), {"source": "no_data", "r_mult": round(float(base_r_mult), 4)}
+
+        # ADX: сила тренда, 0 у порога входа ТЗ до 1 у "сильного" (BASE+SPAN).
+        adx_base = float(getattr(settings, "TREND_TP2_DYNAMIC_ADX_BASE", 23.0))
+        adx_span = max(float(getattr(settings, "TREND_TP2_DYNAMIC_ADX_SPAN", 27.0)), 1e-6)
+        adx_component = min(max((adx - adx_base) / adx_span, 0.0), 1.0)
+
+        # Расширение ATR: во сколько раз ATR вырос за последний бар сверх "спокойного".
+        atr_exp_span = max(float(getattr(settings, "TREND_TP2_DYNAMIC_ATR_EXP_SPAN", 0.35)), 1e-6)
+        atr_ratio = (atr / atr_prev) if atr_prev > 0 else 1.0
+        atr_component = min(max((atr_ratio - 1.0) / atr_exp_span, 0.0), 1.0)
+
+        # Наклон KAMA за бар, нормированный ATR% и знаком стороны сделки.
+        atr_pct = atr / last * 100.0
+        kama_component = 0.0
+        if kama > 0 and kama_prev > 0 and atr_pct > 0:
+            slope_pct = (kama - kama_prev) / kama_prev * 100.0
+            signed_slope = slope_pct if side == "long" else -slope_pct
+            slope_atr = signed_slope / atr_pct
+            kama_span = max(float(getattr(settings, "TREND_TP2_DYNAMIC_KAMA_SPAN_ATR", 0.60)), 1e-6)
+            kama_component = min(max(slope_atr / kama_span, 0.0), 1.0)
+
+        w_adx = float(getattr(settings, "TREND_TP2_DYNAMIC_W_ADX", 0.5))
+        w_atr = float(getattr(settings, "TREND_TP2_DYNAMIC_W_ATR", 0.3))
+        w_kama = float(getattr(settings, "TREND_TP2_DYNAMIC_W_KAMA", 0.2))
+        w_total = max(w_adx + w_atr + w_kama, 1e-6)
+        strength = (adx_component * w_adx + atr_component * w_atr + kama_component * w_kama) / w_total
+        strength = min(max(strength, 0.0), 1.0)
+
+        max_r = max(float(getattr(settings, "TREND_TP2_DYNAMIC_MAX_R_MULT", 6.0)), float(base_r_mult))
+        dynamic_r = float(base_r_mult) + strength * (max_r - float(base_r_mult))
+        dynamic_r = min(max(dynamic_r, float(base_r_mult)), max_r)  # пол = база — НИКОГДА не сужаем
+
+        meta = {
+            "source": (f"dynamic(adx={adx_component:.2f},atr={atr_component:.2f},"
+                       f"kama={kama_component:.2f},strength={strength:.2f})"),
+            "r_mult": round(dynamic_r, 4),
+            "base_r_mult": round(float(base_r_mult), 4),
+            "adx_component": round(adx_component, 4),
+            "atr_component": round(atr_component, 4),
+            "kama_component": round(kama_component, 4),
+            "strength": round(strength, 4),
+        }
+        return dynamic_r, meta
+
     def _build_long_levels(self, contexts):
         entry_tf = str(getattr(settings, "LEVELS_ENTRY_TF", "5m"))
         signal_tf = str(getattr(settings, "LEVELS_SIGNAL_TF", "15m"))
@@ -989,7 +1102,9 @@ class MarketIntelligenceEngine:
         # (#9) TP1 — достижимая встречная структура (расцеплено от стопа), чтобы
         # включалась машина TP1→breakeven→runner до TP2. TP2 — R-цель для runner'а.
         tp1 = round(self._reachable_tp1("long", last, m5, m15), 4)
-        tp2 = round(last + risk * tcfg.tp2_r_mult, 4)
+        tp2_r_mult, tp2_dyn_meta = self._dynamic_tp2_r_mult(
+            contexts, side="long", base_r_mult=tcfg.tp2_r_mult)
+        tp2 = round(last + risk * tp2_r_mult, 4)
         tp2 = max(tp2, round(last * (1 + tcfg.tp2_floor_pct / 100.0), 4))
         # TP2 всегда дальше TP1 (страховка от инверсии при узком risk).
         tp2 = max(tp2, round(tp1 * (1 + 0.004), 4))
@@ -1013,6 +1128,7 @@ class MarketIntelligenceEngine:
                 "tp1": tp1,
                 "tp2": tp2,
             },
+            "tp2_dynamic": tp2_dyn_meta,
         }
 
     def _build_short_levels(self, contexts):
@@ -1100,7 +1216,9 @@ class MarketIntelligenceEngine:
         # (#9) TP1 — достижимая встречная структура (поддержка), расцеплено от
         # стопа, чтобы включалась машина TP1→breakeven→runner до TP2.
         tp1 = round(self._reachable_tp1("short", last, m5, m15), 4)
-        tp2 = round(last - risk * tcfg.tp2_r_mult, 4)
+        tp2_r_mult, tp2_dyn_meta = self._dynamic_tp2_r_mult(
+            contexts, side="short", base_r_mult=tcfg.tp2_r_mult)
+        tp2 = round(last - risk * tp2_r_mult, 4)
         tp2 = min(tp2, round(last * (1 - tcfg.tp2_floor_pct / 100.0), 4))
         # TP2 всегда дальше TP1 вниз (страховка от инверсии при узком risk).
         tp2 = min(tp2, round(tp1 * (1 - 0.004), 4))
@@ -1123,6 +1241,7 @@ class MarketIntelligenceEngine:
                 "tp1": tp1,
                 "tp2": tp2,
             },
+            "tp2_dynamic": tp2_dyn_meta,
         }
 
     def _trend_state(self, price: float, ema20: float, ema50: float, ema200: float) -> str:

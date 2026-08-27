@@ -74,6 +74,58 @@ def test_every_blueprint_key_is_a_real_setting():
     )
 
 
+def test_trend_tp2_geometry_constants_are_declared():
+    """(#audit-2026-08-27) TREND_TP1_R_MULT/TREND_TP2_R_MULT/TREND_TP1_FLOOR_PCT/
+    TREND_TP2_FLOOR_PCT читались только через strategy_profiles._f(name, default)
+    — getattr с дефолтом — и НЕ были объявлены в Settings. Из-за extra="ignore"
+    любой render.yaml/.env override этих имён молча отбрасывался: настройка
+    была фикцией. Регрессия: эти четыре поля обязаны существовать на Settings."""
+    names = _settings_field_names()
+    for name in (
+        "TREND_TP1_R_MULT", "TREND_TP2_R_MULT",
+        "TREND_TP1_FLOOR_PCT", "TREND_TP2_FLOOR_PCT",
+    ):
+        assert name in names, f"{name} must be declared on Settings"
+
+
+def test_dynamic_tp2_settings_are_declared_and_off_by_default():
+    """(#trend-tp2-dynamic-2026-08-27 / #crt-tp2-dynamic / #range-tp2-dynamic)
+    Новые флаги динамического TP2 должны существовать на Settings (иначе любой
+    override — фикция, тот же класс бага, что и в тесте выше) и быть выключены
+    по умолчанию — раскатка по одному, осознанно, после paper-теста."""
+    cfg = Settings()
+    names = _settings_field_names()
+    for name in (
+        "TREND_TP2_DYNAMIC_ENABLED", "TREND_TP2_DYNAMIC_TF",
+        "TREND_TP2_DYNAMIC_MAX_R_MULT", "TREND_TP2_DYNAMIC_ADX_BASE",
+        "TREND_TP2_DYNAMIC_ADX_SPAN", "TREND_TP2_DYNAMIC_ATR_EXP_SPAN",
+        "TREND_TP2_DYNAMIC_KAMA_SPAN_ATR", "TREND_TP2_DYNAMIC_W_ADX",
+        "TREND_TP2_DYNAMIC_W_ATR", "TREND_TP2_DYNAMIC_W_KAMA",
+        "CRT_TP2_DYNAMIC_ENABLED", "CRT_TP2_DYNAMIC_MAX_RR",
+        "CRT_TP2_DYNAMIC_ADX_BASE", "CRT_TP2_DYNAMIC_ADX_SPAN",
+        "CRT_TP2_DYNAMIC_ATR_EXP_SPAN",
+        "RANGE_TP2_DYNAMIC_ENABLED", "RANGE_TP2_DYNAMIC_MIN_BUFFER",
+        "RANGE_TP2_DYNAMIC_ADX_BASE", "RANGE_TP2_DYNAMIC_ADX_SPAN",
+    ):
+        assert name in names, f"{name} must be declared on Settings"
+
+    assert cfg.TREND_TP2_DYNAMIC_ENABLED is False
+    assert cfg.CRT_TP2_DYNAMIC_ENABLED is False
+    assert cfg.RANGE_TP2_DYNAMIC_ENABLED is False
+
+
+def test_range_and_crt_undeclared_field_bug_is_fixed():
+    """(#audit-2026-08-27) RANGE_CONFIRMED_ONLY / CRT_REQUIRE_TREND_ALIGN были
+    читаны через strategy_profiles._b(name, True) без объявления в Settings —
+    тот же класс бага, что уже однажды случился с ENABLE_SCALP_STRATEGY."""
+    names = _settings_field_names()
+    assert "RANGE_CONFIRMED_ONLY" in names
+    assert "CRT_REQUIRE_TREND_ALIGN" in names
+    cfg = Settings()
+    assert cfg.RANGE_CONFIRMED_ONLY is True
+    assert cfg.CRT_REQUIRE_TREND_ALIGN is True
+
+
 def test_render_blueprint_enforces_capital_leak_entry_gates():
     repo_root = Path(__file__).resolve().parents[3]
     with (repo_root / "render.yaml").open(encoding="utf-8") as fh:
