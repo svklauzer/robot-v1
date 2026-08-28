@@ -365,9 +365,23 @@ def build(limit: int = 2000) -> dict:
                         "пишутся с момента включения TRAJ_RECORD_ENABLED — подожди новых закрытий."),
         }
 
-    arms = [0.3, 0.5, 0.7]
-    gives = [0.4, 0.5, 0.6]
-    time_stops = [45.0, 90.0, None]  # None = time-stop off
+    # (#audit-2026-08-28) Текущий боевой конфиг ОБЯЗАН быть членом сетки —
+    # иначе current_row ниже молча не находится (в точности баг, который уже
+    # был у build_trend() до #replay-fidelity-2026-08-03) и "Текущий конфиг"
+    # на вкладке Скальп/рэйндж вечно показывает "—" вне зависимости от
+    # данных. render.yaml живьём даёт SCALP_BREAKEVEN_ARM_PCT=0.25 и
+    # SCALP_TIME_STOP_MIN=60.0 — ни один не входил в старую сетку [0.3,0.5,0.7]
+    # / [45.0,90.0,None].
+    current = {
+        "arm_pct": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5)),
+        "giveback_share": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.6)),
+        "time_stop_min": (_sanitize_float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
+                          if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)) else None),
+    }
+    arms = sorted({0.3, 0.5, 0.7, current["arm_pct"]})
+    gives = sorted({0.4, 0.5, 0.6, current["giveback_share"]})
+    time_stops = sorted({45.0, 90.0, *([current["time_stop_min"]] if current["time_stop_min"] is not None else [])})
+    time_stops.append(None)  # None = time-stop off, всегда отдельным вариантом
     hard_mult = _sanitize_float(getattr(settings, "SCALP_TIME_STOP_HARD_MULT", 2.0))
 
     actual_total = round(sum(t["final_pct"] for t in trades), 4)
@@ -411,12 +425,10 @@ def build(limit: int = 2000) -> dict:
 
     split = _split_check(trades, _run_scalp, variants[0], _key_scalp)
 
-    current = {
-        "arm_pct": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_ARM_PCT", 0.5)),
-        "giveback_share": _sanitize_float(getattr(settings, "SCALP_BREAKEVEN_GIVEBACK_SHARE", 0.6)),
-        "time_stop_min": (_sanitize_float(getattr(settings, "SCALP_TIME_STOP_MIN", 45.0))
-                          if bool(getattr(settings, "SCALP_TIME_STOP_ENABLED", True)) else None),
-    }
+    # (#audit-2026-08-28) current — build_trend()'s current_row/current_rank
+    # pattern, mirrored here. arms/gives/time_stops above now always contain
+    # `current`'s values, so this lookup can no longer silently miss.
+    current_row = next((v for v in variants if _key_scalp(v) == _key_scalp(current)), None)
 
     return {
         "status": "ok",
@@ -427,6 +439,9 @@ def build(limit: int = 2000) -> dict:
         "booked_total_pct": round(sum(t["booked_pct"] for t in trades), 4),
         "phantom_fill_trades": phantom_count,
         "current_config": current,
+        "current_rank": (variants.index(current_row) + 1) if current_row else None,
+        "current_total_pct": current_row["total_pct"] if current_row else None,
+        "variants_count": len(variants),
         "best": variants[0],
         "worst": variants[-1],
         "overfit_check": split,
@@ -694,10 +709,17 @@ SCALP_GRID_AXES = {
 
 # Режим -> какие trade_mode в него попадают. Разрезы нужны потому, что
 # лестницы выхода у движков разные: оптимум скальпа ничего не говорит о тренде.
+# (#audit-2026-08-28) "range" сюда никогда не попадал: robot_loop.py проставляет
+# trade_mode="scalp" И для regime="range", И для regime="scalp" (комментарий там:
+# "Range-вход (Phase 2) проставит 'scalp'") — build() выше это уже учитывает
+# фильтром mode in ("scalp","range"), а здесь REGIME_MODES["range"]=("range",)
+# не совпадал НИ С ОДНОЙ реально сохранённой строкой: walk_forward(regime="range")
+# всегда возвращал 0 сделок. "scalp" оставлен отдельным ключом для совместимости
+# вызовов regime="scalp", но обе метки читают один и тот же trade_mode.
 REGIME_MODES = {
     "trend": ("trend", "crt", "position", ""),
-    "range": ("range",),
-    "scalp": ("scalp",),
+    "range": ("scalp", "range"),
+    "scalp": ("scalp", "range"),
 }
 
 
