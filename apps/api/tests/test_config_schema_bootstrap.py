@@ -105,11 +105,25 @@ def test_trend_tp2_geometry_recalibrated_to_reachable_distance():
     assert cfg.TP1_MAX_PCT < cfg.TREND_TP2_FLOOR_PCT
 
 
-def test_dynamic_tp2_settings_are_declared_and_off_by_default():
+def test_crt_tp2_dynamic_enabled_after_live_evidence():
+    """(#audit-2026-08-28) Живые данные 28.08: CRT-сетапы (score 61-92,
+    mss+fvg подтверждены после возврата CRT_LTF_CONFIRM=either) валились на
+    net_rr_blended_too_low с blended RR 0.90-0.99 против порога 1.10 —
+    не хватало 0.1-0.2, почти целиком из-за консервативного CRT_TP2_RR=1.5
+    (render.yaml). Включено осознанно: механизм только расширяет RR вверх
+    от базового, никогда не сужает — не может ухудшить уже отклонённые
+    сетапы, может протолкнуть часть из них выше порога. Регрессия: не даём
+    флагу случайно откатиться назад на False."""
+    cfg = Settings()
+    assert cfg.CRT_TP2_DYNAMIC_ENABLED is True
+
+
+def test_dynamic_tp2_settings_are_declared_and_trend_range_off_by_default():
     """(#trend-tp2-dynamic-2026-08-27 / #crt-tp2-dynamic / #range-tp2-dynamic)
     Новые флаги динамического TP2 должны существовать на Settings (иначе любой
-    override — фикция, тот же класс бага, что и в тесте выше) и быть выключены
-    по умолчанию — раскатка по одному, осознанно, после paper-теста."""
+    override — фикция, тот же класс бага, что и в тесте выше). TREND и RANGE
+    остаются выключены по умолчанию — раскатка по одному, осознанно, после
+    живых данных (CRT включён отдельным тестом выше по той же логике)."""
     cfg = Settings()
     names = _settings_field_names()
     for name in (
@@ -127,8 +141,8 @@ def test_dynamic_tp2_settings_are_declared_and_off_by_default():
         assert name in names, f"{name} must be declared on Settings"
 
     assert cfg.TREND_TP2_DYNAMIC_ENABLED is False
-    assert cfg.CRT_TP2_DYNAMIC_ENABLED is False
     assert cfg.RANGE_TP2_DYNAMIC_ENABLED is False
+    # CRT_TP2_DYNAMIC_ENABLED — see test_crt_tp2_dynamic_enabled_after_live_evidence above.
 
 
 def test_range_and_crt_undeclared_field_bug_is_fixed():

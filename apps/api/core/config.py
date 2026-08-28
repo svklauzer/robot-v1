@@ -994,7 +994,14 @@ class Settings(BaseSettings):
     # (CRT её не считает). Работает ТОЛЬКО когда CRT_TARGETS_MODE=extended —
     # в режиме "range" TP2 структурный (CRH/CRL), rr в нём не участвует.
     # ТОЛЬКО расширяет CRT_TP2_RR вверх, никогда не сужает.
-    CRT_TP2_DYNAMIC_ENABLED: bool = False
+    # (#audit-2026-08-28) ВКЛЮЧЕНО: живые данные 28.08 показали CRT-сетапы
+    # (score 61-92, mss+fvg подтверждены после возврата CRT_LTF_CONFIRM=either)
+    # с blended RR 0.90-0.99 против порога MIN_NET_RR_BLENDED=1.10 — не хватало
+    # 0.1-0.2, почти целиком из-за консервативного CRT_TP2_RR=1.5 (render.yaml).
+    # Так как множитель только расширяет RR вверх и никогда не сужает, это
+    # может только протолкнуть часть таких сетапов выше порога, не может
+    # сделать хуже уже отклонённые.
+    CRT_TP2_DYNAMIC_ENABLED: bool = True
     CRT_TP2_DYNAMIC_MAX_RR: float = 3.5
     CRT_TP2_DYNAMIC_ADX_BASE: float = 23.0
     CRT_TP2_DYNAMIC_ADX_SPAN: float = 27.0
