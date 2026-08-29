@@ -1687,7 +1687,7 @@ class Settings(BaseSettings):
     # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
     # его $-награда мала by design. Реальная награда и её гейт — на TP2.
     MIN_NET_PNL_TP1_USDT: float = 0.20
-    MIN_NET_PNL_TP2_USDT: float = 3.5
+    MIN_NET_PNL_TP2_USDT: float = 2.0 # 29.08.2026 ,было 3.5
 
     # (#7) Штраф за вход против краткосрочного перегрева: не покупаем вершину
     # (long при 1m/5m overheated) и не шортим дно (short при 1m/5m oversold).
