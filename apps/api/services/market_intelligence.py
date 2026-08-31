@@ -1630,6 +1630,7 @@ class MarketIntelligenceEngine:
         entry_zone = None
         stop_price = None
         tp = None
+        levels: dict | None = None
 
         # confidence_hint is computed after action is determined (see below)
         # so we initialise to raw total for hold/unknown cases.
@@ -1734,6 +1735,13 @@ class MarketIntelligenceEngine:
             contexts=contexts,
             scores=scores,
         )
+        # (#tp2-dynamic-audit-2026-08-31) _build_long/short_levels() считает
+        # tp2_dynamic, но раньше он никуда не попадал — setup_quality строится
+        # отдельно через _score_setup_quality(), не из levels. Без этого нельзя
+        # было отличить в телеметрии "динамика раздула TP2" от "цель и так была
+        # недостижима".
+        if levels and levels.get("tp2_dynamic"):
+            setup_quality["tp2_dynamic"] = levels["tp2_dynamic"]
 
         setup_decision = str(setup_quality.get("decision", "hold"))
 
