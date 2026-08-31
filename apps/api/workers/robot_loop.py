@@ -678,6 +678,12 @@ class RobotLoop:
                 net_rr_tp2=getattr(plan, "net_rr_tp2", None),
             )
             if not _tp_reach.allowed:
+                # (#tp2-dynamic-audit-2026-08-31) tp_reach.as_dict() пишет только
+                # дистанцию/hit-rate, а не откуда взялась сама дистанция. Без
+                # этого нельзя отличить "динамика раздула TP2 за пределы
+                # исторически достижимого" от "цель и так была недостижима" —
+                # прокидываем tp2_dynamic из setup_quality, если он там есть.
+                _tp2_dyn = (result.setup_quality or {}).get("tp2_dynamic") if result.setup_quality else None
                 self.decisions.record(
                     db,
                     symbol=symbol,
@@ -687,7 +693,7 @@ class RobotLoop:
                     regime=str(getattr(result, "regime", "") or ""),
                     radar_state=getattr(result, "radar_state", None),
                     confidence_hint=getattr(result, "confidence_hint", None),
-                    payload=_tp_reach.as_dict(),
+                    payload={**_tp_reach.as_dict(), "tp2_dynamic": _tp2_dyn},
                 )
                 db.flush()
                 continue

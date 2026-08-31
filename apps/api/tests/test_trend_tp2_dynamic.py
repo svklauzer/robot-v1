@@ -152,3 +152,72 @@ def test_build_long_levels_tp2_widens_with_strong_trend(monkeypatch):
     assert dynamic["tp"]["tp2"] > baseline["tp"]["tp2"]
     assert dynamic["tp"]["tp2"] > dynamic["tp"]["tp1"]
     assert dynamic["tp2_dynamic"]["r_mult"] > baseline["tp2_dynamic"]["r_mult"]
+
+
+def test_multi_timeframe_candidate_surfaces_tp2_dynamic_in_setup_quality(monkeypatch):
+    """(#tp2-dynamic-audit-2026-08-31) _build_long/short_levels() считает
+    tp2_dynamic, но в проде setup_quality строится ОТДЕЛЬНО через
+    _score_setup_quality() — levels["tp2_dynamic"] раньше нигде не оседал,
+    и ни телеметрия (`tp2_reached_too_rarely`), ни /signals не могли
+    показать, раздула ли динамика TP2 сверх исторически достижимого, или
+    цель и так была недостижима. Проверяем именно боевой путь
+    (_build_multi_timeframe_candidate), а не _build_long_levels напрямую —
+    предыдущий тест уже проверил последний и не поймал бы эту потерю."""
+    eng = _engine()
+    monkeypatch.setattr(
+        eng, "_detect_radar_state", lambda **kw: "none", raising=False)
+    monkeypatch.setattr(
+        eng, "_build_long_levels",
+        lambda contexts: {
+            "entry_zone": [99.0, 100.0],
+            "stop_price": 95.0,
+            "tp": {"tp1": 102.0, "tp2": 108.0},
+            "tp2_dynamic": {"r_mult": 4.5, "source": "adx=50.0 strength=0.9"},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        eng, "_score_setup_quality",
+        lambda **kw: {"decision": "approve", "final_score": 80.0},
+        raising=False,
+    )
+
+    result = eng._build_multi_timeframe_candidate(
+        symbol="BTC/USDT",
+        source="mtf",
+        contexts={"15m": _ctx()},
+        scores={"trend": 75.0, "momentum": 70.0, "volume": 50.0,
+                "structure": 50.0, "volatility": 50.0, "total": 60.0},
+        regime="trend_up_candidate",
+    )
+
+    assert result.setup_quality is not None
+    assert "tp2_dynamic" in result.setup_quality, (
+        "tp2_dynamic посчитан в levels, но потерян по пути в setup_quality — "
+        "именно это скрывало причину блокировок tp2_reached_too_rarely")
+    assert result.setup_quality["tp2_dynamic"]["r_mult"] == 4.5
+
+
+def test_hold_candidate_does_not_crash_without_levels(monkeypatch):
+    """regime вне trend_up/down_candidate (hold/mixed/flat) никогда не строит
+    levels — merge не должен падать на NameError, когда его нет."""
+    eng = _engine()
+    monkeypatch.setattr(
+        eng, "_detect_radar_state", lambda **kw: "none", raising=False)
+    monkeypatch.setattr(
+        eng, "_score_setup_quality",
+        lambda **kw: {"decision": "hold", "final_score": 40.0},
+        raising=False,
+    )
+
+    result = eng._build_multi_timeframe_candidate(
+        symbol="BTC/USDT",
+        source="mtf",
+        contexts={"15m": _ctx()},
+        scores={"trend": 50.0, "momentum": 50.0, "volume": 50.0,
+                "structure": 50.0, "volatility": 50.0, "total": 50.0},
+        regime="mixed",
+    )
+
+    assert result.action == "hold"
+    assert "tp2_dynamic" not in result.setup_quality
