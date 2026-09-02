@@ -1,14 +1,16 @@
 """OKXClient.amount_to_precision / contract_size — сверка логикой, а не сетью
-(#okx-satellite-2026-09-02, план раздел 1/8).
+(#okx-satellite-2026-09-02, план раздел 1/8; #okx-precision-verified-2026-09-02).
 
 HTXClient.amount_to_precision конвертирует объём в целые контракты для
 линейных свопов — это стандартное поведение КОНТРАКТНЫХ рынков вообще (не
 HTX-специфика: ccxt нормализует contract/contractSize одинаково для любой
-биржи), но живьём против настоящего ccxt.okx().load_markets() не сверялось
-(нет сетевого доступа в этой среде). Этот файл фиксирует логику через
-фикстурные market metadata — воспроизводит форму, которую ccxt реально отдаёт
-для OKX linear-swap рынков (contract=True, contractSize=<база>, тот же формат,
-что и HTX), без обращения к сети.
+биржи). Подтверждено официальной документацией OKX (docs-v5, /public/
+instruments): `lotSz`/`minSz` для деривативов — это число контрактов, не
+монет, а `ctVal` (contract value) — источник, из которого ccxt строит
+унифицированный `contractSize`. Этот файл фиксирует логику через фикстурные
+market metadata — воспроизводит форму, которую ccxt реально отдаёт для OKX
+linear-swap рынков (contract=True, contractSize=<база>, тот же формат, что
+и HTX), без обращения к сети.
 """
 from __future__ import annotations
 
