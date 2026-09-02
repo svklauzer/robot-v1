@@ -1,6 +1,6 @@
 import random
 import pandas as pd
-from services.exchange_factory import get_exchange_client
+from services.exchange_factory import get_exchange_client, resolve_exchange_name
 
 from core.config import settings
 
@@ -9,6 +9,10 @@ class MarketDataService:
     def __init__(self, exchange: str | None = None):
         # (#okx-satellite-exchange-routing-2026-09-02) см. CostEngine.__init__.
         self.client = get_exchange_client(exchange)
+        # (#market-source-label-2026-09-02) Раньше "source" в snapshot/
+        # ticker_snapshot был захардкожен строкой "htx" — Health-страница
+        # показывала неверный источник данных при активной OKX.
+        self.exchange_name = resolve_exchange_name(exchange)
 
     def snapshot(self, symbol: str) -> dict:
         try:
@@ -26,7 +30,7 @@ class MarketDataService:
                 "bid": ticker.get("bid"),
                 "ask": ticker.get("ask"),
                 "ohlcv": df,
-                "source": "htx",
+                "source": self.exchange_name,
             }
 
         except Exception as e:
@@ -45,7 +49,7 @@ class MarketDataService:
             "last": ticker.get("last"),
             "bid": ticker.get("bid"),
             "ask": ticker.get("ask"),
-            "source": "htx",
+            "source": self.exchange_name,
         }
 
     def mock_snapshot(self, symbol: str) -> dict:

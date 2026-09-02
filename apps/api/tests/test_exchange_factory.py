@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from core.config import settings
-from services.exchange_factory import get_exchange_client
+from services.exchange_factory import get_exchange_client, resolve_exchange_name
 from services.htx_client import HTXClient
 from services.okx_client import OKXClient
 
@@ -50,3 +50,30 @@ def test_explicit_override_okx_regardless_of_active(monkeypatch):
 def test_none_override_preserves_active_exchange_behavior(monkeypatch):
     monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
     assert isinstance(get_exchange_client(None), OKXClient)
+
+
+# ── resolve_exchange_name(): та же нормализация, но как строка для UI-меток ─
+# (#market-source-label-2026-09-02) — get_exchange_client() и resolve_exchange_name()
+# обязаны соглашаться на 100%, иначе UI снова разойдётся с тем, что реально
+# используется.
+
+def test_resolve_name_matches_client_selection_for_htx(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "htx", raising=False)
+    assert resolve_exchange_name() == "htx"
+    assert isinstance(get_exchange_client(), HTXClient)
+
+
+def test_resolve_name_matches_client_selection_for_okx(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    assert resolve_exchange_name() == "okx"
+    assert isinstance(get_exchange_client(), OKXClient)
+
+
+def test_resolve_name_respects_explicit_override(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    assert resolve_exchange_name("htx") == "htx"
+
+
+def test_resolve_name_falls_back_to_htx_on_garbage_value(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "bybit", raising=False)
+    assert resolve_exchange_name() == "htx"
