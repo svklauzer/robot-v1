@@ -13,6 +13,18 @@ from __future__ import annotations
 from core.config import settings
 
 
+def resolve_exchange_name(exchange: str | None = None) -> str:
+    """Та же нормализация, что и get_exchange_client — единственный источник
+    правды о том, какая биржа реально выбрана. Нужна там, где важно не само
+    подключение, а точная МЕТКА для UI (#market-source-label-2026-09-02):
+    MarketDataService раньше отдавал "source": "htx" захардкоженной строкой
+    независимо от реально резолвнутого клиента — на Health-странице карточка
+    Market показывала "htx" даже когда ACTIVE_EXCHANGE=okx и данные реально
+    шли с OKX."""
+    ex = str(exchange or settings.active_exchange or "htx").strip().lower()
+    return "okx" if ex == "okx" else "htx"
+
+
 def get_exchange_client(exchange: str | None = None):
     """Возвращает HTXClient() или OKXClient().
 
@@ -25,8 +37,7 @@ def get_exchange_client(exchange: str | None = None):
     ACTIVE_EXCHANGE задним числом "переносит" уже открытую позицию на чужой
     клиент (цена, комиссии и само исполнение закрытия уйдут не туда).
     """
-    ex = str(exchange or settings.active_exchange or "htx").strip().lower()
-    if ex == "okx":
+    if resolve_exchange_name(exchange) == "okx":
         from services.okx_client import OKXClient
 
         return OKXClient()
