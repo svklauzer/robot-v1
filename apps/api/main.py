@@ -1277,6 +1277,7 @@ def list_signals(limit: int = 50, offset: int = 0):
                     "closed_net_pnl": s.closed_net_pnl,
                     "closed_total_cost": s.closed_total_cost,
                     "closed_reason": s.closed_reason,
+                    "exchange": s.exchange,
                 }
                 for s in signals
             ],
@@ -1305,14 +1306,16 @@ def list_positions(limit: int = 500):
         signal_ids = [p.signal_id for p in positions if p.signal_id is not None]
         realized_map: dict = {}
         partial_map: dict = {}
+        exchange_map: dict = {}
         if signal_ids:
             rows = (
-                db.query(Signal.id, Signal.closed_net_pnl, Signal.plan_json)
+                db.query(Signal.id, Signal.closed_net_pnl, Signal.plan_json, Signal.exchange)
                 .filter(Signal.id.in_(signal_ids))
                 .all()
             )
-            for sid, pnl, plan_json in rows:
+            for sid, pnl, plan_json, exchange in rows:
                 realized_map[sid] = pnl
+                exchange_map[sid] = exchange
                 partial = (plan_json or {}).get("tp1_partial") if isinstance(plan_json, dict) else None
                 if isinstance(partial, dict) and partial.get("net_pnl") is not None:
                     partial_map[sid] = partial.get("net_pnl")
@@ -1330,6 +1333,7 @@ def list_positions(limit: int = 500):
                 "tp1_partial_pnl": partial_map.get(p.signal_id) if str(p.status or "").lower() != "closed" else None,
                 "status": p.status,
                 "signal_id": p.signal_id,
+                "exchange": exchange_map.get(p.signal_id, "htx"),
             }
             for p in positions
         ]
@@ -1500,6 +1504,8 @@ async def force_paper_signal():
             bot_id=bot.id,
             symbol=test_signal["symbol"],
             side=test_signal["action"],
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={"from": test_signal["entry_zone"][0], "to": test_signal["entry_zone"][1]},
             stop_price=test_signal["stop_price"],
@@ -1674,6 +1680,8 @@ async def force_live_near_signal():
             bot_id=bot.id,
             symbol=test_signal["symbol"],
             side=test_signal["action"],
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={"from": entry_from, "to": entry_to},
             stop_price=stop,
@@ -1846,6 +1854,8 @@ async def force_scalp_signal():
             bot_id=bot.id,
             symbol=test_signal["symbol"],
             side=test_signal["action"],
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={"from": entry_from, "to": entry_to},
             stop_price=stop,
@@ -2186,6 +2196,8 @@ async def force_valid_trade_signal():
             bot_id=bot.id,
             symbol=test_signal["symbol"],
             side=test_signal["action"],
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={"from": entry_from, "to": entry_to},
             stop_price=stop,
@@ -2537,6 +2549,8 @@ async def force_intelligence_signal(symbol: str = "BTC/USDT"):
             bot_id=bot.id,
             symbol=symbol,
             side=result.action,
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={"from": entry_from, "to": entry_to},
             stop_price=stop,
@@ -3596,6 +3610,8 @@ async def intelligence_scan_run():
                 bot_id=bot.id,
                 symbol=symbol,
                 side=side,
+                # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+                exchange=settings.active_exchange,
                 status="published",
                 entry_zone_json={
                     "from": float(candidate["entry_from"]),

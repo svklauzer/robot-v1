@@ -38,9 +38,10 @@ class TradePlan:
 
 
 class TradePlanBuilder:
-    def __init__(self):
-        self.cost_engine = CostEngine()
-        self.htx = get_exchange_client()
+    def __init__(self, exchange: str | None = None):
+        # (#okx-satellite-exchange-routing-2026-09-02) см. CostEngine.__init__.
+        self.cost_engine = CostEngine(exchange=exchange)
+        self.htx = get_exchange_client(exchange)
 
     def build_plan(
         self,

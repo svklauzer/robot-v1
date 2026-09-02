@@ -1244,6 +1244,11 @@ class RobotLoop:
                 bot_id=bot.id,
                 symbol=symbol,
                 side=result.action,
+                # (#okx-satellite-exchange-routing-2026-09-02) Проставляется
+                # ОДИН РАЗ здесь и больше не меняется — ведение этого сигнала
+                # обязано резолвить биржевой клиент по этому полю, не по
+                # текущему ACTIVE_EXCHANGE (см. signal_lifecycle.py).
+                exchange=settings.active_exchange,
                 status="published",
                 entry_zone_json={"from": entry_from, "to": entry_to},
                 stop_price=stop,

@@ -33,3 +33,20 @@ def test_falls_back_to_htx_on_garbage_value(monkeypatch):
 def test_is_case_insensitive(monkeypatch):
     monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "OKX", raising=False)
     assert isinstance(get_exchange_client(), OKXClient)
+
+
+def test_explicit_override_wins_over_active_exchange(monkeypatch):
+    """(#okx-satellite-exchange-routing-2026-09-02) Уже открытый Signal должен
+    вестись через свою биржу независимо от того, что сейчас активно."""
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    assert isinstance(get_exchange_client("htx"), HTXClient)
+
+
+def test_explicit_override_okx_regardless_of_active(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "htx", raising=False)
+    assert isinstance(get_exchange_client("okx"), OKXClient)
+
+
+def test_none_override_preserves_active_exchange_behavior(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    assert isinstance(get_exchange_client(None), OKXClient)

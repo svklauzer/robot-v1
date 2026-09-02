@@ -325,6 +325,7 @@ function SignalCard({
             </span>
             <StatusBadge status={s.status} />
             <GradeBadge grade={s.grade} />
+            <ExchangeBadge exchange={s.exchange} />
             <MlBadge ml={plan.ml} />
           </div>
 
@@ -595,6 +596,18 @@ function MlBadge({ ml }: { ml?: any }) {
       title={`ML ${ml.mode}: P(win)=${score.toFixed(3)}${ml.action ? " · " + ml.action : ""}`}
     >
       ML {score.toFixed(2)}
+    </span>
+  );
+}
+
+function ExchangeBadge({ exchange }: { exchange?: string | null }) {
+  // (#okx-satellite-exchange-routing-2026-09-02) Метка, на какой бирже сигнал
+  // реально открыт — не путать с текущей ACTIVE_EXCHANGE, которая может отличаться.
+  const ex = (exchange || "htx").toLowerCase();
+  const cls = ex === "okx" ? "bg-sky-700 text-white" : "bg-slate-700 text-white";
+  return (
+    <span className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase ${cls}`}>
+      {ex}
     </span>
   );
 }

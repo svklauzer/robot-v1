@@ -16,12 +16,17 @@ from models.bot import Bot
 
 
 class ExecutionEngine:
-    def __init__(self, db=None):
+    def __init__(self, db=None, exchange: str | None = None):
+        # (#okx-satellite-exchange-routing-2026-09-02) exchange=None -> текущая
+        # активная биржа. При ведении УЖЕ ОТКРЫТОГО сигнала вызывающий код
+        # (signal_lifecycle.py) обязан передать exchange=signal.exchange —
+        # иначе реальное исполнение close/partial-close уйдёт не на ту биржу,
+        # где эта позиция физически существует.
         self.db = db
-        self.client = get_exchange_client()
+        self.client = get_exchange_client(exchange)
         self.telegram = TelegramRouter()
-        self.cost_engine = CostEngine()
-        self.plan_builder = TradePlanBuilder()
+        self.cost_engine = CostEngine(exchange=exchange)
+        self.plan_builder = TradePlanBuilder(exchange=exchange)
 
     def _plan_from_signal(self, signal: Signal):
         plan_json = signal.plan_json or {}

@@ -39,8 +39,11 @@ class ExitPolicyService:
     K_CAPTURE = 0.90   # raised from 0.75 — MFE capture starts later, lets winners run longer
     DEFAULT_MFE_ABSOLUTE_MIN_FOR_GUARD = 0.50
 
-    def __init__(self):
-        self.htx = get_exchange_client()
+    def __init__(self, exchange: str | None = None):
+        # (#okx-satellite-exchange-routing-2026-09-02) см. CostEngine.__init__ —
+        # exchange=None сохраняет текущее поведение, явный exchange нужен для
+        # ведения уже открытого сигнала под ЕГО биржей.
+        self.htx = get_exchange_client(exchange)
 
     @classmethod
     def runtime_guard(cls) -> dict:
