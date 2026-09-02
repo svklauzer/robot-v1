@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from core.config import settings
 from services import funding_cost
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 
 
 @dataclass
@@ -34,7 +34,7 @@ class CostPreview:
 
 class CostEngine:
     def __init__(self):
-        self.htx = HTXClient()
+        self.htx = get_exchange_client()
 
     def fee_rate(
         self,

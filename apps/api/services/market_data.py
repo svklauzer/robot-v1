@@ -1,13 +1,13 @@
 import random
 import pandas as pd
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 
 from core.config import settings
 
 
 class MarketDataService:
     def __init__(self):
-        self.client = HTXClient()
+        self.client = get_exchange_client()
 
     def snapshot(self, symbol: str) -> dict:
         try:

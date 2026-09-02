@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from core.config import settings
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 from services.trade_plan import TradePlanBuilder
 from services.cost_engine import CostEngine
 from services.telegram_router import TelegramRouter
@@ -18,7 +18,7 @@ from models.bot import Bot
 class ExecutionEngine:
     def __init__(self, db=None):
         self.db = db
-        self.client = HTXClient()
+        self.client = get_exchange_client()
         self.telegram = TelegramRouter()
         self.cost_engine = CostEngine()
         self.plan_builder = TradePlanBuilder()

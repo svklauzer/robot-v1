@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from core.config import settings
 from core.logging import get_logger, log_event
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 
 logger = get_logger(__name__)
 
@@ -40,7 +40,7 @@ class ExitPolicyService:
     DEFAULT_MFE_ABSOLUTE_MIN_FOR_GUARD = 0.50
 
     def __init__(self):
-        self.htx = HTXClient()
+        self.htx = get_exchange_client()
 
     @classmethod
     def runtime_guard(cls) -> dict:

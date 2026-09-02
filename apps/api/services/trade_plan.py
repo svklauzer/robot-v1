@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from core.config import settings
 from services.cost_engine import CostEngine
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 from services.market_routing import resolve as resolve_route
 
 
@@ -40,7 +40,7 @@ class TradePlan:
 class TradePlanBuilder:
     def __init__(self):
         self.cost_engine = CostEngine()
-        self.htx = HTXClient()
+        self.htx = get_exchange_client()
 
     def build_plan(
         self,

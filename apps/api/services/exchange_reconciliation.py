@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from core.config import settings
 from models.order import Order
 from models.position import Position
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 
 
 class ExchangeReconciliationService:
@@ -24,7 +24,7 @@ class ExchangeReconciliationService:
     OPEN_ORDER_STATUSES = {"new", "open", "submitted", "partially_filled"}
 
     def __init__(self, client: Any | None = None):
-        self.client = client or HTXClient()
+        self.client = client or get_exchange_client()
 
     def check(self, db: Session, symbol: str | None = None, force: bool = False) -> dict[str, Any]:
         enabled = bool(getattr(settings, "EXCHANGE_RECONCILIATION_ENABLED", False))
