@@ -34,6 +34,10 @@ const CLOSE_REASON_LABELS: Record<string, string> = {
   // (#trend-capture-band-2026-07-25) Ярус 2: фиксация в модальной полосе MFE.
   // До правки сделки с MFE 0.35–0.8% в тренде не имели механизма фиксации.
   trend_capture_band: "Трендовая фиксация (полоса MFE)",
+  // (#tz-mfe-giveback-backstop-2026-09-02) ТЗ-выход смотрит только на слом
+  // структуры (KAMA/ADX/OBV), не на отданную прибыль — бэкстоп фиксирует по
+  // текущей цене сделку, которая отдала бОльшую часть значимого MFE.
+  tz_mfe_giveback_backstop: "ТЗ: фиксация отданной прибыли",
 };
 
 function closeReasonLabel(code: string | null | undefined): string {

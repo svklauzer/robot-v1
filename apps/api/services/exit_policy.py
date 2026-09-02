@@ -333,6 +333,49 @@ class ExitPolicyService:
                             f"kama={verdict.kama} adx={verdict.adx} peak={verdict.adx_peak}"
                         ),
                     )
+
+                # (#tz-mfe-giveback-backstop-2026-09-02) Структурные условия ТЗ
+                # отвечают на вопрос «жив ли тренд», а не «сколько прибыли уже
+                # отдано». Сделка может показать реальный MFE и скатиться почти
+                # к безубытку/минусу, пока структура формально ещё цела (пик ADX
+                # не дошёл до TZ_EXIT_ADX_PEAK_MIN, KAMA не пробита буфером) —
+                # ни один структурный триггер не срабатывает, и вся
+                # промежуточная прибыль отдаётся без единого механизма защиты
+                # (подтверждено на боевых траекториях: XRP #452 MFE 1.04%→-1.08%,
+                # ADA #453 MFE 0.32%→-0.75%, AVAX #451 MFE 0.065%→-0.66%).
+                #
+                # Точечный бэкстоп: НЕ трогает структурную логику (KAMA/ADX/OBV
+                # остаются приоритетными — эта проверка идёт уже ПОСЛЕ verdict.exit
+                # выше). Фиксирует по текущей цене только если сделка (а) показала
+                # значимый MFE и (б) отдала бОльшую его часть, скатившись в район
+                # net_safe (то есть отдача уже съела экономический смысл держать
+                # дальше) — а не при любом откате от пика, чтобы не резать
+                # здоровые тренды, которые просто «дышат».
+                if bool(getattr(settings, "TZ_MFE_GIVEBACK_BACKSTOP_ENABLED", True)):
+                    backstop_min_mfe = float(getattr(settings, "TZ_MFE_GIVEBACK_MIN_MFE_PCT", 0.5))
+                    backstop_share = float(getattr(settings, "TZ_MFE_GIVEBACK_SHARE", 0.75))
+                    if (
+                        mfe >= backstop_min_mfe
+                        and drawdown_from_mfe >= mfe * backstop_share
+                        and current_pct <= net_safe_pct
+                    ):
+                        est_net = self._estimated_net_usdt(
+                            current_pct, position_notional_usdt, fee_rate=fee_rate
+                        )
+                        if est_net is None or est_net >= float(
+                            getattr(settings, "MIN_PROTECTIVE_NET_USDT", 1.50)
+                        ):
+                            return ExitDecision(
+                                exit=True,
+                                reason="tz_mfe_giveback_backstop",
+                                exit_price=current_price,
+                                note=(
+                                    f"tz_mfe_giveback_backstop mfe={mfe:.4f} "
+                                    f"cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
+                                    f">= {backstop_share}*mfe net_safe={net_safe_pct:.4f}"
+                                ),
+                            )
+
                 # Тренд цел — держим. Прежние ярусы намеренно НЕ вызываются:
                 # именно они давали capture 7.08% при среднем ходе 0.816%.
                 return ExitDecision(
