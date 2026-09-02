@@ -52,7 +52,10 @@ export default function HealthPage() {
   async function runDiagnostics() {
     setDiagLoading(true);
     try {
-      setDiagnostics(await apiGet("/system/exchange-diagnostics").catch(() => null));
+      // (#okx-satellite-2026-09-02) -all зонды ОБЕ биржи независимо от того,
+      // какая сейчас торгует (settings.ACTIVE_EXCHANGE) — видимость нужна
+      // заранее, до переключения, а не только после.
+      setDiagnostics(await apiGet("/system/exchange-diagnostics-all").catch(() => null));
     } finally {
       setDiagLoading(false);
     }
@@ -149,10 +152,23 @@ export default function HealthPage() {
         </div>
       </header>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <HealthCard icon={<Database size={18} />} title="API" value={health?.api?.ok ? "online" : "offline"} status={health?.api?.ok ? "good" : "bad"} subtitle={`${health?.api?.env || "-"} / ${health?.api?.mode || "-"}`} />
         <HealthCard icon={<Bot size={18} />} title="Bot" value={bot?.status || "-"} status={bot?.status === "running" ? "good" : "warn"} subtitle={bot?.mode || "-"} />
         <HealthCard icon={<Wifi size={18} />} title="Market" value={market?.ok ? "online" : "offline"} status={market?.ok ? "good" : "bad"} subtitle={`${market?.source || "-"} / ${formatNumber(market?.last)}`} />
+        {/* (#okx-satellite-2026-09-02) Какая биржа торгует сейчас + не осталось
+            ли чего-то открытого на другой (см. exchange_switch_guard). */}
+        <HealthCard
+          icon={<Radio size={18} />}
+          title="Exchange"
+          value={(health?.active_exchange || "htx").toUpperCase()}
+          status={health?.exchange_switch?.safe === false ? "bad" : "good"}
+          subtitle={
+            health?.exchange_switch?.safe === false
+              ? `${health.exchange_switch.inactive_exchange}: есть открытое!`
+              : "переключение только вручную"
+          }
+        />
         <HealthCard icon={<ShieldCheck size={18} />} title="Readiness" value={production?.ready ? "ready" : "blocked"} status={production?.ready ? "good" : "bad"} subtitle={`${blockers.length} blockers`} />
         <HealthCard icon={<ShieldAlert size={18} />} title="Live safety" value={liveSafety?.blocked ? "blocked" : "clear"} status={liveSafety?.blocked ? "bad" : "good"} subtitle={`day loss ${liveSafety?.daily_loss_pct ?? 0}% / max ${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
       </section>
@@ -513,52 +529,20 @@ export default function HealthPage() {
         {!diagnostics ? (
           <Empty text="Нажмите «Проверить сейчас»" />
         ) : (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-violet-900/60 bg-black/30 p-4">
-              <div className="text-sm text-violet-100/60">Вердикт</div>
-              <div className={`mt-1 font-semibold ${diagnostics.any_host_reachable ? "text-emerald-300" : "text-red-300"}`}>
-                {diagnostics.verdict}
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-x-6 md:grid-cols-2">
-                <InfoRow label="Рекомендуемый хост" value={diagnostics.recommended_hostname || "—"} danger={!diagnostics.recommended_hostname} />
-                <InfoRow label="Прокси настроен" value={diagnostics.proxy_configured ? "да" : "нет"} />
-                <InfoRow
-                  label="Размыкатель"
-                  value={
-                    diagnostics.circuit?.open
-                      ? `разомкнут, ещё ${diagnostics.circuit.opens_in_sec}с`
-                      : `замкнут (подряд ошибок: ${diagnostics.circuit?.consecutive_failures ?? 0})`
-                  }
-                  danger={Boolean(diagnostics.circuit?.open)}
-                />
-                <InfoRow label="Активный хост" value={diagnostics.circuit?.active_host || "—"} />
-                <InfoRow label="Проверено" value={String(diagnostics.checked_at || "").replace("T", " ")} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <div>
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">Хосты биржи</h3>
-                <div className="space-y-2">
-                  {(diagnostics.hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
-                </div>
-              </div>
-              <div>
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-violet-100/50">
-                  Контрольные хосты — живы ли они, решает, где искать
-                </h3>
-                {/* Для контрольного хоста важно только «доходит ли сеть»: любой
-                    HTTP-ответ, включая 302 и 404, это доказательство. */}
-                <p className="mb-2 text-xs text-violet-100/40">
-                  Здесь любой HTTP-ответ — успех. 302 или 404 значат, что сеть дошла.
-                </p>
-                <div className="space-y-2">
-                  {(diagnostics.control_hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
-                </div>
-              </div>
-            </div>
-
-            <p className="text-xs text-violet-100/50">{diagnostics.note}</p>
+          <div className="space-y-6">
+            {/* (#okx-satellite-2026-09-02) Обе биржи независимо от того, какая
+                сейчас торгует — карточка активной подсвечена, видимость обеих
+                нужна заранее, до переключения ACTIVE_EXCHANGE. */}
+            <ExchangeDiagnosticsCard
+              label="HTX"
+              data={diagnostics.htx}
+              active={diagnostics.active_exchange === "htx"}
+            />
+            <ExchangeDiagnosticsCard
+              label="OKX"
+              data={diagnostics.okx}
+              active={diagnostics.active_exchange === "okx"}
+            />
           </div>
         )}
       </section>
@@ -629,6 +613,77 @@ function DiagHost({ host }: { host: any }) {
         })}
       </div>
       {host.verdict && <div className="mt-2 text-xs text-violet-100/60">{host.verdict}</div>}
+    </div>
+  );
+}
+
+// (#okx-satellite-2026-09-02) Один зонд-объект (та же форма, что раньше
+// отдавал единственный /system/exchange-diagnostics) — рендерится дважды,
+// для HTX и для OKX, каждая из /system/exchange-diagnostics-all.
+function ExchangeDiagnosticsCard({ label, data, active }: { label: string; data: any; active: boolean }) {
+  if (!data) {
+    return (
+      <div className="rounded-xl border border-violet-900/40 bg-black/20 p-4">
+        <div className="mb-2 text-sm font-semibold text-violet-100/50">{label}</div>
+        <Empty text="Нет данных" />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-violet-100/70">{label}</h3>
+        {active && (
+          <span className="rounded-lg bg-emerald-700 px-2 py-0.5 text-xs font-semibold text-white">
+            активна
+          </span>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-violet-900/60 bg-black/30 p-4">
+        <div className="text-sm text-violet-100/60">Вердикт</div>
+        <div className={`mt-1 font-semibold ${data.any_host_reachable ? "text-emerald-300" : "text-red-300"}`}>
+          {data.verdict}
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-x-6 md:grid-cols-2">
+          <InfoRow label="Рекомендуемый хост" value={data.recommended_hostname || "—"} danger={!data.recommended_hostname} />
+          <InfoRow label="Прокси настроен" value={data.proxy_configured ? "да" : "нет"} />
+          <InfoRow
+            label="Размыкатель"
+            value={
+              data.circuit?.open
+                ? `разомкнут, ещё ${data.circuit.opens_in_sec}с`
+                : `замкнут (подряд ошибок: ${data.circuit?.consecutive_failures ?? 0})`
+            }
+            danger={Boolean(data.circuit?.open)}
+          />
+          <InfoRow label="Активный хост" value={data.circuit?.active_host || "—"} />
+          <InfoRow label="Проверено" value={String(data.checked_at || "").replace("T", " ")} />
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-violet-100/50">Хосты биржи</h4>
+          <div className="space-y-2">
+            {(data.hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
+          </div>
+        </div>
+        <div>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-violet-100/50">
+            Контрольные хосты — живы ли они, решает, где искать
+          </h4>
+          <p className="mb-2 text-xs text-violet-100/40">
+            Здесь любой HTTP-ответ — успех. 302 или 404 значат, что сеть дошла.
+          </p>
+          <div className="space-y-2">
+            {(data.control_hosts || []).map((h: any) => <DiagHost key={h.host} host={h} />)}
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs text-violet-100/50">{data.note}</p>
     </div>
   );
 }

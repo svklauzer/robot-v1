@@ -20,13 +20,16 @@ from typing import Any
 from core.config import settings
 
 
-def _probe_host(host: str, *, timeout: float, role: str = "exchange") -> dict[str, Any]:
+def _probe_host(
+    host: str, *, timeout: float, role: str = "exchange", path: str | None = None
+) -> dict[str, Any]:
     """(#diag-control-role-2026-07-27) role различает СМЫСЛ проверки.
 
-    Для хоста биржи важен рабочий ответ на публичный эндпоинт HTX. Для
-    контрольного хоста важно ровно одно: доходит ли до него сеть. Дёргать у
-    Kraken и Telegram путь `/v1/common/timestamp` бессмысленно — его там нет,
-    и ответ 302/404 ЕСТЬ доказательство живой сети, а не ошибка.
+    Для хоста биржи важен рабочий ответ на публичный эндпоинт (по умолчанию —
+    HTX; для второй биржи см. diagnose_okx() ниже, у неё свой публичный путь,
+    передаётся через `path`). Для контрольного хоста важно ровно одно: доходит
+    ли до него сеть. Дёргать у Kraken и Telegram путь HTX бессмысленно — его
+    там нет, и ответ 302/404 ЕСТЬ доказательство живой сети, а не ошибка.
 
     Первая версия этого не различала и красила живой Kraken в красный с
     подписью «биржа отвечает ошибкой». Контрольная группа существует, чтобы
@@ -77,7 +80,8 @@ def _probe_host(host: str, *, timeout: float, role: str = "exchange") -> dict[st
 
     # 4. HTTP. Путь и критерий успеха зависят от роли хоста.
     is_control = role == "control"
-    path = "/" if is_control else "/v1/common/timestamp"
+    if path is None:
+        path = "/" if is_control else "/v1/common/timestamp"
     t0 = time.time()
     try:
         import httpx
@@ -166,4 +170,70 @@ def diagnose(timeout: float | None = None) -> dict[str, Any]:
             "хост — переставь HTX_API_HOSTNAME на него. Если недоступны все и "
             "виден 403/451 — нужен HTX_PROXY_URL через разрешённый регион."
         ),
+    }
+
+
+def diagnose_okx(timeout: float | None = None) -> dict[str, Any]:
+    """(#okx-satellite-2026-09-02) То же самое для OKX — см. diagnose() выше
+    для полного обоснования формата. Только чтение, не завязано на то, какая
+    биржа сейчас активна (ACTIVE_EXCHANGE): видимость обеих бирж полезна
+    независимо от того, кто торгует, в т.ч. для проверки перед переключением."""
+    from services.okx_client import OKXClient
+
+    timeout = float(timeout or 8.0)
+    hosts = OKXClient._cb_hosts() or ["www.okx.com"]
+
+    control = ["futures.kraken.com", "api.telegram.org"]
+    results = [
+        _probe_host(h, timeout=timeout, role="exchange", path="/api/v5/public/time")
+        for h in hosts
+    ]
+    control_results = [_probe_host(h, timeout=timeout, role="control") for h in control]
+
+    reachable = [r for r in results if (r.get("http") or {}).get("ok")]
+    control_dns_ok = [r for r in control_results if (r.get("dns") or {}).get("ok")]
+
+    if not reachable and not control_dns_ok:
+        verdict = (
+            "НЕ РЕЗОЛВЯТСЯ НИ БИРЖИ, НИ КОНТРОЛЬНЫЕ ХОСТЫ — проблема исходящей "
+            "сети/DNS всего инстанса, а не OKX. Менять OKX_API_HOSTNAME бесполезно; "
+            "смотреть сторону Render (egress, DNS-резолвер)"
+        )
+    elif not reachable and control_dns_ok:
+        verdict = (
+            "Контрольные хосты живы, а хосты OKX — нет: проблема адресная. "
+            "Это либо блокировка OKX для этого ДЦ, либо смена эндпоинта — "
+            "нужен OKX_PROXY_URL или другой OKX_API_HOSTNAME"
+        )
+    else:
+        verdict = "Есть доступный хост OKX — см. recommended_hostname"
+
+    return {
+        "status": "ok",
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "verdict": verdict,
+        "any_host_reachable": bool(reachable),
+        "reachable_hosts": [r["host"] for r in reachable],
+        "recommended_hostname": reachable[0]["host"] if reachable else None,
+        "proxy_configured": bool(str(getattr(settings, "OKX_PROXY_URL", "") or "").strip()),
+        "circuit": OKXClient.circuit_state(),
+        "hosts": results,
+        "control_hosts": control_results,
+        "note": (
+            "Публичный /api/v5/public/time не требует API-ключа: если он не "
+            "отвечает, статус ключа значения не имеет. Если доступен НЕ основной "
+            "хост — переставь OKX_API_HOSTNAME на него. Если недоступны все и "
+            "виден 403/451 — нужен OKX_PROXY_URL через разрешённый регион."
+        ),
+    }
+
+
+def diagnose_all(timeout: float | None = None) -> dict[str, Any]:
+    """(#okx-satellite-2026-09-02) Обе биржи одним вызовом — health/venues
+    страницы показывают карточку HTX и карточку OKX независимо от того, какая
+    сейчас активна (settings.active_exchange)."""
+    return {
+        "active_exchange": settings.active_exchange,
+        "htx": diagnose(timeout),
+        "okx": diagnose_okx(timeout),
     }

@@ -40,6 +40,7 @@ from services.signal_quality import SignalQualityService
 from services.market_data import MarketDataService
 from services.market_connectivity import MarketConnectivityService
 from services.exchange_reconciliation import ExchangeReconciliationService
+from services import exchange_switch_guard
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
@@ -169,6 +170,21 @@ async def background_robot_loop():
 
                 if validation_gates.get("live_blockers"):
                     log_event(logger, logging.WARNING, "robot_loop_validation_skip", **validation_gates)
+                    exchange_switch = {"safe": True}  # not evaluated — validation already blocks
+                else:
+                    # (#okx-satellite-2026-09-02) Неактивная биржа с чем-то
+                    # открытым — переключение застало сделки врасплох. Гейт
+                    # ТОЛЬКО новых входов на активной бирже: process_open_signals
+                    # (внутри loop.step) блокируется тем же путём, что и
+                    # validation_gates/safety ниже, а лестница выходов открытых
+                    # позиций на активной бирже отдельно и непрерывно ведётся
+                    # background_manage_loop, этот гейт её не задевает.
+                    exchange_switch = await asyncio.to_thread(exchange_switch_guard.check)
+
+                if validation_gates.get("live_blockers"):
+                    pass
+                elif not exchange_switch.get("safe", True):
+                    log_event(logger, logging.WARNING, "robot_loop_exchange_switch_skip", **exchange_switch)
                 else:
                     equity_usdt = await asyncio.to_thread(effective_equity_usdt)
                     safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)

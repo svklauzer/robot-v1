@@ -10,9 +10,11 @@ from models.signal import Signal
 from models.subscriber import Subscriber
 from services.billing_service import BillingService
 from services.exchange_reconciliation import ExchangeReconciliationService
+from services import exchange_switch_guard
 from services.exit_policy import ExitPolicyService
 from services.funding_arbitrage import FundingArbEngine
 from services.htx_client import HTXClient
+from services.okx_client import OKXClient
 from services.net_guard import state as net_guard_state
 from services.live_safety import LiveSafetyService
 from services.market_connectivity import MarketConnectivityService
@@ -56,15 +58,27 @@ class SystemHealthService:
             },
             "loops": loops or {},
             "market": MarketConnectivityService().check(market_symbol),
-            # (#htx-outage-2026-07-26) Состояние размыкателя биржи: видно, что HTX
-            # признан недоступным, на каком хосте сейчас и когда будет проба.
-            # Без этого недоступность биржи выглядела как «сервис упал».
-            "exchange_circuit": HTXClient.circuit_state(),
+            # (#okx-satellite-2026-09-02) Активная биржа торгует, но видимость
+            # обеих полезна независимо от переключения (готовность к switch,
+            # диагностика заранее). ACTIVE_EXCHANGE решает, кто торгует —
+            # не какая биржа видна на этой странице.
+            "active_exchange": settings.active_exchange,
+            # (#htx-outage-2026-07-26) Состояние размыкателя биржи: видно, что
+            # биржа признана недоступной, на каком хосте сейчас и когда будет
+            # проба. Без этого недоступность биржи выглядела как «сервис упал».
+            "exchange_circuit": {
+                "htx": HTXClient.circuit_state(),
+                "okx": OKXClient.circuit_state(),
+            },
             # (#egress-guard-2026-07-26) Резолвится ли вообще исходящая сеть.
             # В инциденте 26.07 одновременно легли HTX и Kraken — это признак
             # проблемы egress/DNS ДЦ, а не конкретной биржи.
             "egress": net_guard_state(),
             "exchange_reconciliation": ExchangeReconciliationService().check(db),
+            # (#okx-satellite-2026-09-02) Есть ли что-то открытое на НЕактивной
+            # бирже — тот же гейт, что держит новые входы в background_robot_loop
+            # (см. main.py), здесь только для видимости на дашборде.
+            "exchange_switch": exchange_switch_guard.check(),
             "signals": signal_counts,
             "subscribers": subscriber_counts,
             "telegram_delivery": TelegramDeliveryLog().summary(db, hours=24),

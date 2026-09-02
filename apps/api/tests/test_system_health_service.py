@@ -58,6 +58,12 @@ def test_system_health_service_builds_owner_payload_without_route_globals(monkey
     monkeypatch.setattr(system_health_module, "FundingArbEngine", lambda: _StaticSummary({"open_positions": 0}))
     monkeypatch.setattr(system_health_module, "LiveSafetyService", lambda: _StaticSnapshot({"blocked": False}))
     monkeypatch.setattr(system_health_module, "MLOutcomeStatsService", lambda: _StaticMl({"status": "ok"}))
+    # (#okx-satellite-2026-09-02) exchange_switch_guard.check() бьёт в сеть
+    # неактивной биржи — стабим, как и остальные внешние проверки выше.
+    monkeypatch.setattr(
+        system_health_module.exchange_switch_guard, "check",
+        lambda **kw: {"safe": True, "inactive_exchange": "okx"},
+    )
 
     db = _db_session()
     try:
@@ -105,5 +111,9 @@ def test_system_health_service_builds_owner_payload_without_route_globals(monkey
         assert payload["exit_policy"]["runtime"] == "protected_pct_v4"
         assert payload["ml_outcomes"] == {"status": "ok"}
         assert "production_readiness" in payload
+        # (#okx-satellite-2026-09-02)
+        assert payload["active_exchange"] == "htx"
+        assert "htx" in payload["exchange_circuit"] and "okx" in payload["exchange_circuit"]
+        assert payload["exchange_switch"] == {"safe": True, "inactive_exchange": "okx"}
     finally:
         db.close()
