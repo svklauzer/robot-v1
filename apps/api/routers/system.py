@@ -138,6 +138,17 @@ def system_exchange_diagnostics(timeout: float = 8.0):
     return diagnose(timeout=timeout)
 
 
+@router.get("/exchange-diagnostics-all", dependencies=[Depends(require_owner_action)])
+def system_exchange_diagnostics_all(timeout: float = 8.0):
+    """(#okx-satellite-2026-09-02) Тот же разбор DNS/TCP/TLS/HTTP, но для ОБЕИХ
+    бирж сразу, плюс active_exchange — независимо от того, какая сейчас
+    торгует. Отдельный эндпоинт от /exchange-diagnostics (HTX-only, старая
+    форма ответа) — существующие потребители того ответа не задеты."""
+    from services.exchange_diagnostics import diagnose_all
+
+    return diagnose_all(timeout=timeout)
+
+
 @router.get("/capital-envelopes", dependencies=[Depends(require_owner_action)])
 def system_capital_envelopes():
     """(#capital-envelopes-2026-08-21) Кто на какую долю депозита претендует.

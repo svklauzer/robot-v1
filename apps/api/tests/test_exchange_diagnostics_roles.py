@@ -98,3 +98,41 @@ def test_exchange_geo_block_keeps_actionable_verdict(net_ok, monkeypatch):
     step = diag._probe_host("api.huobi.pro", timeout=1.0, role="exchange")
     assert step["http"]["ok"] is False
     assert "HTX_PROXY_URL" in step["verdict"]
+
+
+# ── OKX (#okx-satellite-2026-09-02): та же диагностика, свой публичный путь ──
+
+def test_okx_probe_uses_its_own_path_not_htx(net_ok, monkeypatch):
+    captured = _patch_http(monkeypatch, 200)
+    diag._probe_host("www.okx.com", timeout=1.0, role="exchange", path="/api/v5/public/time")
+    assert "/api/v5/public/time" in captured["url"]
+    assert "/v1/common/timestamp" not in captured["url"]
+
+
+def test_default_path_is_unchanged_when_no_override_given(net_ok, monkeypatch):
+    """Существующие вызовы без `path=` не должны увидеть поведенческих
+    изменений — путь HTX остаётся дефолтом."""
+    captured = _patch_http(monkeypatch, 200)
+    diag._probe_host("api.huobi.pro", timeout=1.0, role="exchange")
+    assert "/v1/common/timestamp" in captured["url"]
+
+
+def test_diagnose_okx_returns_okx_flavored_shape(net_ok, monkeypatch):
+    _patch_http(monkeypatch, 200)
+    result = diag.diagnose_okx(timeout=1.0)
+    assert result["status"] == "ok"
+    assert "circuit" in result
+    assert result["any_host_reachable"] is True
+    assert "OKX" in result["note"]
+
+
+def test_diagnose_all_returns_both_exchanges_and_active_flag(net_ok, monkeypatch):
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    _patch_http(monkeypatch, 200)
+    result = diag.diagnose_all(timeout=1.0)
+    assert result["active_exchange"] == "okx"
+    assert "htx" in result and "okx" in result
+    assert result["htx"]["status"] == "ok"
+    assert result["okx"]["status"] == "ok"
