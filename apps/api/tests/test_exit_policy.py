@@ -1,3 +1,5 @@
+import pytest
+
 from services.exit_policy import ExitPolicyService
 from core.config import settings
 
@@ -447,3 +449,209 @@ def test_flow_confirm_stays_off_so_the_lock_works_in_thin_books():
     Переворот в True должен быть осознанным и пересчитанным (так уже случилось
     в коммите 4df5092, который молча откатил решения аудита)."""
     assert settings.EXIT_REQUIRE_FLOW_CONFIRM is False
+
+
+# ── TZ MFE-giveback backstop (#tz-mfe-giveback-backstop-2026-09-02) ─────────
+# TZ_TREND_EXIT_ONLY заменяет ВСЮ лестницу ниже (breakeven_lock/ride/band) на
+# три структурных условия (kama/adx/obv). Ни одно из них не смотрит на то,
+# сколько прибыли уже отдано — сделка может дать реальный MFE и скатиться
+# почти к безубытку/минусу, пока структура формально ещё цела (пик ADX не
+# дошёл до TZ_EXIT_ADX_PEAK_MIN, KAMA не пробита буфером). Бэкстоп ловит
+# именно это, не трогая структурную логику: держит intact-вердикт от
+# tz_trend_exit приоритетным, фиксирует по текущей цене только при большой
+# отдаче значимого MFE, скатившейся в район net_safe.
+#
+# Требует и trade_mode="trend" (или родственный), И реальный tz_context —
+# иначе изолирующая проверка isinstance(tz_context, dict) отправляет вызов на
+# старую лестницу целиком (см. test_flow_confirm_stays_off_so_the_lock_works_
+# in_thin_books выше, где trade_mode="trend" без tz_context идёт через
+# breakeven_lock).
+def _tz_ctx_intact(**over):
+    """kama/adx достаточно далеко, чтобы tz_trend_exit сказал trend_intact:
+    kama=100 с legacy-буфером 0.50% ломается ниже 99.5, adx_peak=20 << порог
+    TZ_EXIT_ADX_PEAK_MIN=35 — ADX-затухание структурно не может вооружиться."""
+    ctx = {
+        "kama": 100.0, "adx": 20.0, "adx_peak": 20.0,
+        "obv": 1000.0, "obv_ema20": 800.0,
+    }
+    ctx.update(over)
+    return ctx
+
+
+def _tz_setup(monkeypatch):
+    monkeypatch.setattr(settings, "TZ_TREND_EXIT_ONLY", True, raising=False)
+    monkeypatch.setattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False, raising=False)
+    monkeypatch.setattr(settings, "TZ_EXIT_KAMA_BUFFER_PCT", 0.50, raising=False)
+    monkeypatch.setattr(settings, "TZ_EXIT_ADX_PEAK_MIN", 35.0, raising=False)
+    monkeypatch.setattr(settings, "TZ_EXIT_CONDITIONS", "kama,adx", raising=False)
+
+
+def test_backstop_fires_on_severe_giveback_into_net_safe(monkeypatch):
+    """MFE 2.0%, отдано 1.6 п.п. (80% >= 75%-порога), текущая 0.4% — ниже
+    net_safe (~0.60% на споте по дефолту). Структура формально цела (цена
+    100.4 выше уровня слома KAMA 99.5, ADX-пик 20 << 35) — без бэкстопа
+    сделка держалась бы дальше и отдала бы ещё больше."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=100.4,
+        stop_price=95.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is True
+    assert d.reason == "tz_mfe_giveback_backstop"
+    assert d.exit_price == pytest.approx(100.4)
+
+
+def test_backstop_does_not_fire_on_modest_giveback(monkeypatch):
+    """Та же MFE=2.0%, но отдано только 1.0 п.п. (50% < 75%-порога) — тренд
+    просто «дышит», резать рано. Держим, ждём структурный сигнал ТЗ."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=101.0,
+        stop_price=95.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is False
+
+
+def test_backstop_does_not_fire_while_still_comfortably_above_net_safe(monkeypatch):
+    """MFE=4.0%, отдано 3.1 п.п. (77.5% >= 75%-порога) — ОТДАЧА большая, но
+    текущая 0.9% всё ещё выше net_safe (~0.60%): экономический смысл держать
+    ещё есть, бэкстоп не должен резать по одной только доле giveback без
+    второго условия (близость к net_safe)."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=100.9,
+        stop_price=95.0,
+        mfe_pct=4.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is False
+
+
+def test_backstop_respects_min_mfe_floor(monkeypatch):
+    """MFE=0.3% (< TZ_MFE_GIVEBACK_MIN_MFE_PCT=0.5) — слишком мелкое движение,
+    чтобы считать его «сделка показала реальный MFE», даже если отдано почти
+    всё и текущая цена у net_safe. Иначе бэкстоп резал бы шум."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=100.05,
+        stop_price=95.0,
+        mfe_pct=0.3,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is False
+
+
+def test_backstop_respects_net_usdt_floor(monkeypatch):
+    """Даже при выполненных долевых условиях фиксация не имеет смысла, если
+    итоговый net в USDT ниже MIN_PROTECTIVE_NET_USDT — тот же гейт, что у
+    остальных защитных веток файла (protective_trailing_stop и т.д.)."""
+    _tz_setup(monkeypatch)
+    monkeypatch.setattr(settings, "MIN_PROTECTIVE_NET_USDT", 50.0, raising=False)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=100.4,
+        stop_price=95.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        position_notional_usdt=10.0,  # 0.4% net на 10 USDT — далеко ниже 50
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is False
+
+
+def test_backstop_disabled_flag_keeps_old_behaviour(monkeypatch):
+    _tz_setup(monkeypatch)
+    monkeypatch.setattr(settings, "TZ_MFE_GIVEBACK_BACKSTOP_ENABLED", False, raising=False)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=100.4,
+        stop_price=95.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is False
+
+
+def test_backstop_never_preempts_a_structural_tz_exit(monkeypatch):
+    """Пробой KAMA (реальный слом тренда) обязан закрыть сделку через
+    структурную ветку (reason=tz_kama), а не через бэкстоп — verdict.exit
+    проверяется РАНЬШЕ бэкстопа в коде, тест фиксирует порядок приоритета."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="long",
+        entry_price=100.0,
+        current_price=99.0,   # ниже уровня слома kama*(1-0.005)=99.5
+        stop_price=95.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(),
+    )
+
+    assert d.exit is True
+    assert d.reason == "tz_kama"
+
+
+def test_backstop_symmetric_for_shorts(monkeypatch):
+    """Та же отдача, но шорт — сторона не должна быть завязана на long."""
+    _tz_setup(monkeypatch)
+    svc = ExitPolicyService()
+
+    d = svc.before_tp1_decision(
+        side="short",
+        entry_price=100.0,
+        current_price=99.6,   # cur_pct=+0.4% для шорта
+        stop_price=105.0,
+        mfe_pct=2.0,
+        trade_mode="trend",
+        symbol=None,
+        tz_context=_tz_ctx_intact(kama=100.0),
+    )
+
+    assert d.exit is True
+    assert d.reason == "tz_mfe_giveback_backstop"
