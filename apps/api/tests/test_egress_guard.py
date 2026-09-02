@@ -101,6 +101,33 @@ def test_htx_client_fails_fast_when_dns_is_down(monkeypatch):
     HTXClient._cb_open_until = 0.0
 
 
+def test_okx_client_fails_fast_when_dns_is_down(monkeypatch):
+    """(#okx-satellite-2026-09-02) Тот же контракт, что и у HTXClient выше —
+    OKXClient переиспользует тот же net_guard.resolve_ok()."""
+    from services.okx_client import OKXClient
+
+    OKXClient._cb_consecutive_failures = 0
+    OKXClient._cb_open_until = 0.0
+    monkeypatch.setattr(net_guard, "_blocking_resolve", lambda host: (_ for _ in ()).throw(OSError("no dns")))
+
+    called = {"n": 0}
+
+    def _should_not_run(*_a, **_k):
+        called["n"] += 1
+        return "unreachable"
+
+    client = OKXClient.__new__(OKXClient)
+    started = time.time()
+    with pytest.raises(OKXClient.ExchangeUnavailable):
+        client._retry(_should_not_run, retries=5, delay=5.0)
+
+    assert called["n"] == 0, "при мёртвом DNS в сеть ходить нельзя"
+    assert time.time() - started < 2.0
+
+    OKXClient._cb_consecutive_failures = 0
+    OKXClient._cb_open_until = 0.0
+
+
 def test_scan_path_is_off_the_event_loop():
     """Регресс на первопричину: тяжёлый скан обязан уходить в поток.
 

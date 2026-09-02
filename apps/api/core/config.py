@@ -61,6 +61,34 @@ class Settings(BaseSettings):
     # (разовый сбой) — 120с без торговли; цена медленного размыкания — убитый инстанс.
     HTX_CIRCUIT_FAILURE_THRESHOLD: int = 2
     HTX_CIRCUIT_OPEN_SECONDS: float = 120.0
+
+    # =========================
+    # OKX API (#okx-satellite-2026-09-02)
+    # =========================
+    # OKX — ручной сателлит HTX: ACTIVE_EXCHANGE переключает, какую биржу
+    # конструируют существующие сервисы (см. services/exchange_factory.py).
+    # Обе биржи НИКОГДА не торгуют одновременно — переключение только руками
+    # (Render env + редеплой), автофейловера нет. См. план #okx-satellite.
+    OKX_API_KEY: str = ""
+    OKX_API_SECRET: str = ""
+    # OKX-специфика: третий креденшл, задаётся при создании API-ключа на бирже.
+    # У HTX/Kraken этого поля нет вовсе.
+    OKX_API_PASSPHRASE: str = ""
+    OKX_API_HOSTNAME: str = ""
+    # Пусто по умолчанию: у OKX нет задокументированной истории многохостовой
+    # миграции, как у HTX (#htx-outage-2026-07-26) — не гадаем заранее, заполним,
+    # если реальная проблема с доступностью это покажет.
+    OKX_API_HOSTNAME_FALLBACKS: str = ""
+    OKX_HTTP_TIMEOUT_MS: int = 15000
+    OKX_CIRCUIT_FAILURE_THRESHOLD: int = 2
+    OKX_CIRCUIT_OPEN_SECONDS: float = 120.0
+    OKX_MARKET_TYPE: str = "spot"
+    OKX_PROXY_URL: str = ""
+    # Единственная точка переключения активной биржи. "htx" сохраняет текущее
+    # поведение без единого изменения конфига — переключение на "okx" требует
+    # явного действия владельца.
+    ACTIVE_EXCHANGE: str = "htx"
+
     # ── Предохранитель исходящей сети (#egress-guard-2026-07-26) ──────────────
     # Второй раунд логов 26.07: 65с между попытками при таймауте ccxt 15с — время
     # уходит в getaddrinfo, который синхронный и НЕ подчиняется таймауту ccxt.
@@ -2114,6 +2142,17 @@ class Settings(BaseSettings):
         return "swap" if self.ENABLE_FUTURES_EXECUTION else self.MARKET_TYPE
 
     @property
+    def active_exchange(self) -> str:
+        """(#okx-satellite-2026-09-02) Нормализованный ACTIVE_EXCHANGE.
+
+        Fail-safe к "htx" на любом нераспознанном значении — опечатка в env
+        не имеет права молча переключить биржу на несуществующий клиент или
+        уронить конструктор; она обязана оставить систему на уже проверенной
+        HTX, а не выбрать неопределённое поведение."""
+        value = str(getattr(self, "ACTIVE_EXCHANGE", "htx") or "").strip().lower()
+        return value if value in ("htx", "okx") else "htx"
+
+    @property
     def execution_leverage(self) -> int:
         """Плечо исполнения. Сейчас всегда 1 — smart leverage не подключён к сайзингу
         (Фаза 4 активация). Догма: плечо только на доказанном edge."""
@@ -2152,8 +2191,16 @@ class Settings(BaseSettings):
                 blockers.append("OWNER_API_TOKEN is not configured")
             if not self.TELEGRAM_BOT_TOKEN:
                 blockers.append("TELEGRAM_BOT_TOKEN is not configured")
-            if not self.HTX_API_KEY or not self.HTX_API_SECRET:
-                blockers.append("HTX API credentials are not configured")
+            # (#okx-satellite-2026-09-02) Только активная биржа обязана иметь
+            # креденшлы — раньше HTX требовался безусловно, теперь ACTIVE_EXCHANGE
+            # решает, чьи ключи проверяются. Не обе сразу: неактивная биржа не
+            # используется для торговли и её отсутствующие ключи не блокер.
+            if self.active_exchange == "okx":
+                if not self.OKX_API_KEY or not self.OKX_API_SECRET or not self.OKX_API_PASSPHRASE:
+                    blockers.append("OKX API credentials are not configured")
+            else:
+                if not self.HTX_API_KEY or not self.HTX_API_SECRET:
+                    blockers.append("HTX API credentials are not configured")
 
         if self.ENABLE_LIVE_ORDERS and self.TRADING_MODE not in ["live", "live_limited"]:
             blockers.append("ENABLE_LIVE_ORDERS requires TRADING_MODE=live or live_limited")
