@@ -13,9 +13,20 @@ from __future__ import annotations
 from core.config import settings
 
 
-def get_exchange_client():
-    """Возвращает HTXClient() или OKXClient() по settings.active_exchange."""
-    if settings.active_exchange == "okx":
+def get_exchange_client(exchange: str | None = None):
+    """Возвращает HTXClient() или OKXClient().
+
+    Без аргумента — по settings.active_exchange (текущая активная биржа,
+    поведение как раньше). С явным `exchange` — под конкретную биржу,
+    независимо от того, что сейчас активно. Это нужно, чтобы вести уже
+    открытый Signal через биржу, на которой он реально открыт
+    (#okx-satellite-exchange-routing-2026-09-02, Signal.exchange), а не через
+    ту, что стала активной ПОСЛЕ его открытия — иначе переключение
+    ACTIVE_EXCHANGE задним числом "переносит" уже открытую позицию на чужой
+    клиент (цена, комиссии и само исполнение закрытия уйдут не туда).
+    """
+    ex = str(exchange or settings.active_exchange or "htx").strip().lower()
+    if ex == "okx":
         from services.okx_client import OKXClient
 
         return OKXClient()

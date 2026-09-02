@@ -165,6 +165,7 @@ export default function PositionsPage() {
                 <th className="px-4 py-3">PnL</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Signal</th>
+                <th className="px-4 py-3">Exchange</th>
               </tr>
             </thead>
             <tbody>
@@ -189,6 +190,9 @@ export default function PositionsPage() {
                   </td>
                   <td className="px-4 py-3">{p.status}</td>
                   <td className="px-4 py-3 text-emerald-100/60">{p.signal_id ? `#${p.signal_id}` : "-"}</td>
+                  <td className="px-4 py-3">
+                    <ExchangeBadge exchange={p.exchange} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -202,6 +206,18 @@ export default function PositionsPage() {
         )}
       </section>
     </AppShell>
+  );
+}
+
+function ExchangeBadge({ exchange }: { exchange?: string | null }) {
+  // (#okx-satellite-exchange-routing-2026-09-02) Биржа, на которой позиция реально
+  // открыта — не текущая ACTIVE_EXCHANGE, которая может уже быть переключена.
+  const ex = (exchange || "htx").toLowerCase();
+  const cls = ex === "okx" ? "bg-sky-700 text-white" : "bg-slate-700 text-white";
+  return (
+    <span className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase ${cls}`}>
+      {ex}
+    </span>
   );
 }
 

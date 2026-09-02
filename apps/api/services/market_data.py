@@ -6,8 +6,9 @@ from core.config import settings
 
 
 class MarketDataService:
-    def __init__(self):
-        self.client = get_exchange_client()
+    def __init__(self, exchange: str | None = None):
+        # (#okx-satellite-exchange-routing-2026-09-02) см. CostEngine.__init__.
+        self.client = get_exchange_client(exchange)
 
     def snapshot(self, symbol: str) -> dict:
         try:

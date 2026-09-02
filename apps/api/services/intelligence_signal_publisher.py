@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 
+from core.config import settings
 from models.signal import Signal
 from models.bot import Bot
 
@@ -96,6 +97,8 @@ class IntelligenceSignalPublisher:
             bot_id=bot.id,
             symbol=symbol,
             side=side,
+            # (#okx-satellite-exchange-routing-2026-09-02) см. robot_loop.py.
+            exchange=settings.active_exchange,
             status="published",
             entry_zone_json={
                 "from": float(entry_zone[0]),

@@ -64,11 +64,15 @@ def _depth_flow_against(signal, side: str) -> bool:
 
 class SignalLifecycleManager:
     def __init__(self):
-        self.market = MarketDataService()
+        # (#okx-satellite-exchange-routing-2026-09-02) НЕ держим общий
+        # MarketDataService/ExitPolicyService на все сигналы: process_signal/
+        # _process_signal_core конструируют их ЛОКАЛЬНО, под биржу КОНКРЕТНОГО
+        # signal.exchange — иначе все открытые сигналы ведутся под одним
+        # клиентом, который следует за текущим ACTIVE_EXCHANGE, а не за тем,
+        # где каждый из них реально открыт.
         self.broadcast = SignalBroadcaster()
         self.router = TelegramRouter()
         self.decisions = DecisionEventService()
-        self.exit_policy = ExitPolicyService()
         # self.outcome_logger = TradeOutcomeLogger()
         self.freshness = SignalFreshnessService()
 
@@ -249,7 +253,10 @@ class SignalLifecycleManager:
         занятым, и uvicorn переставал отвечать на /health при деградации сети.
         Берём лёгкий тикер и уводим вызов из петли в поток.
         """
-        snap = await asyncio.to_thread(self.market.ticker_snapshot, signal.symbol)
+        # (#okx-satellite-exchange-routing-2026-09-02) Клиент под БИРЖУ ЭТОГО
+        # сигнала, не под текущую активную — см. класс-докстринг.
+        market = MarketDataService(exchange=signal.exchange)
+        snap = await asyncio.to_thread(market.ticker_snapshot, signal.symbol)
         await self._process_signal_core(
             db, bot, signal,
             price=float(snap["last"]),
@@ -275,6 +282,11 @@ class SignalLifecycleManager:
         дублированного кода и УЖЕ разошлись: guard low_grade_capital_release
         существовал только в тестовом пути. Теперь оба пути зовут этот core.
         """
+        # (#okx-satellite-exchange-routing-2026-09-02) Клиент под биржу ЭТОГО
+        # сигнала — не под текущую активную. Один на весь core: все вызовы
+        # ниже (before/after_tp1_decision, _fee_rate) — по этому же сигналу.
+        exit_policy = ExitPolicyService(exchange=signal.exchange)
+
         price = float(price)
 
         entry_from = float(signal.entry_zone_json["from"])
@@ -350,7 +362,7 @@ class SignalLifecycleManager:
 
         if signal.status == "published":
             if self._price_in_entry_zone(price, entry_from, entry_to):
-                execution = ExecutionEngine(db)
+                execution = ExecutionEngine(db, exchange=signal.exchange)
 
                 fresh = self.freshness.validate_signal(
                     symbol=signal.symbol,
@@ -625,7 +637,7 @@ class SignalLifecycleManager:
                 )
                 return
 
-            exit_decision = self.exit_policy.before_tp1_decision(
+            exit_decision = exit_policy.before_tp1_decision(
                 side=side,
                 entry_price=float(entry_price),
                 current_price=float(safe_metric_price),
@@ -671,7 +683,7 @@ class SignalLifecycleManager:
                 partial_result = None
                 if bool(getattr(settings, "TP1_PARTIAL_ENABLED", True)):
                     try:
-                        partial_result = await ExecutionEngine(db).partial_close_paper_position(
+                        partial_result = await ExecutionEngine(db, exchange=signal.exchange).partial_close_paper_position(
                             signal=signal,
                             exit_price=self._tp_exit_price(tp1),
                             share=float(getattr(settings, "TP1_PARTIAL_CLOSE_SHARE", 0.5)),
@@ -699,7 +711,7 @@ class SignalLifecycleManager:
                 # Буфер безубытка — по ставке рынка ЭТОЙ сделки: спот 0.2%,
                 # своп 0.05%. Общая ставка на все сделки сдвигала бы безубыток
                 # лонгов на четверть нужного расстояния.
-                _be_rate, _ = self.exit_policy._fee_rate(signal.symbol, self._market_type(signal))
+                _be_rate, _ = exit_policy._fee_rate(signal.symbol, self._market_type(signal))
                 _be_fee = float(_be_rate) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
                 if side == "long":
                     _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
@@ -783,7 +795,7 @@ class SignalLifecycleManager:
                 )
                 return
 
-            exit_decision = self.exit_policy.after_tp1_decision(
+            exit_decision = exit_policy.after_tp1_decision(
                 side=side,
                 entry_price=entry_price,
                 current_price=price,
@@ -1139,7 +1151,7 @@ class SignalLifecycleManager:
             # который мог перелететь стоп ещё дальше.
             exit_price = self._stop_exit_price(float(signal.stop_price), signal.side)
 
-        execution = ExecutionEngine(db)
+        execution = ExecutionEngine(db, exchange=signal.exchange)
 
         close_result = await execution.close_paper_position(
             signal=signal,

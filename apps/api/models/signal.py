@@ -9,6 +9,13 @@ class Signal(Base):
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"))
     symbol: Mapped[str] = mapped_column(String(50), index=True)
     side: Mapped[str] = mapped_column(String(10))
+    # (#okx-satellite-exchange-routing-2026-09-02) На какой бирже сигнал реально
+    # открыт — проставляется settings.active_exchange ОДИН РАЗ при создании и
+    # больше не меняется. Ведение уже открытого сигнала (цена/комиссии/выход/
+    # исполнение) обязано резолвить клиента ПО ЭТОМУ полю, а не по текущему
+    # ACTIVE_EXCHANGE — иначе переключение биржи "переносит" уже открытую
+    # позицию на чужой клиент задним числом (см. services/signal_lifecycle.py).
+    exchange: Mapped[str] = mapped_column(String(10), nullable=False, server_default="htx")
     status: Mapped[str] = mapped_column(String(20), default="queued")
     entry_zone_json: Mapped[dict] = mapped_column(JSON)
     stop_price: Mapped[float] = mapped_column(Float)

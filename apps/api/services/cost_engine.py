@@ -33,8 +33,12 @@ class CostPreview:
 
 
 class CostEngine:
-    def __init__(self):
-        self.htx = get_exchange_client()
+    def __init__(self, exchange: str | None = None):
+        # exchange=None -> текущая активная биржа (как раньше). Явный
+        # exchange нужен, когда сервис вызывается для УЖЕ ОТКРЫТОГО сигнала
+        # (#okx-satellite-exchange-routing-2026-09-02) — там это биржа сигнала,
+        # а не текущий ACTIVE_EXCHANGE.
+        self.htx = get_exchange_client(exchange)
 
     def fee_rate(
         self,
