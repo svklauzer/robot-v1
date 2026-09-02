@@ -528,9 +528,18 @@ class MLIntelligenceHub:
             except Exception:
                 pass
         model_info["last_attempt"] = last_attempt
-        
+        # (#ml-status-metrics-nesting-2026-09-02) Фронт (app/ml/page.tsx) читает
+        # `model?.metrics` — метрики валидации (AUC/Acc/events_per_feature)
+        # обязаны лежать ВНУТРИ model, а не только рядом с ним на верхнем
+        # уровне. Без этого поля "Обучена"/"Сделок в обучении"/"Winrate" (они
+        # лежат прямо в model_info) показывали реальные значения сразу после
+        # обучения, а "Валидация AUC"/"Валидация Acc"/"Событий на признак" —
+        # тире, независимо от того, обучилась модель или нет: карточка
+        # выглядела наполовину сломанной каждый раз.
+        model_info["metrics"] = metrics
+
         auc = metrics["val_auc"]
-        
+
         return {
             "configured_mode": configured,
             "effective_mode": effective,

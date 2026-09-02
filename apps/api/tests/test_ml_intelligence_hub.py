@@ -72,6 +72,24 @@ def test_hub_health_surfaces_last_attempt_when_untrained(tmp_path, monkeypatch):
     assert status["model"]["last_attempt"]["status"] == "insufficient_data"
 
 
+def test_hub_health_nests_metrics_inside_model(tmp_path, monkeypatch):
+    """(#ml-status-metrics-nesting-2026-09-02) app/ml/page.tsx reads
+    `model?.metrics` (never the top-level `status.metrics` sibling) for
+    "Валидация AUC"/"Валидация Acc"/"Событий на признак". Before this fix,
+    health() only ever set metrics at the top level — those three rows showed
+    "—" unconditionally, even right after a successful `train()`, while
+    trained_at/samples/win_rate (which DO live inside model_info) displayed
+    fine, making the card look half-broken on every real training run."""
+    labeler = _train_tiny_model(tmp_path, monkeypatch)
+
+    hub = MLIntelligenceHub()
+    hub._meta_labeler = labeler
+    status = hub.health()
+
+    assert "metrics" in status["model"]
+    assert status["model"]["metrics"] == status["metrics"]
+
+
 def test_hub_auto_demote_reads_real_val_auc(tmp_path, monkeypatch):
     """_mode() должен реально видеть val_auc из status(), не всегда получать
     None из-за несуществующего .metadata."""
