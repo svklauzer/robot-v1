@@ -530,6 +530,29 @@ def build_trend(limit: int = 2000) -> dict:
 
     band_floor = _sanitize_float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30))
 
+    current = {
+        "be_arm_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
+        "be_floor_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
+        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_ARM_PCT", 0.40)),
+        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.25)),
+        "ride_trail_share": _sanitize_float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
+        "min_protective_pct": _sanitize_float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
+        "ride_arm_pct": _sanitize_float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
+    }
+
+    # (#exit-replay-trend-current-config-2026-09-02) Тот же класс бага, что и в
+    # scalp/range-профиле (#backtest-scalp-range-current-config): хардкод-сетка
+    # не обязана содержать боевой конфиг, поэтому "Текущий конфиг" молча
+    # показывал "—" (be_floor_pct=0.18 не входил в [0.10, 0.25]). Сетка обязана
+    # включать боевые значения, иначе current_row всегда None.
+    be_arms = sorted({*be_arms, current["be_arm_pct"]})
+    be_floors = sorted({*be_floors, current["be_floor_pct"]})
+    band_arms = sorted({*band_arms, current["band_arm_pct"]})
+    band_gives = sorted({*band_gives, current["band_giveback_share"]})
+    ride_trails = sorted({*ride_trails, current["ride_trail_share"]})
+    min_protectives = sorted({*min_protectives, current["min_protective_pct"]})
+    ride_arms = sorted({*ride_arms, current["ride_arm_pct"]})
+
     def _run(subset: list[dict]) -> list[dict]:
         out = []
         for be_arm, be_floor, band_arm, band_give, ride_trail, min_prot, ride_arm in product(
@@ -581,15 +604,6 @@ def build_trend(limit: int = 2000) -> dict:
 
     split = _split_check(trades, _run, variants[0], _key)
 
-    current = {
-        "be_arm_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
-        "be_floor_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
-        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
-        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
-        "ride_trail_share": _sanitize_float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
-        "min_protective_pct": _sanitize_float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
-        "ride_arm_pct": _sanitize_float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8)),
-    }
     current_row = next((v for v in variants if _key(v) == _key(current)), None)
 
     # (#replay-fidelity-2026-08-03) Прежде чем сравнивать варианты, модель
@@ -809,8 +823,8 @@ def _current_params(regime: str) -> dict:
     return {
         "be_arm_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35)),
         "be_floor_pct": _sanitize_float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.10)),
-        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_ARM_PCT", 0.40)),
-        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_BAND_GIVEBACK_SHARE", 0.25)),
+        "band_arm_pct": _sanitize_float(getattr(settings, "TREND_CAPTURE_ARM_PCT", 0.40)),
+        "band_giveback_share": _sanitize_float(getattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.25)),
         "ride_trail_share": _sanitize_float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50)),
         "min_protective_pct": _sanitize_float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40)),
         # Боевое значение правой границы коридора — чтобы «текущий конфиг» в

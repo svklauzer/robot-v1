@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+from core.config import settings
 from services import exit_replay as er
 
 HOUR = 3600.0
@@ -129,6 +130,80 @@ def test_build_trend_runs_end_to_end(tmp_path, monkeypatch):
     assert "band_corridor_width" in out["best"]
     assert "fidelity" in out
     assert "inert_axes" in out
+
+
+# ── "Текущий конфиг" на вкладке Тренд/CRT (#exit-replay-trend-current-config-2026-09-02) ──
+# Тот же класс бага, что и в scalp/range-профиле: боевое значение вне
+# хардкод-сетки давало current_rank=None независимо от объёма данных.
+# Обнаружено на живых данных: BREAKEVEN_LOCK_FLOOR_PCT=0.18 не входил в
+# [0.10, 0.25], и /ml/exit-replay?profile=trend отдавал current_rank: null.
+#
+# Отдельно, ДО этой правки band_arm_pct/band_giveback_share вообще не могли
+# отражать боевой конфиг ни при каком значении: build_trend()/_current_params()
+# читали несуществующее имя поля TREND_CAPTURE_BAND_ARM_PCT (в Settings
+# объявлено TREND_CAPTURE_ARM_PCT — без "BAND"), поэтому getattr(...) тихо
+# возвращал захардкоженный дефолт 0.40 вместо боевого значения.
+
+def _six_trend_rows():
+    row = {
+        "trade_mode": "trend",
+        "result_pct": 0.20,
+        "qty": 1.0,
+        "closed_total_cost": 0.10,
+        "lifecycle": {
+            "entry_price": 100.0,
+            "mfe_pct": 1.0,
+            "traj": [[0, 0.0], [60, 1.0], [120, 0.4]],
+        },
+    }
+    return [row] * 6
+
+
+@pytest.fixture()
+def trend_dataset(tmp_path, monkeypatch):
+    path = tmp_path / "outcomes.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r) for r in _six_trend_rows()), encoding="utf-8")
+
+    class _Logger:
+        def __init__(self):
+            self.path = str(path)
+
+    monkeypatch.setattr("services.ml_trade_logger.MLTradeLogger", _Logger)
+    return path
+
+
+def test_build_trend_finds_current_config_when_off_grid(trend_dataset, monkeypatch):
+    """Боевой be_floor_pct=0.18 не входит в хардкод-сетку [0.10, 0.25] — сетка
+    обязана включать боевой конфиг, иначе current_row всегда None."""
+    monkeypatch.setattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35, raising=False)
+    monkeypatch.setattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.18, raising=False)
+    monkeypatch.setattr(settings, "TREND_CAPTURE_ARM_PCT", 0.40, raising=False)
+    monkeypatch.setattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.25, raising=False)
+    monkeypatch.setattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50, raising=False)
+    monkeypatch.setattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 0.40, raising=False)
+    monkeypatch.setattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8, raising=False)
+
+    out = er.build_trend(limit=100)
+
+    assert out["current_config"]["be_floor_pct"] == pytest.approx(0.18)
+    assert out["current_rank"] is not None, "боевой конфиг должен быть найден в сетке"
+    assert out["current_total_pct"] is not None
+    assert 1 <= out["current_rank"] <= out["variants_count"]
+
+
+def test_build_trend_current_config_reads_the_real_settings_field(trend_dataset, monkeypatch):
+    """band_arm_pct/band_giveback_share обязаны отражать TREND_CAPTURE_ARM_PCT /
+    TREND_CAPTURE_GIVEBACK_SHARE (реальные поля Settings, читаемые exit_policy.py
+    в бою) — не несуществующее TREND_CAPTURE_BAND_ARM_PCT, которое тихо
+    подставляло дефолт 0.40 независимо от боевого значения."""
+    monkeypatch.setattr(settings, "TREND_CAPTURE_ARM_PCT", 0.55, raising=False)
+    monkeypatch.setattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.35, raising=False)
+
+    out = er.build_trend(limit=100)
+
+    assert out["current_config"]["band_arm_pct"] == pytest.approx(0.55)
+    assert out["current_config"]["band_giveback_share"] == pytest.approx(0.35)
 
 
 # ── доверие к модели ────────────────────────────────────────────────────────
