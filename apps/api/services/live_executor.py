@@ -34,7 +34,7 @@ from typing import Any
 
 from core.config import settings
 from core.logging import get_logger, log_event
-from services.htx_client import HTXClient
+from services.exchange_factory import get_exchange_client
 
 logger = get_logger(__name__)
 
@@ -65,7 +65,7 @@ class OrderResult:
 
 class LiveExecutor:
     def __init__(self):
-        self.client = HTXClient()
+        self.client = get_exchange_client()
         self._leverage_set: set[str] = set()
         self._bal_cache: dict[str, tuple[float, float]] = {}  # market_type -> (free_usdt, ts)
 

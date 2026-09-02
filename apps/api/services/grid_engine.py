@@ -42,8 +42,8 @@ class GridEngine:
         self.market = MarketDataService()
         self.store = GridStore()
         try:
-            from services.htx_client import HTXClient
-            self.htx = HTXClient()
+            from services.exchange_factory import get_exchange_client
+            self.htx = get_exchange_client()
         except Exception:
             self.htx = None
 
