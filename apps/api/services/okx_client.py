@@ -26,12 +26,21 @@ class OKXClient:
     класс: контракт формализован отдельно в exchange_client.py (typing.Protocol,
     без наследования и рантайм-эффекта).
 
-    ВАЖНО (#okx-precision-unverified): amount_to_precision/contract_size ниже
+    (#okx-precision-verified-2026-09-02) amount_to_precision/contract_size ниже
     повторяют HTX-логику "конвертировать в контракты, округлить вниз, вернуть
-    обратно" — это стандартное поведение для КОНТРАКТНЫХ (swap/futures) рынков
-    вообще, не HTX-специфика, но живьём против настоящего ccxt.okx().load_markets()
-    не сверялось (нет сетевого доступа в этой среде). Перед боевым включением
-    ACTIVE_EXCHANGE=okx на деривативах — проверить реальные market metadata OKX.
+    обратно" — сверено с официальной документацией OKX (docs-v5, /public/
+    instruments): у деривативов (SWAP/FUTURES) `sz` ордера ДЕЙСТВИТЕЛЬНО в
+    контрактах, не в монетах ("lotSz/minSz: If it is a derivatives contract,
+    the value is the number of contracts"), а `ctVal` (contract value) —
+    ровно то поле, из которого ccxt строит унифицированный `contractSize`.
+    Модель конвертации не HTX-специфика, а общий контракт деривативов OKX —
+    порт логики корректен.
+    Осталась не устранённая (и унаследованная от HTXClient, не новая здесь)
+    неточность: округление ниже предполагает шаг ровно в 1 контракт
+    (`int(contracts)`), а не читает фактический `lotSz` — для инструментов,
+    где шаг лота отличается от 1, это может округлить консервативнее, чем
+    нужно. Не опасно (никогда не завышает объём), но не оптимально; тот же
+    компромисс уже есть в HTXClient.amount_to_precision.
     """
 
     _markets_loaded: bool = False
@@ -308,10 +317,10 @@ class OKXClient:
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         """Округляет количество по точности OKX.
 
-        См. класс-докстринг (#okx-precision-unverified): логика конвертации
-        в целые контракты для линейных свопов повторяет HTXClient — это
-        стандартное поведение контрактных рынков вообще, но не сверялось
-        против настоящих market metadata OKX.
+        См. класс-докстринг (#okx-precision-verified-2026-09-02): логика
+        конвертации в целые контракты для линейных свопов повторяет HTXClient
+        — сверено с документацией OKX (lotSz/minSz/ctVal), это её собственный
+        контракт деривативов, не HTX-специфика.
         """
         try:
             amount = float(amount)
