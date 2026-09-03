@@ -647,6 +647,12 @@ class SignalLifecycleManager:
                 max_profit_price=lifecycle.get("max_profit_price"),
                 symbol=signal.symbol,
                 market_type=self._market_type(signal),
+                # (#protective-net-gate-dead-2026-09-03) Без этого параметра
+                # экономический гейт защитных выходов (MIN_PROTECTIVE_NET_USDT)
+                # не работал вовсе — см. _position_notional_usdt.
+                position_notional_usdt=self._position_notional_usdt(
+                    db, signal, float(entry_price)
+                ),
                 signal_age_sec=self._signal_age_sec(lifecycle),
                 trade_mode=(signal.plan_json or {}).get("trade_mode", "trend"),
                 flow_against=_depth_flow_against(signal, side),
@@ -933,6 +939,57 @@ class SignalLifecycleManager:
         """
         entry_price = self._get_signal_entry_price(db, signal)
         return float(entry_price) if entry_price is not None else float(fallback_entry)
+
+    def _position_notional_usdt(
+        self,
+        db,
+        signal: Signal,
+        entry_price: float | None = None,
+    ) -> float | None:
+        """Номинал позиции в USDT — вход экономического гейта защитных выходов.
+
+        (#protective-net-gate-dead-2026-09-03) ExitPolicyService считает
+        `_estimated_net_usdt(...)` и НЕ фиксирует защитным выходом, если результат
+        в USDT ниже MIN_PROTECTIVE_NET_USDT — это задокументировано тестом
+        test_backstop_respects_net_usdt_floor. Но боевой вызов
+        before_tp1_decision НИКОГДА не передавал position_notional_usdt: est_net
+        всегда был None, ветка `est_net is None or est_net >= floor` всегда
+        истинна, и гейт не отработал НИ РАЗУ ни в одной защитной ветке.
+
+        Следствие в бою: защитные выходы фиксировали ОТРИЦАТЕЛЬНЫЙ нетто —
+        ровно то, ради предотвращения чего гейт и написан (ADA #464: gross 0.0,
+        net −0.33 = одна комиссия; ETH #474: net −0.02 за ~8 часов до хода,
+        накрывшего оба TP).
+
+        Источник размера — реальная открытая позиция (фактический филл), фолбэк —
+        план сигнала. None означает «размер неизвестен» и сохраняет прежнее
+        fail-open поведение гейта, а не блокирует выход вслепую.
+        """
+        position = self._get_open_position_for_signal(db, signal)
+
+        qty = position.qty if position is not None else None
+        price = position.entry_price if position is not None else None
+
+        if qty is None:
+            qty = signal.qty
+
+        if price is None:
+            price = (
+                entry_price
+                if entry_price is not None
+                else self._get_signal_entry_price(db, signal)
+            )
+
+        try:
+            qty_value = float(qty)
+            price_value = float(price)
+        except (TypeError, ValueError):
+            return None
+
+        if qty_value <= 0 or price_value <= 0:
+            return None
+
+        return qty_value * price_value
 
     def _result_pct_precise(self, side: str, entry: float, price: float) -> float:
         if not entry:

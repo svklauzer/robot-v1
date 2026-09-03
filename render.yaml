@@ -157,10 +157,29 @@ services:
         value: "45.0"
       - key: TZ_MODE
         value: enforce
+      # (#tz-enforce-adx-rising-2026-09-03) Добавлено adx_rising — беспороговое
+      # семейство «ADX растёт» (отдельно от некалиброванного порога TZ_ADX_MIN,
+      # который остаётся в тени). Вход в УЖЕ ЗАТУХАЮЩИЙ тренд был источником
+      # всех крупных стопов 01–03.09: 11 сделок с провалом этого условия дали
+      # −9.74 USDT, 4 без провала — +8.90.
       - key: TZ_ENFORCE_CONDITIONS
-        value: kama,di,obv
+        value: kama,di,obv,adx_rising
       - key: TZ_ENFORCE_MIN_SAMPLE
         value: "0"
+
+      # ── ANTI-CHOP: вход в молодой тренд (#anti-chop-young-trend-2026-09-03) ─
+      # Веер EMA20↔EMA200 лагает после V-разворота и закрывает вход на весь
+      # первый отрезок движения. Альтернативный путь пускает узкий веер, если
+      # ADX выше минимума И растёт, а DI разведены по стороне сделки.
+      # Выключается одним флагом без правки кода.
+      - key: ANTI_CHOP_YOUNG_TREND_ENABLED
+        value: "true"
+      - key: ANTI_CHOP_YOUNG_ADX_MIN
+        value: "20.0"
+      - key: ANTI_CHOP_YOUNG_ADX_RISE_MIN
+        value: "0.5"
+      - key: ANTI_CHOP_YOUNG_DI_SPREAD_MIN
+        value: "15.0"
       - key: TZ_EXIT_CONDITIONS
         value: kama,adx
       - key: TZ_TREND_EXIT_ONLY
