@@ -1062,6 +1062,13 @@ def live_state():
         "robot_mode": getattr(settings, "ROBOT_MODE", "paper"),
         "trading_mode": getattr(settings, "TRADING_MODE", "paper_trade"),
         "execution_market": settings.execution_market_type,
+        # (#ui-audit-2026-09-03) Баннер режима — единственная поверхность,
+        # видимая на КАЖДОЙ странице, и до этой правки он зашивал «реальные
+        # ордера на HTX» текстом. С OKX как переключаемой биржей это стало
+        # прямой ложью на самом ответственном месте интерфейса: при
+        # ACTIVE_EXCHANGE=okx и live-режиме баннер называл бы не ту биржу,
+        # на которой уходят настоящие деньги.
+        "active_exchange": settings.active_exchange,
         "by_engine": {
             "trend": {"leverage": settings.execution_leverage,
                       "margin_mode": getattr(settings, "TREND_MARGIN_MODE", "isolated")},

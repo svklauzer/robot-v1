@@ -847,13 +847,81 @@ function decisionLabel(code: string | null | undefined) {
     reversal_long_from_support: "Лонг на развороте от поддержки",
     watch_long_escalated_to_candidate: "Watch LONG → кандидат",
     watch_short_escalated_to_candidate: "Watch SHORT → кандидат",
+
+    // === (#ui-audit-2026-09-03) Коды, которые лента показывала СЫРЫМИ ===
+    // Все до одного встречаются в боевых выгрузках. Причина не в том, что о
+    // них забыли: их коды несут деталь прямо в строке (см. normalizeDecision),
+    // а поиск шёл точным совпадением — ярлык не мог найтись в принципе.
+
+    // anti-chop: веер EMA и путь для молодого тренда
+    anti_chop_no_trend: "Чоп: тренда по стороне нет",
+    anti_chop_young_trend_pass: "Молодой тренд: пропущен мимо веера",
+
+    // выравнивание со старшим ТФ
+    htf_against_long_4h_down: "4h вниз — лонг не берём",
+    htf_against_short_4h_up: "4h вверх — шорт не берём",
+
+    // положение в диапазоне
+    range_pos_long_too_high: "Лонг в верхней части диапазона",
+    range_pos_short_too_low: "Шорт в нижней части диапазона",
+
+    // тайминг входа на исполнительном ТФ
+    entry_timing_buying_top: "Не покупаем вершину",
+    entry_timing_shorting_bottom: "Не шортим дно",
+
+    // перегрев/перепроданность старшего ТФ
+    trend_htf_overheat_veto: "Перегрев HTF — вход запрещён",
+    trend_htf_overheat_late_entry: "Перегрев HTF — поздний вход",
+    trend_htf_oversold_veto: "Перепроданность HTF — вход запрещён",
+    trend_htf_oversold_late_entry: "Перепроданность HTF — поздний вход",
+
+    // достижимость цели и экономика
+    tp2_reached_too_rarely: "TP2 достигается слишком редко",
+    net_rr_blended_too_low: "RR (смешанный) ниже минимума",
+    entry_zone_support_too_far: "Опора слишком далеко от рынка",
+
+    // стакан и дедуп
+    blocked_depth_gate: "Заблокирован стаканом",
+    blocked_active_signal_per_symbol: "По символу уже есть активный сигнал",
+
+    // качество сетапа (learning-контур)
+    setup_confirmed: "Сетап подтверждён",
+    learning_setup_approved: "Сетап одобрен (обучение)",
+    learning_setup_strong_score: "Сильный сетап (обучение)",
+    learning_trend_continuation_approved: "Продолжение тренда одобрено",
+    weak_volume_block_applied: "Слабый объём — штраф применён",
   };
 
   if (!code) return "-";
-  return map[code] || code;
+
+  // (#ui-audit-2026-09-03) Часть кодов несёт деталь прямо в строке:
+  //   anti_chop_no_trend(fan_atr=-0.61<0.80)
+  //   range_pos_long_too_high(0.86>0.60)
+  //   depth_spread_too_wide:0.122>0.12
+  // Поиск точным совпадением такие коды не находил НИКОГДА — включая уже
+  // заведённые depth_*, у которых в комментарии прямо написано «могут иметь
+  // :значение». Ярлыки были, а совпадение не наступало: тихий отказ, страница
+  // просто показывала машинный идентификатор.
+  const { base, detail } = normalizeDecision(code);
+  const label = map[code] || map[base] || base;
+  return detail ? `${label} · ${detail}` : label;
 }
 
-function DecisionBadge({ decision }: { decision: string }) {
+/** Отделяет базовый код от детали: `code(деталь)` или `code:деталь`. */
+function normalizeDecision(code: string): { base: string; detail: string } {
+  const raw = String(code);
+  const i = raw.search(/[:(]/);
+  if (i < 0) return { base: raw, detail: "" };
+  let detail = raw.slice(i + 1).trim();
+  if (detail.endsWith(")")) detail = detail.slice(0, -1);
+  return { base: raw.slice(0, i).trim(), detail };
+}
+
+function DecisionBadge({ decision: rawDecision }: { decision: string }) {
+  // (#ui-audit-2026-09-03) Цвет бейджа тоже сравнивался точной строкой — коды с
+  // деталью в скобках не попадали ни в одну ветку и красились «нейтральным» по
+  // умолчанию. Блокирующее решение выглядело как обычное.
+  const decision = normalizeDecision(rawDecision).base;
   const cls =
     decision === "ready_to_publish" ||
     decision === "published_signal_created" ||
@@ -894,7 +962,12 @@ function DecisionBadge({ decision }: { decision: string }) {
                       : "bg-slate-700 text-white";
 
   return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
+    // Бейдж компактный: показываем короткий ярлык без детали, а полный код с
+    // деталью отдаём в подсказку — иначе чип растянется на пол-строки.
+    <span
+      className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}
+      title={String(rawDecision)}
+    >
       {decisionLabel(decision)}
     </span>
   );

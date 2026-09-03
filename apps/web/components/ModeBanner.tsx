@@ -10,26 +10,33 @@ type LiveState = {
   robot_mode?: string;
   trading_mode?: string;
   execution_market?: string;
+  active_exchange?: string;
 };
 
 // Визуальная схема режима. LIVE — красный (реальные деньги), DRY-RUN — янтарь
 // (живой путь логируется, но ордера не уходят), PAPER — спокойный изумруд.
-const STYLES: Record<string, { label: string; sub: string; cls: string; dot: string }> = {
+//
+// (#ui-audit-2026-09-03) Подпись LIVE строится функцией, а не константой:
+// раньше в ней была зашита строка «реальные ордера на HTX». С OKX как
+// переключаемой биржей это превратилось в ложь на самом ответственном месте
+// интерфейса — баннер называл бы не ту биржу, на которой уходят настоящие
+// деньги. Биржу берём из /live/state, а не из предположения.
+const STYLES: Record<string, { label: string; sub: (ex: string) => string; cls: string; dot: string }> = {
   live: {
     label: "LIVE",
-    sub: "реальные ордера на HTX — настоящие деньги",
+    sub: (ex) => `реальные ордера на ${ex} — настоящие деньги`,
     cls: "border-red-500/70 bg-red-950/70 text-red-100",
     dot: "bg-red-400 animate-pulse",
   },
   dry_run: {
     label: "DRY-RUN",
-    sub: "живой путь логируется, ордера НЕ отправляются",
+    sub: () => "живой путь логируется, ордера НЕ отправляются",
     cls: "border-amber-500/60 bg-amber-950/60 text-amber-100",
     dot: "bg-amber-400",
   },
   off: {
     label: "PAPER",
-    sub: "бумажная симуляция — биржа не задействована",
+    sub: () => "бумажная симуляция — биржа не задействована",
     cls: "border-emerald-700/60 bg-emerald-950/50 text-emerald-100",
     dot: "bg-emerald-400",
   },
@@ -58,15 +65,19 @@ export default function ModeBanner() {
 
   const mode = String(state.effective_mode || "off").toLowerCase();
   const s = STYLES[mode] || STYLES.off;
+  const exchange = String(state.active_exchange || "htx").toUpperCase();
 
   return (
     <div className={`sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2 text-sm font-semibold shadow-lg ${s.cls}`}>
       <div className="flex items-center gap-2">
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${s.dot}`} />
         <span className="text-base font-extrabold tracking-wide">{s.label}</span>
-        <span className="opacity-80">{s.sub}</span>
+        <span className="opacity-80">{s.sub(exchange)}</span>
       </div>
       <div className="flex items-center gap-3 text-xs opacity-75">
+        {/* Биржа — на каждой странице: переключение ACTIVE_EXCHANGE меняет то,
+            куда уходят ордера, и это не должно быть видно только на Health. */}
+        <span className="rounded bg-black/30 px-1.5 py-0.5 font-bold">{exchange}</span>
         <span>robot: {state.robot_mode ?? "—"}</span>
         <span>trading: {state.trading_mode ?? "—"}</span>
         <span>market: {state.execution_market ?? "—"}</span>

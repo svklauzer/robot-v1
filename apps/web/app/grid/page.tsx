@@ -165,7 +165,16 @@ export default function GridPage() {
                     <span className={`rounded-lg px-2 py-1 text-xs font-bold ${REGIME_COLOR[c.regime_now] || "bg-slate-600 text-white"}`} title="живой регайм отличается от регайма цикла">→ {c.regime_now}</span>
                   )}
                   {c.frozen && (
-                    <span className="rounded-lg bg-sky-900/70 px-2 py-1 text-xs font-bold text-sky-200" title="боковик: добор уровней заморожен, выходы работают">❄ заморожен</span>
+                    <span
+                      className={`rounded-lg px-2 py-1 text-xs font-bold ${
+                        c.vol_regime === "breakout"
+                          ? "bg-orange-900/70 text-orange-200"
+                          : "bg-sky-900/70 text-sky-200"
+                      }`}
+                      title={freezeReasonText(c)}
+                    >
+                      ❄ {c.vol_regime === "breakout" ? "заморожен: пробой" : "заморожен"}
+                    </span>
                   )}
                   {(c.flip_streak ?? 0) > 0 && (
                     <span className="rounded-lg bg-amber-900/70 px-2 py-1 text-xs font-bold text-amber-200" title="тиков подряд против цикла; при достижении порога — разворот">↻ {c.flip_streak}</span>
@@ -252,6 +261,25 @@ export default function GridPage() {
   );
 }
 
+/** (#ui-audit-2026-09-03) Почему цикл заморожен — по фактическим полям, а не
+ *  по единственному предположению. `dist_atr` = |цена − EMA| / ATR: сетка
+ *  усредняется против движения, поэтому на пробое добор выключается намеренно.
+ *  Без этой строки поведение выглядело поломкой, а не защитой. */
+function freezeReasonText(c: any) {
+  const dist = typeof c.dist_atr === "number" ? c.dist_atr.toFixed(2) : null;
+
+  if (c.vol_regime === "breakout") {
+    return `пробой: цена в ${dist ?? "?"} ATR от EMA — добор выключен, чтобы не усредняться против движения. Выходы работают`;
+  }
+  if (c.vol_regime === "range_pending") {
+    return `возврат в диапазон подтверждается (${c.range_streak ?? 0} тиков), добор пока выключен`;
+  }
+  if (c.regime_now === "neutral") {
+    return "боковик у EMA — добор заморожен, выходы работают";
+  }
+  return `добор заморожен${dist ? ` (дистанция ${dist} ATR)` : ""}, выходы работают`;
+}
+
 function LiveRegime({ c, confirm, band }: { c: any; confirm: number; band?: number }) {
   const cycle = c.regime;
   const now = c.regime_now;
@@ -260,8 +288,14 @@ function LiveRegime({ c, confirm, band }: { c: any; confirm: number; band?: numb
     txt = "нет живых данных регайма"; cls = "text-slate-400";
   } else if (c.flip_cooldown) {
     txt = `кулдаун после флипа — развороты заблокированы, даём направлению отработать`; cls = "text-violet-300";
-  } else if (c.frozen || now === "neutral") {
-    txt = `боковик ±${band ?? "?"}% у EMA — добор заморожен, выходы работают`; cls = "text-sky-300";
+  } else if (c.frozen) {
+    // (#ui-audit-2026-09-03) Раньше здесь стояло безусловное «боковик», и это
+    // была неверная причина: механизмов заморозки два и они противоположны —
+    // боковик у EMA и ПРОБОЙ от неё. Сетка усредняется против движения, поэтому
+    // в пробое добор выключается специально, чтобы не ловить нож.
+    txt = freezeReasonText(c); cls = c.vol_regime === "breakout" ? "text-orange-300" : "text-sky-300";
+  } else if (now === "neutral") {
+    txt = `боковик ±${band ?? "?"}% у EMA — родная среда сетки`; cls = "text-sky-300";
   } else if (now !== cycle) {
     txt = `разворот зреет: ${c.flip_streak ?? 0}/${confirm} тиков → ${now}`; cls = "text-amber-300";
   } else {
