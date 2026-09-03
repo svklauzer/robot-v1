@@ -123,6 +123,20 @@ def snapshot(
             "range_time_stop_min": float(_g("RANGE_TIME_STOP_MIN", 0)),
             "tp1_partial_enabled": bool(_g("TP1_PARTIAL_ENABLED", True)),
             "tp1_partial_share": float(_g("TP1_PARTIAL_CLOSE_SHARE", 0)),
+            # (#progressive-tp2-2026-09-03) TP2 стал этапом: доля остатка
+            # фиксируется, хвост едет под трейлом. Это меняет РАСПРЕДЕЛЕНИЕ
+            # исходов (правый хвост перестаёт быть срезанным), поэтому обязано
+            # попасть в отпечаток — иначе сделки с потолком и без него
+            # смешаются в одной статистике незаметно.
+            "tp2_progressive_enabled": bool(_g("TP2_PROGRESSIVE_ENABLED", False)),
+            "tp2_partial_share": float(_g("TP2_PARTIAL_CLOSE_SHARE", 0)),
+            "tp2_trail_leg_share": float(_g("TP2_TRAIL_LEG_SHARE", 0)),
+            "tp2_trail_min_buffer_pct": float(_g("TP2_TRAIL_MIN_BUFFER_PCT", 0)),
+            "tp2_trail_giveback_share": float(_g("TP2_TRAIL_GIVEBACK_SHARE", 0)),
+            # (#post-tp1-dead-zone-2026-09-03) Защита прибыли между TP1 и TP2.
+            "post_tp1_trail_enabled": bool(_g("POST_TP1_TRAIL_ENABLED", False)),
+            "post_tp1_trail_min_mfe_pct": float(_g("POST_TP1_TRAIL_MIN_MFE_PCT", 0)),
+            "post_tp1_trail_giveback_share": float(_g("POST_TP1_TRAIL_GIVEBACK_SHARE", 0)),
             "exit_require_flow_confirm": bool(_g("EXIT_REQUIRE_FLOW_CONFIRM", True)),
         },
         # ── защиты и фильтры ────────────────────────────────────────────────

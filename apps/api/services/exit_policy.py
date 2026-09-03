@@ -727,6 +727,7 @@ class ExitPolicyService:
         lifecycle: dict | None = None,
         symbol: str | None = None,
         market_type: str | None = None,
+        position_notional_usdt: float | None = None,
         signal_age_sec: float | None = None,
     ) -> ExitDecision:
         side = str(side).lower()
@@ -740,6 +741,7 @@ class ExitPolicyService:
         drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
         net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
         min_post_tp1_exit_pct = float(getattr(settings, "MIN_POST_TP1_EXIT_PCT", 0.80))
+        min_protective_net_usdt = float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25))
 
         stop_distance_pct = (
             abs(entry_price - float(stop_price)) / entry_price * 100
@@ -771,6 +773,37 @@ class ExitPolicyService:
                         f"dd={drawdown_from_mfe:.4f} prot={protected_pct:.4f} src={threshold_source}"
                     ),
                 )
+
+        # (#post-tp1-dead-zone-2026-09-03) Ветки ниже требуют MFE ≥ 2.0% / ≥ 3.0%
+        # (и ещё одна — стоп ≥ 3.0%). Медианный MFE наших режимов 0.52–1.19%,
+        # типичный стоп 0.6–0.9% — ни одна не может взвестись на обычной сделке,
+        # и после TP1 позиция имеет ровно два исхода: TP2 или сползание на
+        # безубыток. Эта ветка закрывает провал: порог в ДОЛЯХ от собственного
+        # MFE сделки, а не абсолютом в чужом масштабе. Стоит ПЕРЕД абсолютными
+        # ярусами — они остаются для крупных движений и не трогаются.
+        if bool(getattr(settings, "POST_TP1_TRAIL_ENABLED", True)):
+            trail_min_mfe = float(getattr(settings, "POST_TP1_TRAIL_MIN_MFE_PCT", 0.60))
+            trail_share = float(getattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.40))
+            if mfe >= trail_min_mfe and drawdown_from_mfe >= mfe * trail_share:
+                protected_pct = self._achievable_pct(max(net_safe_pct, 0.0), current_pct)
+                est_net = self._estimated_net_usdt(
+                    protected_pct, position_notional_usdt, fee_rate=fee_rate
+                )
+                # Тот же экономический гейт, что у остальных защитных веток
+                # (#protective-net-gate-dead-2026-09-03): фиксировать в минус по
+                # комиссии смысла нет — тогда лучше дождаться TP2 или стопа.
+                if est_net is None or est_net >= min_protective_net_usdt:
+                    exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
+                    return ExitDecision(
+                        exit=True,
+                        reason="post_tp1_giveback_trail",
+                        exit_price=round(exit_price, 8),
+                        note=(
+                            f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
+                            f">= {trail_share}*mfe prot={protected_pct:.4f} "
+                            f"net_safe={net_safe_pct:.4f} fee={fee_source}"
+                        ),
+                    )
 
         if mfe >= 3.0 and drawdown_from_mfe >= mfe * 0.30:
             protected_pct = self._achievable_pct(
@@ -807,3 +840,67 @@ class ExitPolicyService:
         # None → manage_loop crash 'NoneType.exit'. Баг был латентным: вылез только
         # после #9, когда сделки реально доходят до TP1 и входят в этот путь.
         return ExitDecision(exit=False)
+
+    def after_tp2_decision(
+        self,
+        side: str,
+        entry_price: float,
+        current_price: float,
+        tp2_price: float,
+        peak_price: float | None = None,
+        symbol: str | None = None,
+        market_type: str | None = None,
+    ) -> ExitDecision:
+        """Хвост после частичной фиксации на TP2 (#progressive-tp2-2026-09-03).
+
+        Отдельный метод, а не ещё один ярус в after_tp1_decision: там лестница
+        построена вокруг «дошли до TP2 или откатились к безубытку», и вплетать
+        в неё этап, который начинается ЗА TP2, значит менять смысл её порогов.
+
+        Держим хвост, пока он не отдал слишком много ПРИРОСТА СВЕРХ TP2. Доля
+        считается именно от прироста, а не от полного MFE: иначе порог зависел
+        бы от того, как далеко стоял TP2, а не от того, сколько дал сам хвост —
+        при близком TP2 любая свеча выглядела бы как обвал, при дальнем не
+        срабатывало бы вообще.
+
+        Жёсткий пол (не отдать назад уже достигнутый TP2) обеспечивает не этот
+        метод, а ратчет `signal.stop_price` в signal_lifecycle: он не опускается
+        ниже уровня TP2 минус буфер, и срабатывает через обычный хард-стоп.
+        Здесь — только выход по затуханию хвоста.
+        """
+        side = str(side).lower()
+        entry_price = float(entry_price)
+        current_price = float(current_price)
+        tp2_price = float(tp2_price)
+
+        current_pct = self._result_pct(side, entry_price, current_price)
+        tp2_pct = self._result_pct(side, entry_price, tp2_price)
+
+        if peak_price is None:
+            return ExitDecision(exit=False, note="tp2_trail_no_peak")
+
+        peak_pct = self._result_pct(side, entry_price, float(peak_price))
+
+        # Прирост сверх TP2: сколько хвост реально добавил к уже зафиксированному.
+        run_pct = peak_pct - tp2_pct
+        if run_pct <= 0:
+            return ExitDecision(exit=False, note=f"tp2_trail_no_run peak={peak_pct:.4f}")
+
+        given_back = peak_pct - current_pct
+        share = float(getattr(settings, "TP2_TRAIL_GIVEBACK_SHARE", 0.40))
+
+        if given_back >= run_pct * share:
+            return ExitDecision(
+                exit=True,
+                reason="tp2_trail_giveback",
+                exit_price=round(current_price, 8),
+                note=(
+                    f"peak={peak_pct:.4f} tp2={tp2_pct:.4f} run={run_pct:.4f} "
+                    f"cur={current_pct:.4f} back={given_back:.4f} >= {share}*run"
+                ),
+            )
+
+        return ExitDecision(
+            exit=False,
+            note=f"tp2_trail_riding run={run_pct:.4f} back={given_back:.4f}",
+        )

@@ -38,6 +38,13 @@ const CLOSE_REASON_LABELS: Record<string, string> = {
   // структуры (KAMA/ADX/OBV), не на отданную прибыль — бэкстоп фиксирует по
   // текущей цене сделку, которая отдала бОльшую часть значимого MFE.
   tz_mfe_giveback_backstop: "ТЗ: фиксация отданной прибыли",
+  // (#progressive-tp2-2026-09-03) TP2 стал этапом, а не потолком: на нём
+  // фиксируется доля остатка, хвост едет под трейлом.
+  tp2_partial: "TP2: частичная фиксация",
+  tp2_trail_stop: "Трейл после TP2",
+  tp2_trail_giveback: "TP2: хвост отдал прибыль",
+  // (#post-tp1-dead-zone-2026-09-03) Защита прибыли между TP1 и TP2.
+  post_tp1_giveback_trail: "Фиксация отдачи после TP1",
 };
 
 function closeReasonLabel(code: string | null | undefined): string {
@@ -392,6 +399,26 @@ function SignalCard({
             <span className="ml-2 text-emerald-100/50">
               остаток {fmt(plan.tp1_partial.remaining_qty, 6)}
             </span>
+          </div>
+        )}
+
+        {/* (#progressive-tp2-2026-09-03) TP2 — этап, а не потолок: доля остатка
+            зафиксирована, хвост едет под трейлом с подтянутым стопом. */}
+        {plan.tp2_partial && (
+          <div className="mt-2 rounded-lg border border-cyan-800/60 bg-cyan-950/30 px-3 py-2 text-xs">
+            <span className="font-semibold text-cyan-300">TP2 зафиксирован частично: </span>
+            <span className="text-emerald-100/80">
+              {fmt(plan.tp2_partial.closed_qty, 6)} @ {fmt(plan.tp2_partial.exit_price, 6)}
+            </span>
+            <span className={(plan.tp2_partial.net_pnl ?? 0) < 0 ? "ml-2 text-red-300" : "ml-2 text-emerald-300"}>
+              net {fmt(plan.tp2_partial.net_pnl, 4)} USDT
+            </span>
+            <span className="ml-2 text-emerald-100/50">
+              хвост {fmt(plan.tp2_partial.remaining_qty, 6)}
+            </span>
+            <div className="mt-1 text-cyan-100/60">
+              Пик хвоста {fmt(plan.tp2_partial.peak_price, 6)} · трейл {fmt(plan.tp2_partial.buffer_pct, 3)}%
+            </div>
           </div>
         )}
       </div>
