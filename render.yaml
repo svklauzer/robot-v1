@@ -203,6 +203,35 @@ services:
       - key: TZ_HARD_STOP_LOSS_PCT
         value: "3.0"
       
+      # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
+      # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
+      # правый хвост срезался конструктивно, а гейт входа tp2_reached_too_rarely
+      # питался статистикой, которую этот же выход и цензурировал («TP2
+      # превышен» ненаблюдаемо, если TP2 — выход). Теперь на TP2 фиксируется
+      # доля остатка, хвост едет под трейлом с храповиком стопа.
+      # Выключается одним флагом: TP2_PROGRESSIVE_ENABLED=false вернёт потолок.
+      - key: TP2_PROGRESSIVE_ENABLED
+        value: "true"
+      - key: TP2_PARTIAL_CLOSE_SHARE
+        value: "0.5"       # доля ОСТАТКА (после TP1 остаётся ~половина)
+      - key: TP2_TRAIL_LEG_SHARE
+        value: "0.5"       # ширина трейла = половина отрезка TP1→TP2
+      - key: TP2_TRAIL_MIN_BUFFER_PCT
+        value: "0.20"      # пол ширины трейла, % цены
+      - key: TP2_TRAIL_GIVEBACK_SHARE
+        value: "0.40"      # отдал 40% прироста СВЕРХ TP2 → фиксируем хвост
+
+      # ── Защита прибыли в зоне TP1→TP2 (#post-tp1-dead-zone-2026-09-03) ────
+      # Три существующие ветки требуют MFE ≥ 2–3% или стоп ≥ 3% при медианном
+      # MFE наших режимов 0.52–1.19% — не могли взвестись ни разу, и после TP1
+      # сделка имела ровно два исхода: TP2 или сползание на безубыток.
+      - key: POST_TP1_TRAIL_ENABLED
+        value: "true"
+      - key: POST_TP1_TRAIL_MIN_MFE_PCT
+        value: "0.60"
+      - key: POST_TP1_TRAIL_GIVEBACK_SHARE
+        value: "0.40"
+
       # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED
         value: "true"

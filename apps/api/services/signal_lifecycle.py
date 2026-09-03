@@ -772,6 +772,8 @@ class SignalLifecycleManager:
             entry_price = float(position.entry_price) if position else entry_from
             lifecycle = (signal.plan_json or {}).get("lifecycle") or {}
 
+            tp2_partial = (signal.plan_json or {}).get("tp2_partial")
+
             # ХАРД-СТОП после TP1: breakeven/стоп закрывает позицию явно,
             # цена закрытия = уровень стопа (SOL #96).
             if self._hit_stop(side, price, stop):
@@ -781,23 +783,43 @@ class SignalLifecycleManager:
                     signal,
                     exit_price=exit_price,
                     fallback_result_pct=self._result_pct(side, entry_price, exit_price),
-                    reason="breakeven_stop",
+                    # (#progressive-tp2-2026-09-03) После частичной фиксации на
+                    # TP2 стоп уже НЕ безубыток, а подтянутый трейл хвоста —
+                    # причина закрытия обязана это отражать, иначе разбор увидит
+                    # «сползли в ноль» там, где на деле забрали TP2 плюс часть
+                    # хвоста.
+                    reason="tp2_trail_stop" if tp2_partial else "breakeven_stop",
                 )
                 return
 
-            if self._hit_tp(side, price, tp2):
-                exit_price = self._tp_exit_price(tp2)
+            if self._hit_tp(side, price, tp2) and not tp2_partial:
+                # (#progressive-tp2-2026-09-03) TP2 — ЭТАП, а не потолок.
+                # Раньше здесь стояло безусловное закрытие всей позиции по цене
+                # ровно tp2: правый хвост срезался конструктивно, а статистика
+                # «как часто TP2 достигается», которой гейтится вход, не могла
+                # наблюдать превышение в принципе.
+                if await self._start_tp2_trail(db, signal, side, tp2, entry_price):
+                    db.flush()
+                    return
 
+                # Частичная фиксация не удалась (мелкая позиция / precision) —
+                # прежнее поведение: закрываем целиком, ничего не теряем.
+                exit_price = self._tp_exit_price(tp2)
                 await self._close_signal(
                     db,
                     signal,
                     exit_price=exit_price,
-                    fallback_result_pct=self._result_pct(
-                        side,
-                        entry_price,
-                        exit_price,
-                    ),
+                    fallback_result_pct=self._result_pct(side, entry_price, exit_price),
                     reason="tp2_reached",
+                )
+                return
+
+            if tp2_partial:
+                # Хвост после TP2: ведём трейлом, дальше по лестнице не идём —
+                # её пороги построены вокруг «дошли до TP2 или откатились», а мы
+                # уже ЗА TP2.
+                await self._manage_tp2_trail(
+                    db, signal, side, price, tp2, entry_price, exit_policy,
                 )
                 return
 
@@ -809,6 +831,9 @@ class SignalLifecycleManager:
                 lifecycle=lifecycle,
                 symbol=signal.symbol,
                 market_type=self._market_type(signal),
+                position_notional_usdt=self._position_notional_usdt(
+                    db, signal, float(entry_price)
+                ),
                 signal_age_sec=self._signal_age_sec(lifecycle),
             )
 
@@ -826,6 +851,183 @@ class SignalLifecycleManager:
                 )
                 return
 
+
+    # ── этап TP2: фиксация доли + трейл хвоста ──────────────────────────────
+    # (#progressive-tp2-2026-09-03) Раньше достижение TP2 закрывало позицию
+    # целиком по цене ровно tp2. Теперь TP2 — этап: фиксируем долю остатка и
+    # ведём хвост трейлом, чей пол не опускается ниже TP2 минус буфер.
+
+    def _tp2_trail_buffer_pct(self, tp1: float, tp2: float, entry_price: float) -> float:
+        """Ширина трейла хвоста в процентах цены.
+
+        Масштаб берём из отрезка TP1→TP2 САМОГО сигнала: уровни TP посчитаны
+        динамически (r_mult из ADX/ATR/KAMA), значит длина отрезка и есть
+        волатильность инструмента в цене. Доступна без сетевых вызовов и
+        одинаково во всех режимах — в отличие от ATR, который в сопровождении
+        добывает только трендовый _tz_context.
+        """
+        floor_pct = float(getattr(settings, "TP2_TRAIL_MIN_BUFFER_PCT", 0.20))
+        try:
+            leg_pct = abs(float(tp2) - float(tp1)) / float(entry_price) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            return floor_pct
+        if leg_pct <= 0:
+            return floor_pct
+        share = float(getattr(settings, "TP2_TRAIL_LEG_SHARE", 0.5))
+        return max(floor_pct, leg_pct * share)
+
+    def _ratchet_tp2_stop(self, signal: Signal, side: str, peak_price: float, buffer_pct: float) -> bool:
+        """Подтягивает стоп за пиком. Только В СТОРОНУ ПРИБЫЛИ — храповик.
+
+        Пик не может быть ниже TP2 (этап начинается по факту его достижения),
+        поэтому отдельного «пола TP2» не нужно: он получается сам.
+        """
+        try:
+            peak = float(peak_price)
+            current = float(signal.stop_price)
+        except (TypeError, ValueError):
+            return False
+
+        if peak <= 0:
+            return False
+
+        if str(side).lower() == "long":
+            candidate = round(peak * (1 - float(buffer_pct) / 100.0), 8)
+            if candidate > current:
+                signal.stop_price = candidate
+                return True
+            return False
+
+        candidate = round(peak * (1 + float(buffer_pct) / 100.0), 8)
+        if candidate < current:
+            signal.stop_price = candidate
+            return True
+        return False
+
+    async def _start_tp2_trail(
+        self, db, signal: Signal, side: str, tp2: float, entry_price: float,
+    ) -> bool:
+        """Фиксирует долю остатка на TP2 и переводит хвост в трейл.
+
+        Возвращает False, если этап не состоялся (флаг выключен или позиция
+        слишком мелкая для частичного закрытия) — вызывающий тогда закрывает
+        сделку целиком, как раньше. Молчаливой потери прибыли тут быть не может.
+        """
+        if not bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True)):
+            return False
+
+        exit_price = self._tp_exit_price(tp2)
+        share = float(getattr(settings, "TP2_PARTIAL_CLOSE_SHARE", 0.5))
+
+        try:
+            partial = await ExecutionEngine(db, exchange=signal.exchange).partial_close_paper_position(
+                signal=signal,
+                exit_price=exit_price,
+                share=share,
+                reason="tp2_partial",
+            )
+        except Exception as exc:  # noqa: BLE001 — фиксация не должна ронять ведение
+            partial = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+        if not partial or partial.get("status") != "partial_closed":
+            return False
+
+        tp1 = self._safe_float((signal.tp_json or {}).get("tp1"), 0.0)
+        buffer_pct = self._tp2_trail_buffer_pct(tp1, tp2, entry_price)
+
+        plan = dict(signal.plan_json or {})
+        plan["tp2_partial"] = {
+            "closed_qty": partial.get("closed_qty"),
+            "remaining_qty": partial.get("remaining_qty"),
+            "exit_price": float(exit_price),
+            "net_pnl": partial.get("net_pnl"),
+            "total_cost": partial.get("total_cost"),
+            # Пик хвоста стартует ровно с TP2: всё, что выше, — заработок этапа.
+            "peak_price": float(exit_price),
+            "buffer_pct": round(buffer_pct, 6),
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        signal.plan_json = plan
+        flag_modified(signal, "plan_json")
+
+        self._ratchet_tp2_stop(signal, side, float(exit_price), buffer_pct)
+
+        self.decisions.record(
+            db,
+            symbol=signal.symbol,
+            status=signal.status,
+            decision=DECISION_TP2_REACHED,
+            action=signal.side,
+            payload={
+                "signal_id": signal.id,
+                "symbol": signal.symbol,
+                "side": signal.side,
+                "tp2": float(tp2),
+                "stage": "tp2_partial_trail_armed",
+                "tp2_partial": plan["tp2_partial"],
+                "trail_stop": float(signal.stop_price),
+            },
+        )
+
+        await self.router.publish_signal_update(
+            symbol=signal.symbol,
+            text_status=f"🎯 TP2 достигнут | Signal #{signal.id}",
+            extra=(
+                f"Зафиксировано {partial.get('closed_qty')} @ {exit_price} "
+                f"(net {partial.get('net_pnl')} USDT). Остаток "
+                f"{partial.get('remaining_qty')} ведём трейлом, стоп подтянут на "
+                f"{round(float(signal.stop_price), 6)}."
+            ),
+            grade=signal.grade,
+        )
+
+        return True
+
+    async def _manage_tp2_trail(
+        self, db, signal: Signal, side: str, price: float,
+        tp2: float, entry_price: float, exit_policy,
+    ) -> None:
+        """Ведение хвоста после TP2: храповик стопа + выход по затуханию."""
+        plan = dict(signal.plan_json or {})
+        tp2_partial = dict(plan.get("tp2_partial") or {})
+
+        buffer_pct = self._safe_float(
+            tp2_partial.get("buffer_pct"),
+            float(getattr(settings, "TP2_TRAIL_MIN_BUFFER_PCT", 0.20)),
+        )
+        peak = self._safe_float(tp2_partial.get("peak_price"), float(tp2))
+
+        new_peak = max(peak, float(price)) if side == "long" else min(peak, float(price))
+
+        if new_peak != peak:
+            tp2_partial["peak_price"] = round(float(new_peak), 8)
+            plan["tp2_partial"] = tp2_partial
+            signal.plan_json = plan
+            flag_modified(signal, "plan_json")
+
+        self._ratchet_tp2_stop(signal, side, new_peak, buffer_pct)
+
+        decision = exit_policy.after_tp2_decision(
+            side=side,
+            entry_price=entry_price,
+            current_price=price,
+            tp2_price=tp2,
+            peak_price=new_peak,
+            symbol=signal.symbol,
+            market_type=self._market_type(signal),
+        )
+
+        if decision.exit:
+            await self._close_signal(
+                db,
+                signal,
+                exit_price=decision.exit_price,
+                fallback_result_pct=self._result_pct(side, entry_price, decision.exit_price),
+                reason=decision.reason,
+            )
+            return
+
+        db.flush()
 
     def _safe_float(self, value, default=None):
         try:
