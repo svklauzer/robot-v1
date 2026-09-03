@@ -689,6 +689,16 @@ class GridEngine:
                 "regime_now": cyc.get("regime_now"),
                 "flip_streak": cyc.get("flip_streak", 0),
                 "frozen": bool(cyc.get("frozen")),
+                # (#ui-audit-2026-09-03) Без этих трёх полей UI не мог назвать
+                # ПРИЧИНУ заморозки и объяснял её единственным известным ему
+                # механизмом — боковиком. Механизма два, и они противоположны:
+                # GRID_FREEZE_ON_NEUTRAL (боковик) и GRID_FREEZE_ON_BREAKOUT
+                # (пробой, dist_atr >= GRID_BREAKOUT_ATR_DIST). Первый по
+                # умолчанию ВЫКЛЮЧЕН, значит фактически всякая заморозка сейчас
+                # приходит от второго — а страница писала ровно обратное.
+                "vol_regime": cyc.get("vol_regime"),
+                "dist_atr": cyc.get("dist_atr"),
+                "range_streak": cyc.get("range_streak", 0),
                 "flip_cooldown": bool(cyc.get("flip_cooldown")),
                 "fills_paused": cyc.get("fills_paused"),
                 "adapted_at": cyc.get("adapted_at"),

@@ -361,6 +361,12 @@ function SignalCard({
         <InfoBox title="RR TP2" value={fmt(s.net_rr_tp2 ?? plan.net_rr_tp2, 4)} />
       </div>
 
+      {/* (#ui-audit-2026-09-03) Диагностика решения. Всё это лежало в plan_json
+          и не выводилось — а именно эти три величины сейчас определяют судьбу
+          входа: tz_shadow стал ENFORCE-условием (adx_rising), r_mult показывает
+          задуманную цель до обрезки, missed_profit — сколько оставили на столе. */}
+      <TradeDiagnostics plan={plan} />
+
       <div className="mt-3 rounded-xl border border-emerald-950 bg-black/30 p-3">
         <div className="mb-2 flex items-center justify-between text-xs">
           <span className="font-semibold text-emerald-300">Trade Plan</span>
@@ -624,6 +630,82 @@ function MlBadge({ ml }: { ml?: any }) {
     >
       ML {score.toFixed(2)}
     </span>
+  );
+}
+
+function TradeDiagnostics({ plan }: { plan: any }) {
+  const tz = plan?.tz_shadow;
+  const dyn = plan?.tp2_dynamic || plan?.setup_quality?.tp2_dynamic;
+  const life = plan?.lifecycle;
+  const reach = plan?.tp_reach;
+
+  const hasTz = tz && tz.evaluated;
+  const missed = life?.missed_profit_pct;
+
+  if (!hasTz && !dyn && missed == null && !reach) return null;
+
+  return (
+    <div className="mt-3 rounded-xl border border-emerald-950 bg-black/30 p-3 text-xs">
+      <div className="mb-2 font-semibold text-emerald-300">Диагностика решения</div>
+
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        {hasTz && (
+          <div>
+            <span className="text-emerald-100/50">Условия ТЗ: </span>
+            {tz.would_pass ? (
+              <span className="text-emerald-300">все пройдены</span>
+            ) : (
+              <span className="text-yellow-300">
+                не пройдено {(tz.failed || []).length}
+              </span>
+            )}
+            {!tz.would_pass && (tz.failed || []).length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(tz.failed as string[]).map((f) => (
+                  <span
+                    key={f}
+                    className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      f.startsWith("adx_not_rising")
+                        ? "bg-red-900/70 text-red-200"
+                        : "bg-emerald-950 text-emerald-100/70"
+                    }`}
+                    title={f.startsWith("adx_not_rising") ? "условие ENFORCE — блокирует вход" : "наблюдение"}
+                  >
+                    {f}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {dyn && (
+          <div>
+            <span className="text-emerald-100/50">TP2 множитель: </span>
+            <span className="text-emerald-200">{fmt(dyn.r_mult, 2)}R</span>
+            <span className="text-emerald-100/40"> (база {fmt(dyn.base_r_mult, 1)})</span>
+          </div>
+        )}
+
+        {reach && (
+          <div>
+            <span className="text-emerald-100/50">Достижимость TP2: </span>
+            <span className={reach.allowed ? "text-emerald-300" : "text-yellow-300"}>
+              {fmt((reach.tp2_hit_rate ?? 0) * 100, 1)}% / нужно {fmt((reach.required_hit_rate ?? 0) * 100, 1)}%
+            </span>
+          </div>
+        )}
+
+        {missed != null && (
+          <div>
+            <span className="text-emerald-100/50">Оставлено на столе: </span>
+            <span className={Number(missed) > 0.5 ? "text-yellow-300" : "text-emerald-100/70"}>
+              {fmt(missed, 2)}%
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

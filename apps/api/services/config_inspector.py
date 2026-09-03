@@ -46,11 +46,19 @@ def is_sensitive(name: str) -> bool:
 _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Тренд / KAMA (ТЗ)", ("TZ_", "KAMA_", "TREND_")),
     ("Движки входа", ("ENABLE_", "RANGE_", "SCALP_", "CRT_", "REVERSAL_")),
-    ("Выходы", ("EXIT_", "BREAKEVEN_", "MFE_", "TP1_", "TP2_", "TP_", "PROTECTIVE_", "FAILED_SETUP_")),
+    # (#ui-audit-2026-09-03) POST_TP1_ добавлен явно: защита прибыли между TP1 и
+    # TP2 — это ВЫХОД, а по префиксу "POST_" она уезжала в «Прочее», где
+    # торговый порог выглядит как случайная инфраструктурная переменная.
+    ("Выходы", ("EXIT_", "BREAKEVEN_", "MFE_", "TP1_", "TP2_", "TP_", "POST_TP1_",
+                "PROTECTIVE_", "FAILED_SETUP_")),
     ("Риск и сайзинг", ("RISK_", "MAX_POSITION", "MAX_USED", "SIZING_", "DYNAMIC_MARGIN", "LEVERAGE", "MAX_LEVERAGE")),
-    ("Анти-дрейн и гейты", ("ANTI_DRAIN", "PROD_GATE", "SYMBOL_PERF", "REENTRY_", "POST_LOSS", "CORR_CLUSTER")),
+    # ANTI_CHOP_ — гейт входа, а не «прочее»: он решает, брать ли сделку вообще.
+    ("Анти-дрейн и гейты", ("ANTI_DRAIN", "ANTI_CHOP_", "HTF_ALIGN", "RANGE_POS_",
+                            "PROD_GATE", "SYMBOL_PERF", "REENTRY_", "POST_LOSS", "CORR_CLUSTER")),
     ("Стакан / ликвидность", ("OB_", "ORDERBOOK", "LIQUIDITY", "DEPTH_", "SLIPPAGE")),
-    ("Комиссии и маршрут", ("SPOT_", "FUTURES_", "EXECUTION_", "MARKET_", "HTX_", "KRAKEN_")),
+    # OKX_ и ACTIVE_EXCHANGE — там же, где HTX_: это маршрут исполнения.
+    ("Комиссии и маршрут", ("SPOT_", "FUTURES_", "EXECUTION_", "MARKET_", "HTX_",
+                            "OKX_", "ACTIVE_EXCHANGE", "KRAKEN_")),
     ("Арбитраж", ("FUNDING_ARB", "CROSS_FARB", "FUNDING_", "ARB_")),
     ("Grid", ("GRID_",)),
     ("ML", ("ML_",)),
@@ -99,7 +107,14 @@ _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
 _PINNED_PREFIXES: tuple[str, ...] = (
     "TZ_", "KAMA_", "TREND_",          # трендовый контур: активно калибруется
     "PROD_GATE_",                       # гейты входа в деньги
-    "TP_", "TP1_", "TP2_",              # цели и гейт достижимости TP
+    "TP_", "TP1_", "TP2_", "POST_TP1_", # цели, гейт достижимости, защита после TP1
+    # (#ui-audit-2026-09-03) Гейты, решающие БРАТЬ ЛИ СДЕЛКУ. Без них страница
+    # советовала вычистить из блупринта ANTI_CHOP_MIN_EMA_FAN_ATR (порог, вокруг
+    # которого шла вся работа 03.09) и ACTIVE_EXCHANGE — переключатель биржи,
+    # на которой торгуем. Совет «удалить, поведение не изменится» верен ровно до
+    # первого изменения дефолта в коде, после чего прод молча уезжает.
+    "ANTI_CHOP_", "HTF_ALIGN", "RANGE_POS_",
+    "ACTIVE_EXCHANGE", "OKX_",          # маршрут исполнения: какая биржа и чем
     "VALIDATION_",                      # пороги вердикта готовности к live
     "BREAKEVEN_", "MFE_", "PROTECTIVE_",  # защита прибыли на выходе
     "CORR_CLUSTER", "SYMBOL_PERF_", "REENTRY_", "POST_LOSS", "ANTI_DRAIN",

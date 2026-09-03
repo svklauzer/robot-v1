@@ -71,6 +71,51 @@ def test_new_exit_and_guard_codes_are_labelled_in_intelligence_feed():
         assert f"{code}:" in src, f"decisionLabel не знает код {code}"
 
 
+def _intelligence_labels() -> set[str]:
+    return _frontend_labels("app/intelligence/page.tsx", "const map: Record<string, string>")
+
+
+def test_every_setup_comment_code_has_a_ui_label():
+    """(#ui-audit-2026-09-03) Реальное сравнение множеств вместо трёх кодов.
+
+    Прежний тест проверял три захардкоженных имени и пропустил 22 кода, каждый
+    из которых встречается в боевых выгрузках. Ошибка тихая: страница не падает,
+    владелец видит `range_pos_long_too_high(0.86>0.60)` вместо смысла.
+
+    Источник истины — `comment = "..."` из market_intelligence: именно эти
+    строки уезжают в `decision` события и рисуются в ленте.
+    """
+    src = _read(API / "services/market_intelligence.py")
+    codes = set(re.findall(r'comment = f?"([a-z0-9_]+)', src))
+    assert codes, "не нашёл ни одного comment-кода — тест устарел вместе с кодом"
+
+    missing = sorted(codes - _intelligence_labels())
+    assert not missing, (
+        "решение сетапа без ярлыка в ленте — владелец увидит машинный код: "
+        f"{missing}"
+    )
+
+
+def test_decision_label_strips_the_inline_detail():
+    """Коды несут деталь прямо в строке: `anti_chop_no_trend(fan_atr=-0.61<0.80)`,
+    `range_pos_long_too_high(0.86>0.60)`, `depth_spread_too_wide:0.122>0.12`.
+
+    Поиск точным совпадением такие коды не находил НИКОГДА — включая depth_*,
+    у которых ярлыки заведены с комментарием «могут иметь :значение». Ярлык
+    существовал, совпадение не наступало. Без нормализации любой новый ярлык
+    для такого кода снова окажется мёртвым.
+    """
+    src = _read(WEB / "app/intelligence/page.tsx")
+
+    assert "function normalizeDecision" in src, "нормализация кода пропала"
+    assert "map[base]" in src, "decisionLabel снова ищет только точное совпадение"
+    # Цвет бейджа тоже обязан считаться по базовому коду, иначе блокирующее
+    # решение красится нейтральным по умолчанию.
+    assert "normalizeDecision(rawDecision).base" in src, (
+        "DecisionBadge снова сравнивает сырую строку — цвет будет неверным"
+    )
+
+
 def test_backend_exposes_honest_pnl_fields_the_ui_reads():
     """UI показывает честный PnL и счётчик фантомов — поля обязаны существовать.
 
