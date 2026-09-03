@@ -201,7 +201,63 @@ class MarketIntelligenceEngine:
         if timeframe == "base":
             return contexts
 
-        return default        
+        return default
+
+    def _young_trend_override(self, anchor_ctx, action: str) -> tuple[bool, str]:
+        """Молодой тренд, который веер EMA ещё не успел показать.
+
+        (#anti-chop-young-trend-2026-09-03) Возвращает (пропустить, пояснение).
+        Пояснение возвращается ВСЕГДА — в разборе решений нужно видеть, ПОЧЕМУ
+        альтернативный путь не сработал, иначе гейт снова превращается в
+        «просто не пустил», без разбираемой причины.
+
+        Три условия, все обязательны, и все — с якорного ТФ веера:
+          * ADX выше минимума     — движение вообще есть;
+          * ADX РАСТЁТ            — оно набирает силу, а не гаснет (иссякший
+                                    тренд с ADX 30 по дороге вниз выглядит как
+                                    ADX 30 по дороге вверх — без производной
+                                    их не различить);
+          * DI разведены по стороне сделки — направление подтверждено.
+
+        В чопе не выполняется ни одно: ADX низкий, плоский, DI перепутаны.
+        """
+        if not bool(getattr(settings, "ANTI_CHOP_YOUNG_TREND_ENABLED", True)):
+            return False, ""
+
+        adx = self._ctx_value(anchor_ctx, "adx14")
+        adx_prev = self._ctx_value(anchor_ctx, "adx14_prev")
+        plus_di = self._ctx_value(anchor_ctx, "plus_di")
+        minus_di = self._ctx_value(anchor_ctx, "minus_di")
+
+        try:
+            adx = float(adx)
+            adx_prev = float(adx_prev)
+            plus_di = float(plus_di)
+            minus_di = float(minus_di)
+        except (TypeError, ValueError):
+            # Нет приборов — прежнее поведение (решает только веер). Отсутствие
+            # данных не имеет права выглядеть как подтверждённый тренд.
+            return False, "young_trend_no_data"
+
+        adx_min = float(getattr(settings, "ANTI_CHOP_YOUNG_ADX_MIN", 20.0))
+        rise_min = float(getattr(settings, "ANTI_CHOP_YOUNG_ADX_RISE_MIN", 0.5))
+        di_min = float(getattr(settings, "ANTI_CHOP_YOUNG_DI_SPREAD_MIN", 15.0))
+
+        di_spread = (plus_di - minus_di) if action == "long" else (minus_di - plus_di)
+        adx_rise = adx - adx_prev
+
+        failed = []
+        if adx < adx_min:
+            failed.append(f"adx={adx:.1f}<{adx_min:.0f}")
+        if adx_rise < rise_min:
+            failed.append(f"adx_not_rising={adx_prev:.1f}->{adx:.1f}")
+        if di_spread < di_min:
+            failed.append(f"di_spread={di_spread:.1f}<{di_min:.0f}")
+
+        if failed:
+            return False, "young_trend_failed:" + ",".join(failed)
+
+        return True, f"adx={adx:.1f}(+{adx_rise:.1f}),di_spread={di_spread:.1f}"
 
     def __init__(self):
         self.market = MarketDataService()
@@ -2091,8 +2147,23 @@ class MarketIntelligenceEngine:
                 _fan_atr = _spread / _atr
                 _min_fan = float(getattr(settings, "ANTI_CHOP_MIN_EMA_FAN_ATR", 0.5))
                 if _fan_atr < _min_fan:
-                    decision = "wait"
-                    comment = f"anti_chop_no_trend(fan_atr={_fan_atr:.2f}<{_min_fan:.2f})"
+                    # (#anti-chop-young-trend-2026-09-03) Веер EMA20↔EMA200
+                    # лагает на развороте: EMA200 держит закончившийся рынок, и
+                    # весь первый отрезок нового хода вход закрыт. Второй путь —
+                    # молодой, но ЯВНО усиливающийся тренд по приборам якорного
+                    # ТФ. Подробности и замер — в core/config.py.
+                    _young_ok, _young_note = self._young_trend_override(_anchor, action)
+                    if _young_ok:
+                        comment = (
+                            f"anti_chop_young_trend_pass(fan_atr={_fan_atr:.2f}"
+                            f"<{_min_fan:.2f} {_young_note})"
+                        )
+                    else:
+                        decision = "wait"
+                        comment = (
+                            f"anti_chop_no_trend(fan_atr={_fan_atr:.2f}<{_min_fan:.2f}"
+                            f"{'; ' + _young_note if _young_note else ''})"
+                        )
 
         # Выравнивание со старшим ТФ: не лонгуем при 4h вниз, не шортим при 4h
         # вверх. Reversal — мимо. Реальный тренд согласован с 4h и проходит.

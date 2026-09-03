@@ -156,6 +156,15 @@ def snapshot(
             "tz_mode": str(_g("TZ_MODE", "shadow")).lower(),
             "tz_enforce_conditions": str(_g("TZ_ENFORCE_CONDITIONS", "")),
             "tz_enforce_min_sample": int(_g("TZ_ENFORCE_MIN_SAMPLE", 0)),
+            # (#anti-chop-young-trend-2026-09-03) Альтернативный путь anti-chop
+            # меняет ВЫБОРКУ входов (пускает молодой тренд с узким веером EMA) —
+            # значит это ось конфига, а не наблюдение, и обязана попасть в
+            # отпечаток: иначе сделки до и после включения смешаются в одной
+            # статистике незаметно, как это уже было с tz_mode.
+            "anti_chop_young_trend_enabled": bool(_g("ANTI_CHOP_YOUNG_TREND_ENABLED", False)),
+            "anti_chop_young_adx_min": float(_g("ANTI_CHOP_YOUNG_ADX_MIN", 0)),
+            "anti_chop_young_adx_rise_min": float(_g("ANTI_CHOP_YOUNG_ADX_RISE_MIN", 0)),
+            "anti_chop_young_di_spread_min": float(_g("ANTI_CHOP_YOUNG_DI_SPREAD_MIN", 0)),
             # (#tp-reachability-2026-08-03) Порог достижимости цели — тоже ось,
             # меняющая выборку.
             "tp_reach_mode": str(_g("TP_REACH_MODE", "shadow")).lower(),

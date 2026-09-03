@@ -136,7 +136,10 @@ def test_every_condition_has_a_family():
     что не даст добавить новое условие и забыть про таблицу.
     """
     known = set(tz.CONDITION_FAMILY.values())
-    assert known == {"kama", "adx", "di", "stoch", "obv"}
+    # (#tz-enforce-adx-rising-2026-09-03) adx_rising отделён от adx: абсолютный
+    # порог TZ_ADX_MIN не откалиброван и остаётся в тени, а производная
+    # («ADX растёт») порога не требует и включается отдельно.
+    assert known == {"kama", "adx", "adx_rising", "di", "stoch", "obv"}
     for code, family in tz.CONDITION_FAMILY.items():
         assert tz._family(code) == family, code
         assert tz._family(f"{code}:12.3") == family, code
