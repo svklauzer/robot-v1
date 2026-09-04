@@ -219,3 +219,20 @@ def test_grade_badge_does_not_paint_a_verdict():
                        if c in source]
     assert verdict_colours == [], f"грейд снова покрашен как вердикт: {verdict_colours}"
     assert "title=" in source, "измерение обязано быть в подсказке, а не только в коде"
+
+
+def test_confidence_legs_written_to_the_plan_are_read_by_the_ui():
+    """(#confidence-ratchet-2026-09-04) Разложение уверенности на ноги имеет
+    смысл только если владелец его видит: «обе ноги высоки» и «ноги спорят,
+    взяли большую» давали одно и то же итоговое число, и именно вторая группа
+    наполняла ведро A. Поле в plan_json без места на карточке — телеметрия,
+    которую никто не откроет.
+    """
+    from services.confidence_scale import calibrate
+
+    written = set(calibrate(45.0, 76.0, "approve").as_dict())
+    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+
+    for field in ("effective", "base", "setup_leg", "leg_gap"):
+        assert field in written, f"{field} перестало писаться в план"
+        assert f"conf.{field}" in page, f"{field} пишется в план, но не показано"

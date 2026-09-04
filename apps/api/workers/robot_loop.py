@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from core.config import settings
 
+from services.confidence_scale import confidence_calibration
 from services.market_data import MarketDataService
 from services.news_filter import NewsFilter
 from services.strategy_engine import StrategyEngine
@@ -1323,6 +1324,12 @@ class RobotLoop:
                     # одна сумма, отличить «оценка плоха целиком» от «в ней один
                     # перевёрнутый компонент» было нечем.
                     "setup_quality": getattr(result, "setup_quality", None),
+                    # (#confidence-ratchet-2026-09-04) Ноги уверенности по
+                    # отдельности. В журнал шло только итоговое число, поэтому
+                    # нельзя было отличить «обе ноги согласны и высоки» от
+                    # «расходятся, и храповик взял большую» — а это ровно та
+                    # разница, из-за которой ведро A наполнялось.
+                    "confidence": confidence_calibration(result).as_dict(),
                     "trend_trigger": _trigger.as_dict(),
                     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
                     # OBV. Режим задаётся TZ_MODE; при enforce блокируют только
@@ -1696,24 +1703,14 @@ class RobotLoop:
 
         Этапы калибровки:
         1. Base = confidence_hint из MarketIntelligenceEngine
-        2. Setup quality adjustment (setup_score / approve / wait)
+        2. Setup quality adjustment — см. services/confidence_scale.calibrate.
+           Формула жила здесь в третьей копии и расходилась со сканом: тут не
+           было ветки approve≥62 и множитель был 0.90 против 0.92. Владелец
+           смотрел на скан, робот торговал по другому числу.
         3. MLScorer v2 adjustment — выравнивает через multi-factor features
         """
 
-        base = float(result.confidence_hint or 0)
-
-        setup_quality = result.setup_quality if isinstance(result.setup_quality, dict) else {}
-        setup_score = float(setup_quality.get("final_score") or 0)
-        setup_decision = str(setup_quality.get("decision") or result.setup_decision or "")
-
-        if setup_decision == "approve" and setup_score >= 70:
-            calibrated = max(base, setup_score * 0.90)
-            calibrated = round(min(calibrated, 88.0), 2)
-        elif setup_decision == "wait" and setup_score >= 55:
-            calibrated = max(base, setup_score * 0.75)
-            calibrated = round(min(calibrated, 72.0), 2)
-        else:
-            calibrated = round(base, 2)
+        calibrated = confidence_calibration(result).effective
 
         # ── MLScorer v2 secondary calibration ────────────────────────────────
         # Extract features from the primary signal timeframe (15m preferred, else 5m).

@@ -639,11 +639,12 @@ function TradeDiagnostics({ plan }: { plan: any }) {
   const dyn = plan?.tp2_dynamic || plan?.setup_quality?.tp2_dynamic;
   const life = plan?.lifecycle;
   const reach = plan?.tp_reach;
+  const conf = plan?.confidence;
 
   const hasTz = tz && tz.evaluated;
   const missed = life?.missed_profit_pct;
 
-  if (!hasTz && !dyn && missed == null && !reach) return null;
+  if (!hasTz && !dyn && missed == null && !reach && !conf) return null;
 
   return (
     <div className="mt-3 rounded-xl border border-emerald-950 bg-black/30 p-3 text-xs">
@@ -675,6 +676,34 @@ function TradeDiagnostics({ plan }: { plan: any }) {
                     {f}
                   </span>
                 ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* (#confidence-ratchet-2026-09-04) Уверенность — не одно число, а две
+            ноги: оценка рынка и чек-лист сетапа. Пока в карточке стояло только
+            итоговое значение, «обе ноги согласны и высоки» выглядело так же,
+            как «ноги спорят, взяли большую» — а это и наполняло ведро A. */}
+        {conf && (
+          <div>
+            <span className="text-emerald-100/50">Уверенность: </span>
+            <span className="text-emerald-200">{fmt(conf.effective, 1)}</span>
+            {conf.setup_leg != null ? (
+              <div
+                className="mt-1 text-[11px] text-emerald-100/60"
+                title="Итог — среднее двух ног. Раньше бралась большая, поэтому расхождение поднимало уверенность вместо того, чтобы её снижать."
+              >
+                рынок {fmt(conf.base, 1)} · чек-лист {fmt(conf.setup_leg, 1)}
+                {conf.leg_gap != null && (
+                  <span className={Math.abs(conf.leg_gap) >= 15 ? "text-yellow-300" : ""}>
+                    {" "}· расхождение {fmt(conf.leg_gap, 1)}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-emerald-100/40" title="Чек-лист не дотянул до порога ветки — уверенность равна оценке рынка.">
+                только оценка рынка
               </div>
             )}
           </div>

@@ -84,3 +84,105 @@ def _num(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 50.0
+
+
+# ── Калибровка по качеству сетапа ───────────────────────────────────────────
+# (#confidence-ratchet-2026-09-04) Было: max(base, setup_score × K). Операция,
+# которая умеет только ПОВЫШАТЬ. Два измерения одного и того же расходятся —
+# берём большее; сетап, где рынок говорит 45, а чек-лист 76, получал 70 и грейд
+# A. Расхождение обязано понижать уверенность, а не повышать её.
+#
+# Этим же объясняется странность в замере: гейт для A строже (setup 65 против
+# 58, confidence 62 против 60), а ведро A БОЛЬШЕ — 53 сделки против 44. Строгий
+# фильтр не может пропускать больше мягкого. Заталкивал наверх храповик.
+#
+# Стало: среднее двух ног. Сильный чек-лист по-прежнему поднимает слабую базу —
+# ради этого механизм и вводился, — но слабый чек-лист теперь и опускает
+# сильную базу, чего он не мог вовсе. Свободных параметров не добавилось.
+#
+# Копий было ТРИ, и они расходились: боевой путь (robot_loop) не имел ветки
+# approve≥62 и умножал на 0.90, скан (main) имел и умножал на 0.92 с потолком
+# 80. То есть скан показывал владельцу не то число, по которому робот торгует.
+# Сведено к боевой форме: показания обязаны совпадать с решением.
+from dataclasses import dataclass
+
+from core.config import settings
+
+
+@dataclass(frozen=True)
+class Calibration:
+    base: float
+    setup_score: float
+    setup_decision: str
+    branch: str
+    setup_leg: float | None      # нога чек-листа после множителя
+    cap: float | None
+    effective: float
+
+    def as_dict(self) -> dict:
+        return {
+            "base": self.base,
+            "setup_score": self.setup_score,
+            "setup_decision": self.setup_decision,
+            "branch": self.branch,
+            "setup_leg": self.setup_leg,
+            "cap": self.cap,
+            "effective": self.effective,
+            # Расхождение ног. Пишется отдельно, потому что это и есть величина,
+            # которую храповик игнорировал: следующий разбор стопов проверит,
+            # предсказывает ли САМО расхождение исход.
+            "leg_gap": (round(self.setup_leg - self.base, 2)
+                        if self.setup_leg is not None else None),
+        }
+
+
+_BRANCHES: tuple[tuple[str, str, float, float, float], ...] = (
+    # (имя, требуемое решение, минимальный setup_score, множитель, потолок)
+    ("approve_strong", "approve", 70.0, 0.90, 88.0),
+    ("wait_moderate",  "wait",    55.0, 0.75, 72.0),
+)
+
+
+def calibrate(base: float, setup_score, setup_decision: str) -> Calibration:
+    base = _num(base) if base is not None else 0.0
+    score = float(setup_score or 0.0)
+    decision = str(setup_decision or "")
+
+    for name, need_decision, min_score, mult, cap in _BRANCHES:
+        if decision == need_decision and score >= min_score:
+            leg = round(score * mult, 2)
+            blended = (base + leg) / 2.0 if _symmetric() else max(base, leg)
+            return Calibration(
+                base=round(base, 2), setup_score=round(score, 2),
+                setup_decision=decision, branch=name, setup_leg=leg, cap=cap,
+                effective=round(min(blended, cap), 2),
+            )
+
+    return Calibration(
+        base=round(base, 2), setup_score=round(score, 2), setup_decision=decision,
+        branch="base_only", setup_leg=None, cap=None, effective=round(base, 2),
+    )
+
+
+def _symmetric() -> bool:
+    """Аварийный откат к односторонней форме.
+
+    Правка меняет ВЫБОРКУ входов, а не их обработку: уверенность в среднем
+    падает, значит часть сигналов перестанет проходить PROD_GATE. Проверить это
+    на старых данных нельзя — поэтому переключатель, который возвращает прежнее
+    поведение без деплоя, если поток входов схлопнется.
+    """
+    return bool(getattr(settings, "CONFIDENCE_SYMMETRIC_BLEND", True))
+
+
+def confidence_calibration(result) -> Calibration:
+    """Калибровка прямо по объекту скана — чтобы обе точки вызова доставали
+    ноги ОДИНАКОВО, а не каждая по-своему."""
+    setup_quality = getattr(result, "setup_quality", None)
+    if not isinstance(setup_quality, dict):
+        setup_quality = {}
+    return calibrate(
+        base=getattr(result, "confidence_hint", None) or 0.0,
+        setup_score=setup_quality.get("final_score"),
+        setup_decision=setup_quality.get("decision") or getattr(result, "setup_decision", "") or "",
+    )
