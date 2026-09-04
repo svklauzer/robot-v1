@@ -55,7 +55,6 @@ export default function AnalyticsPage() {
     loadAll();
   }, [mfeWindow]);
 
-  const blockers = readiness?.blockers || [];
 
   // (#ui-cleanup-2026-07-28) Валовый результат = net + издержки. Разделение
   // важнее любой из двух цифр по отдельности: оно отвечает, проблема в
@@ -79,8 +78,13 @@ export default function AnalyticsPage() {
               <BarChart3 />
               Profit & Readiness Analytics
             </h1>
+            {/* (#analytics-audit-2026-09-05) Подзаголовок обещал Telegram
+                delivery — панель, убранную отсюда 28.07 как дубль с /health.
+                Страница полтора месяца описывала себя разделом, которого в ней
+                нет. Описание, живущее отдельно от содержимого, устаревает молча. */}
             <p className="mt-2 text-emerald-100/60">
-              Контроль PnL, качества сигналов, Telegram delivery и go-live gates.
+              Деньги и качество сигналов: ожидание на сделку, куда уходит результат,
+              экономика оборота и гейты прибыльности.
             </p>
           </div>
 
@@ -126,8 +130,8 @@ export default function AnalyticsPage() {
                 : undefined
             }
           />
-          <StatCard title="Failed setup (посл. 200)" value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active !== false} good={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active === false} />
-          <StatCard title="Positive→Negative (посл. 200)" value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
+          <StatCard title={`Failed setup (посл. ${quality?.total_closed ?? "?"})`} value={quality?.by_reason?.failed_setup_exit ?? 0} danger={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active !== false} good={(quality?.by_reason?.failed_setup_exit ?? 0) > 0 && rootCause?.is_active === false} />
+          <StatCard title={`Positive→Negative (посл. ${quality?.total_closed ?? "?"})`} value={`${quality?.positive_then_negative_rate ?? 0}%`} warn={(quality?.positive_then_negative_rate ?? 0) > 25} />
           {/* (#analytics-capture-2026-07-27) Здесь стоял `mfe_capture_rate` из
               /signal-quality — это ДОЛЯ ЗАКРЫТИЙ по причине adaptive_mfe_capture,
               а не доля забранного пика. Оператор читал «мы забираем N% хода», а
@@ -148,20 +152,17 @@ export default function AnalyticsPage() {
           />
         </section>
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <Panel title="Production readiness" icon={<ShieldCheck size={18} />}>
-            <div className={readiness?.ready ? "text-emerald-300" : "text-red-300"}>
-              {readiness?.ready ? "READY" : "BLOCKED"}
-            </div>
-            <div className="mt-4 space-y-2">
-              {blockers.length === 0 && <p className="text-sm text-emerald-100/60">Блокеров нет.</p>}
-              {blockers.map((item: string, idx: number) => (
-                <div key={idx} className="rounded-xl border border-red-900/70 bg-red-950/30 p-3 text-sm text-red-100">
-                  {item}
-                </div>
-              ))}
-            </div>
-          </Panel>
+        {/* (#analytics-audit-2026-09-05) Панель Production readiness убрана:
+            она была второй копией одного и того же. `/health` показывает тот же
+            `/system/readiness` вместе с сетевой диагностикой, состоянием бирж и
+            полным списком блокеров — то есть с контекстом, без которого блокер
+            всё равно не разобрать. Здесь оставался огрызок: READY/BLOCKED и
+            голый перечень.
+
+            Тот же довод, по которому 28.07 отсюда убрали Telegram delivery:
+            техническое состояние живёт на /health, деньги — здесь. Одна
+            поверхность правды вместо двух, расходящихся молча. */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
 
           {/* (#ui-cleanup-2026-07-28) Здесь была панель Telegram delivery 24h:
               пять строк, из которых SLA держится на 100% всё время наблюдений.
@@ -228,7 +229,11 @@ export default function AnalyticsPage() {
             <Metric label="Failed setup" value={`${validationGates?.failed_setup_share_pct ?? 0}% / max ${validationGates?.failed_setup_max_pct ?? 35}%`} warn={!validationGates?.gates?.failed_setup_below_threshold} />
             <Metric label="Positive→Negative" value={`${validationGates?.positive_then_negative_rate_pct ?? 0}% / max ${validationGates?.positive_then_negative_max_pct ?? 25}%`} warn={!validationGates?.gates?.positive_then_negative_below_threshold} />
             <Metric label="MFE capture enabled" value={readiness?.required_gates?.adaptive_mfe_capture_enabled ? "yes" : "no"} />
-            <Metric label="Telegram SLA min" value={`${readiness?.required_gates?.telegram_delivery_sla_min_pct ?? 99}%`} />
+            {/* (#analytics-audit-2026-09-05) Строка «Telegram SLA min» убрана.
+                Она показывала ТРЕБОВАНИЕ (99%) и ни разу — фактическую доставку:
+                по ней нельзя было понять, пройден гейт или нет. Все остальные
+                строки этой панели устроены как «факт / порог», и одна, где факта
+                нет, читается как выполненная. Сама доставка живёт на /health. */}
           </Panel>
         </section>
 
@@ -267,7 +272,24 @@ export default function AnalyticsPage() {
               </p>
             </div>
 
-            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            {/* (#analytics-audit-2026-09-05) Выборка идёт ПЕРВОЙ. Эндпоинт
+                возвращает `sample`, а страница показывала payoff и winrate без
+                неё — ровно ту ловушку, о которой предупреждает примечание того
+                же ответа: 67% побед при payoff 0.11 это убыточная система.
+                Соседняя страница бэктеста ставит размер выборки первым
+                намеренно; здесь его не было вовсе. */}
+            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+              <MiniStat
+                label="Сделок в выборке"
+                value={expectancy.sample ?? "—"}
+                tone={
+                  (expectancy.sample ?? 0) >= 100
+                    ? "good"
+                    : (expectancy.sample ?? 0) >= 30
+                      ? "warn"
+                      : "bad"
+                }
+              />
               <MiniStat
                 label="Ожидание"
                 value={`${expectancy.overall?.expectancy_usdt ?? 0} USDT`}
@@ -298,6 +320,13 @@ export default function AnalyticsPage() {
                 keyName="entry_reason"
               />
             </div>
+
+            {/* Примечание приходит с бэкенда и живёт в одном месте: пересказ во
+                фронте — это вторая копия, расходящаяся молча (ровно так
+                разъехалась методика на странице бэктеста). */}
+            {expectancy.note && (
+              <p className="mt-4 text-xs text-violet-100/45">{expectancy.note}</p>
+            )}
           </section>
         )}
 
