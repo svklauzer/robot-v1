@@ -34,7 +34,7 @@ from models.payment import BillingPlan, Payment, PaymentEvent
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
 
 from workers.robot_loop import RobotLoop
-from services.confidence_scale import confidence_base
+from services.confidence_scale import calibrate, confidence_base
 from services.signal_broadcaster import SignalBroadcaster
 from services.signal_lifecycle import SignalLifecycleManager
 from services.signal_quality import SignalQualityService
@@ -2708,8 +2708,11 @@ def _intelligence_effective_confidence(result) -> float:
     Этапы:
     1. Base = direction-aware confidence_hint (trend/momentum/structure зеркалятся
        для шортов — см. services/confidence_scale)
-    2. Setup quality adjustment via setup_score
-    3. Cap at 88 для strong setups, 80 для moderate
+    2. Калибровка по качеству сетапа — services/confidence_scale.calibrate.
+       Здесь была ТРЕТЬЯ копия формулы, и она расходилась с боевой: ветка
+       approve≥62 с потолком 80 существовала только тут, множитель был 0.92
+       против 0.90. То есть скан показывал владельцу уверенность выше той, по
+       которой робот принимал решение.
 
     До v2 confidence_hint для SHORT сигналов был ~44% даже в медвежьем рынке,
     потому что _score_context использует long-biased шкалу (trend_up=75, trend_down=25).
@@ -2729,22 +2732,12 @@ def _intelligence_effective_confidence(result) -> float:
     base = confidence_base(scores, action) if (action in ("long", "short") and scores) else raw_base
 
     setup_quality = result.setup_quality if isinstance(result.setup_quality, dict) else {}
-    setup_score   = float(setup_quality.get("final_score") or 0)
-    setup_decision = str(setup_quality.get("decision") or result.setup_decision or "")
 
-    if setup_decision == "approve" and setup_score >= 70:
-        calibrated = max(base, setup_score * 0.92)
-        return round(min(calibrated, 88.0), 2)
-
-    if setup_decision == "approve" and setup_score >= 62:
-        calibrated = max(base, setup_score * 0.95)
-        return round(min(calibrated, 80.0), 2)
-
-    if setup_decision == "wait" and setup_score >= 55:
-        calibrated = max(base, setup_score * 0.75)
-        return round(min(calibrated, 72.0), 2)
-
-    return round(base, 2)
+    return calibrate(
+        base=base,
+        setup_score=setup_quality.get("final_score"),
+        setup_decision=setup_quality.get("decision") or result.setup_decision or "",
+    ).effective
 
 @app.get("/intelligence/scan", dependencies=[Depends(require_owner_action)])
 def intelligence_scan_readonly():

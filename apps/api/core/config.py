@@ -1388,6 +1388,17 @@ class Settings(BaseSettings):
     # (тот же порядок, что у UNIFIED_MARGIN_ACCOUNTING ниже).
     GRADE_AXIS_VALIDATED: bool = False
 
+    # (#confidence-ratchet-2026-09-04) true — уверенность = среднее двух ног
+    # (рынок и чек-лист сетапа). false — прежний храповик max(base, setup×K),
+    # умеющий только повышать: расхождение ног поднимало уверенность, и сетап с
+    # базой 45 при чек-листе 76 получал 70 и грейд A.
+    #
+    # Правка меняет ВЫБОРКУ входов, а не их обработку, — на старых данных не
+    # проверяется. Переключатель нужен, чтобы вернуть прежнее поведение без
+    # деплоя, если поток входов схлопнется: уверенность в среднем падает, и
+    # часть сигналов перестанет проходить PROD_GATE.
+    CONFIDENCE_SYMMETRIC_BLEND: bool = True
+
     LEVERAGE_GRADE_A_PLUS: float = 1.0
     LEVERAGE_GRADE_A: float = 0.7
     LEVERAGE_GRADE_B: float = 0.4
