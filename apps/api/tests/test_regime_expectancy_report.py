@@ -45,7 +45,8 @@ def db():
 
 def _closed(db, *, regime: str, net: float, risk: float, entry: float = 100.0,
             tp1: float = 101.0, tp2: float = 103.0, mfe: float = 0.0,
-            rr: float = 2.0, reason: str = "stop_loss"):
+            rr: float = 2.0, reason: str = "stop_loss",
+            required_margin: float = 200.0):
     signal = Signal(
         bot_id=db.bot_id, symbol="X/USDT", side="long", status="closed",
         entry_zone_json={"from": entry, "to": entry},
@@ -56,6 +57,9 @@ def _closed(db, *, regime: str, net: float, risk: float, entry: float = 100.0,
         closed_net_pnl=net,
         net_pnl_stop=-abs(risk),
         net_rr_tp2=rr,
+        # phantom_adjustment считает поправку от номинала — без него
+        # завышение не выражается в USDT и остаётся нулевым.
+        required_margin=required_margin,
         closed_reason=reason,
         plan_json={"regime": regime, "lifecycle": {"entry_price": entry, "mfe_pct": mfe}},
     )
@@ -184,3 +188,59 @@ def test_empty_history_does_not_explode(db):
     out = build(db)
     assert out["regimes"] == []
     assert out["closed_signals"] == 0
+
+
+# ── честный PnL: фантомные филлы (#regime-expectancy-honest-2026-09-04) ─────
+#
+# Ветка `tp2_reached` закрывает на 92% пути до цели (exit_policy) и книжит
+# ПОЛНУЮ цену TP2. Отсюда расхождение в боевых данных, которое иначе выглядит
+# необъяснимым: 11 сделок закрыты как tp2_reached, а MFE дотянулся до цели у
+# одной. Записанный результат выше, чем сделка вообще ходила, — это исполнение
+# лучше рынка, и детектор phantom_fill его ловит.
+#
+# Первая версия отчёта считала матожидание по сырому closed_net_pnl, то есть
+# мерила край по прибыли, которой не было. Дашборд эту поправку применяет с
+# июля (total_net_pnl_honest_usdt), отчёт её потерял.
+
+def test_expectancy_uses_honest_pnl_not_the_booked_one(db):
+    """result_pct выше MFE — филл лучше рынка. Такой исход обязан входить в
+    матожидание по честной цене, иначе гейт судят по несуществующему краю."""
+    s = _closed(db, regime="r", net=10.0, risk=1.0, entry=100.0,
+                tp1=101.0, tp2=103.0, mfe=1.0, reason="tp2_reached")
+    # Книжим 3% при максимуме хода 1% и последней ценой траектории 0.9%.
+    s.result_pct = 3.0
+    s.plan_json = {**s.plan_json, "lifecycle": {
+        **s.plan_json["lifecycle"], "traj": [[0, 0.0], [10, 0.9]],
+    }}
+    db.flush()
+
+    row = build(db)["regimes"][0]
+
+    assert row["phantom_fills"] == 1
+    assert row["phantom_overstatement_usdt"] > 0
+    assert row["expectancy_r"] < row["expectancy_r_raw"], (
+        "честное матожидание обязано быть ниже сырого — иначе поправка не применилась"
+    )
+
+
+def test_clean_trade_is_not_penalised(db):
+    """Обратная сторона: сделка, закрытая не лучше рынка, поправки не получает."""
+    _closed(db, regime="r", net=2.0, risk=1.0, mfe=5.0, reason="tp2_reached")
+
+    row = build(db)["regimes"][0]
+
+    assert row["phantom_fills"] == 0
+    assert row["expectancy_r"] == row["expectancy_r_raw"]
+
+
+def test_two_reach_measures_expose_the_92_percent_trigger(db):
+    """Гейт спрашивает про ПОЛНУЮ дистанцию, а закрытие происходит на 92% пути.
+    Обе величины выводятся рядом: их разрыв и есть зона, где книжится цель,
+    которой рынок не коснулся."""
+    # dist до TP2 = 3%; MFE 2.8% — это 93% пути: триггер сработал, цель нет.
+    _closed(db, regime="r", net=1.0, risk=1.0, entry=100.0, tp1=101.0, tp2=103.0, mfe=2.8)
+
+    row = build(db)["regimes"][0]
+
+    assert row["tp2_reach_realized"] == 0.0
+    assert row["tp2_trigger_realized"] == 1.0
