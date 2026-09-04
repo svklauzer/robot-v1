@@ -257,6 +257,34 @@ def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = N
         db.close()
 
 
+@router.get("/tp1-conditional", dependencies=[Depends(require_owner_action)])
+def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geometric",
+                              max_rows: int = 4000):
+    """(#tp1-conditional-2026-09-04) Сколько стоит сделка, дошедшая до TP1.
+
+    Гейт достижимости решает по `tp2_hit >= 1/(1+RR_tp2)` — точке безубыточности
+    БИНАРНОЙ ставки. Выход давно не бинарный: частичная фиксация, перенос стопа,
+    трейл. Замер 04.09: TP1 берётся в 15–33%, TP2 — ни разу, а RR до TP1 около
+    0.32–0.47, то есть бинарная формула потребовала бы 68–76%.
+
+    Отсюда считается честный порог: частота достижения TP1, при которой сделка
+    выходит в ноль ПРИ ИЗМЕРЕННЫХ исходах обеих ветвей. Свободных параметров
+    нет — оба ожидания взяты из истории, а не предположены.
+
+    `marker=actual` — по реальной частичной фиксации, `geometric` (по умолчанию)
+    — по MFE против дистанции TP1, то есть так, как рассуждает сам гейт.
+
+    Ничего не блокирует и не меняет — только показания.
+    """
+    from services.tp1_conditional_expectancy import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, marker=marker, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/entry-gate-census", dependencies=[Depends(require_owner_action)])
 def analytics_entry_gate_census(window_hours: float = 24.0, max_rows: int = 20000):
     """(#entry-gate-census-2026-09-04) Что на самом деле не пускает входы.
