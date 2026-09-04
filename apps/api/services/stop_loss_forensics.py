@@ -29,6 +29,15 @@
 взаимно гасятся, и разделение пропадает даже там, где оно есть. Такие признаки
 приводятся к виду «больше — значит благоприятнее для ЭТОЙ сделки».
 
+Что уже найдено этим отчётом (04.09)
+------------------------------------
+Ни один признак из `plan_json` не разделил группы — все AUC внутри 0.40–0.60.
+Разделяет не отдельный признак, а СОБСТВЕННАЯ композитная оценка, и разделяет
+в обратную сторону: грейд A измерен как значимо убыточный (−0.43R, ДИ
+[−0.75; −0.07]) при вдвое меньшем MFE и вдвое меньшей достижимости TP1, чем у
+B. Поэтому в разбор добавлены поля самой записи (`signal.confidence`) и
+разбивка по стороне сделки — см. `side`.
+
 Оговорка о выборке
 ------------------
 37 против 54 — это мало. AUC в пределах 0.40–0.60 здесь не значит ничего, и
@@ -96,6 +105,7 @@ _NUMERIC: tuple[tuple[str, str], ...] = (
     ("setup_quality.entry_timing", "тайминг входа"),
     ("setup_quality.volume_confirmation", "подтверждение объёмом"),
     ("setup_quality.structure_quality", "качество структуры"),
+    ("setup_quality.volatility_quality", "качество волатильности"),
     ("setup_quality.penalty", "штраф сетапа"),
     # экономика плана и ML
     ("ml.ml_score", "ML score"),
@@ -105,7 +115,13 @@ _NUMERIC: tuple[tuple[str, str], ...] = (
 )
 
 _CATEGORICAL: tuple[tuple[str, str], ...] = (
-    ("grade", "грейд"),
+    ("signal.grade", "грейд"),
+    # (#structure-mirror-2026-09-04) Сторона — не косметика. structure_score
+    # считается по шкале «хорошо для лонга» (близко к support = 70) и для
+    # шортов НЕ зеркалится ни в confidence, ни в setup_quality. Значит у шортов
+    # компонент structure работает в обратную сторону, и разбор по стороне —
+    # прямая проверка этой гипотезы.
+    ("signal.side", "сторона сделки"),
     ("trade_mode", "режим сделки"),
     ("regime", "режим рынка"),
     ("entry_reason", "причина входа"),
@@ -113,6 +129,19 @@ _CATEGORICAL: tuple[tuple[str, str], ...] = (
     ("tz_shadow.would_pass", "условия ТЗ пройдены"),
     ("performance_guard.reason", "вердикт performance guard"),
 )
+
+
+def _value(signal: Signal, plan: dict, path: str):
+    """Префикс `signal.` — поле самой записи, всё прочее — путь внутри плана.
+
+    (#confidence-axis-2026-09-04) Пока разбор умел читать только план, ось
+    confidence — та самая, на которой стоит грейд, — оставалась непроверенной.
+    Одно правило вместо частных исключений: следующее поле записи добавляется
+    строкой в список, а не веткой в трёх местах.
+    """
+    if path.startswith("signal."):
+        return getattr(signal, path.split(".", 1)[1], None)
+    return _dig(plan, path)
 
 
 def _dig(source: dict, path: str):
@@ -163,19 +192,14 @@ def _auc(a: list[float], b: list[float]) -> float | None:
     return wins / (len(a) * len(b))
 
 
-def _feature_value(signal: Signal, plan: dict, path: str):
-    if path in ("grade", "trade_mode", "regime", "entry_reason"):
-        return getattr(signal, path, None) if path == "grade" else plan.get(path)
-    return _dig(plan, path)
-
-
 def _oriented(value: float, side: str) -> float:
     """Приводит знаковый признак к виду «больше — благоприятнее для сделки»."""
     return value if str(side).lower() == "long" else -value
 
 
 def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None,
-          max_rows: int = 4000, min_group: int = 5) -> dict:
+          side: str | None = None, max_rows: int = 4000,
+          min_group: int = 5) -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(window_hours))
 
     query = db.query(Signal).filter(
@@ -190,6 +214,8 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
     for s in rows:
         plan = s.plan_json or {}
         if regime and str(plan.get("regime") or "") != regime:
+            continue
+        if side and str(s.side or "").lower() != str(side).lower():
             continue
         (stopped if str(s.closed_reason or "") == STOP_REASON else survived).append(s)
 
@@ -210,6 +236,7 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
     return {
         "window_hours": float(window_hours),
         "regime": regime,
+        "side": side,
         "stopped": _group_summary(stopped),
         "survived": _group_summary(survived),
         "numeric": numeric,
@@ -219,7 +246,11 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
             "выжившей. 0.5 = признак не различает группы. При выборке ~37/54 "
             "диапазон 0.40–0.60 не значит ничего (verdict=indistinguishable); "
             "смотреть стоит только на края. Знаковые признаки (obi, cvd) "
-            "приведены к виду «больше = благоприятнее для этой сделки»."
+            "приведены к виду «больше = благоприятнее для этой сделки». "
+            "side=short/long делит выборку по стороне: structure_score считается "
+            "по шкале «хорошо для лонга» и для шортов нигде не зеркалится, так "
+            "что расхождение AUC у setup_quality.structure_quality между "
+            "сторонами — прямая проверка этой асимметрии."
         ),
     }
 
@@ -239,12 +270,7 @@ def _numeric_row(path: str, label: str, stopped: list[Signal],
         out: list[float] = []
         for s in items:
             plan = s.plan_json or {}
-            # Префикс signal. — поле самой записи, а не плана. Без него ось
-            # confidence, на которой стоит весь грейд, осталась непроверенной.
-            if path.startswith("signal."):
-                value = _num(getattr(s, path.split(".", 1)[1], None))
-            else:
-                value = _num(_dig(plan, path))
+            value = _num(_value(s, plan, path))
             if value is None:
                 continue
             if path in _SIDE_SIGNED:
@@ -288,7 +314,7 @@ def _categorical_row(path: str, label: str, stopped: list[Signal],
     for group, items in (("stopped", stopped), ("survived", survived)):
         for s in items:
             plan = s.plan_json or {}
-            raw = getattr(s, path, None) if path == "grade" else _dig(plan, path)
+            raw = _value(s, plan, path)
             if raw is None:
                 continue
             key = str(raw)
