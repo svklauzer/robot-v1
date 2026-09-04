@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from core.config import settings
 
 from services.confidence_scale import confidence_calibration
+from services.entry_impulse_latch import ImpulseLatch, substitutes_adx_rising
 from services.market_data import MarketDataService
 from services.news_filter import NewsFilter
 from services.strategy_engine import StrategyEngine
@@ -53,6 +54,11 @@ class RobotLoop:
         # судит символ, грейд и ML — отдельную сделку, а зарабатывает ли САМ
         # сетап, до этого не спрашивал никто.
         self.regime_sizer = RegimeExpectancySizer()
+        # (#entry-impulse-2026-09-04) Защёлка импульса входа. В памяти цикла, а
+        # не в БД: она утверждает «импульс был N минут назад», и восстановленная
+        # после перезапуска запись означала бы разрешение входа по событию,
+        # которого никто не видел.
+        self.impulse_latch = ImpulseLatch()
         # (#setup-reach-2026-07-30) Геометрия сделки из фактического разброса
         # сетапа: цель туда, куда он доходит, стоп туда, куда шум не достаёт.
         self.setup_reach = SetupReachService()
@@ -157,6 +163,13 @@ class RobotLoop:
             if result.action == "hold":
                 continue
 
+            # (#entry-impulse-2026-09-04) Импульс замечается ДО всех отсевов.
+            # Смысл защёлки в том, чтобы поймать событие, пока состояние ещё не
+            # сложилось; наблюдать её после гейтов значило бы видеть ровно тот
+            # поздний момент, который она и призвана обойти.
+            for _side in ("long", "short"):
+                self.impulse_latch.observe(symbol, _side, getattr(result, "timeframes", None))
+
             if result.setup_decision != "approve":
                 continue
 
@@ -227,6 +240,19 @@ class RobotLoop:
             _tz_block, _tz_reason = tz_entry_shadow.should_block(
                 _tz, sample_size=tz_entry_shadow.observed_sample_size()
             )
+
+            # (#entry-impulse-2026-09-04) Живая защёлка снимает ОДИН отказ —
+            # `adx_not_rising`, и только его прочтение «ADX обязан расти именно
+            # сейчас». Направление, сторона KAMA и объём остаются как были: она
+            # утверждает «импульс был недавно», а не «всё прочее в порядке».
+            _latch = self.impulse_latch.snapshot(symbol, result.action)
+            if (
+                _tz_block
+                and substitutes_adx_rising(_latch)
+                and tz_entry_shadow.blocking_families(_tz) == ["adx_rising"]
+            ):
+                _tz_block = False
+                _tz_reason = "adx_rising_latched"
             if _tz_block:
                 # Дедуп как у прочих блоков: трендовый кандидат живёт весь up/down-
                 # leg (состояние, не событие), и без дедупа один и тот же tz-блок
@@ -242,7 +268,8 @@ class RobotLoop:
                         regime=_regime,
                         radar_state=getattr(result, "radar_state", None),
                         confidence_hint=getattr(result, "confidence_hint", None),
-                        payload={**_tz.as_dict(), "enforce_reason": _tz_reason},
+                        payload={**_tz.as_dict(), "enforce_reason": _tz_reason,
+                                 "impulse_latch": _latch},
                     )
                     db.flush()
 
@@ -1334,7 +1361,8 @@ class RobotLoop:
                     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
                     # OBV. Режим задаётся TZ_MODE; при enforce блокируют только
                     # беспороговые условия и только на достаточной выборке.
-                    "tz_shadow": {**_tz.as_dict(), "enforce_reason": _tz_reason},
+                    "tz_shadow": {**_tz.as_dict(), "enforce_reason": _tz_reason,
+                                  "impulse_latch": _latch},
                     # (#tp-reachability-2026-08-03) Достижима ли TP1 при типичном
                     # ходе инструмента. У скальпа цель стоит на 0.8% при медианном
                     # ходе 0.391% — RR считается от геометрии, которой нет.

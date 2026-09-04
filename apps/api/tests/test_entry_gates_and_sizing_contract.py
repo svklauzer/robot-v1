@@ -160,3 +160,32 @@ def test_position_management_does_not_block_the_event_loop():
         "ведению нужна только last-цена — 200 свечей на каждый тик здесь лишние"
     )
     assert not re.search(r"self\.market\.snapshot\(", source)
+
+
+def test_impulse_is_observed_before_the_gates_that_it_bypasses():
+    """(#entry-impulse-2026-09-04) Смысл защёлки — поймать событие, пока
+    состояние ещё не сложилось. Наблюдение, поставленное ПОСЛЕ отсева по
+    setup_decision и режиму, увидело бы ровно тот поздний момент, ради обхода
+    которого защёлка и существует, — и молча превратилось бы в пустышку,
+    которая при этом исправно пишется в события и выглядит работающей.
+    """
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+
+    observe_at = source.index("self.impulse_latch.observe(")
+    setup_gate_at = source.index('if result.setup_decision != "approve":')
+    regime_gate_at = source.index("_allowed_regimes and _regime")
+    tz_at = source.index("tz_entry_shadow.evaluate(")
+
+    assert observe_at < setup_gate_at, "защёлка наблюдается после отсева по сетапу"
+    assert observe_at < regime_gate_at, "защёлка наблюдается после отсева по режиму"
+    assert observe_at < tz_at, "защёлка наблюдается после условий ТЗ"
+
+
+def test_latch_lifts_the_block_only_when_adx_is_the_sole_blocker():
+    """Защёлка утверждает «импульс был недавно», а не «направление, сторона
+    KAMA и объём тоже в порядке». Снятие блока при других сработавших
+    семействах разоружило бы три фильтра одной правкой.
+    """
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+
+    assert 'tz_entry_shadow.blocking_families(_tz) == ["adx_rising"]' in source
