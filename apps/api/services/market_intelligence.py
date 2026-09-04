@@ -251,7 +251,24 @@ class MarketIntelligenceEngine:
         if adx < adx_min:
             failed.append(f"adx={adx:.1f}<{adx_min:.0f}")
         if adx_rise < rise_min:
-            failed.append(f"adx_not_rising={adx_prev:.1f}->{adx:.1f}")
+            # (#adx-label-2026-09-05) Раньше обе ветви писались как
+            # `adx_not_rising`, и в разборе появлялось «adx_not_rising=34.0->34.1»
+            # — надпись, противоречащая собственным числам: ADX ВЫРОС. Читается
+            # как «тренд затухает», хотя он усиливается, просто медленнее порога.
+            # Это ровно тот класс сообщений, что вводит в заблуждение именно
+            # тогда, когда в них вглядываются.
+            #
+            # Порог печатается рядом намеренно: «растёт ли ADX» в этой кодовой
+            # базе проверяется трижды и с разными ответами — строго больше нуля
+            # в условиях ТЗ, ANTI_CHOP_YOUNG_ADX_RISE_MIN здесь, отдельная
+            # настройка у защёлки импульса. Пока значение не видно в сообщении,
+            # расхождение приходится искать по коду.
+            if adx_rise > 0:
+                failed.append(
+                    f"adx_rise_too_small={adx_prev:.1f}->{adx:.1f}(+{adx_rise:.2f}<{rise_min:g})"
+                )
+            else:
+                failed.append(f"adx_falling={adx_prev:.1f}->{adx:.1f}")
         if di_spread < di_min:
             failed.append(f"di_spread={di_spread:.1f}<{di_min:.0f}")
 

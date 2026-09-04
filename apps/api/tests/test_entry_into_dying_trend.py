@@ -157,7 +157,7 @@ def test_chop_is_still_rejected(young):
 
     assert ok is False
     assert "adx=14.0<20" in note
-    assert "adx_not_rising" in note
+    assert "adx_falling" in note or "adx_rise_too_small" in note
     assert "di_spread=1.0<15" in note
 
 
@@ -170,7 +170,7 @@ def test_dying_trend_does_not_get_the_young_pass(young):
     )
 
     assert ok is False
-    assert "adx_not_rising=42.1->40.9" in note
+    assert "adx_falling=42.1->40.9" in note
 
 
 def test_direction_is_respected(young):
@@ -208,3 +208,35 @@ def test_gate_wires_the_override_in(young):
     block = src.split("ANTI_CHOP_GATE_ENABLED", 1)[1][:2000]
 
     assert "_young_trend_override" in block
+
+
+def test_a_rising_adx_is_not_called_falling(young):
+    """(#adx-label-2026-09-05) 05.09 в ленте стояло «adx_not_rising=34.0->34.1»
+    — надпись, противоречащая собственным числам: ADX ВЫРОС. Читалась она как
+    «тренд затухает», хотя он усиливался, просто медленнее порога.
+
+    Разница не косметическая: на этом основании решают, поздний вход или
+    ранний, и именно такие сообщения вводят в заблуждение тогда, когда в них
+    вглядываются.
+    """
+    ok, note = _svc()._young_trend_override(
+        _anchor(adx=34.1, adx_prev=34.0, plus_di=30.0, minus_di=10.0), "long",
+    )
+
+    assert ok is False
+    assert "adx_falling" not in note, "рост назван падением"
+    assert "adx_rise_too_small=34.0->34.1" in note
+
+
+def test_the_threshold_is_printed_next_to_the_miss(young):
+    """«Растёт ли ADX» проверяется в трёх местах с разными ответами: строго
+    больше нуля в условиях ТЗ, ANTI_CHOP_YOUNG_ADX_RISE_MIN здесь, своя
+    настройка у защёлки импульса. Пока порог не виден в сообщении, расхождение
+    приходится искать по коду — а искать его начинают уже после того, как оно
+    что-нибудь испортило.
+    """
+    ok, note = _svc()._young_trend_override(
+        _anchor(adx=34.1, adx_prev=34.0, plus_di=30.0, minus_di=10.0), "long",
+    )
+
+    assert "+0.10<0.5" in note
