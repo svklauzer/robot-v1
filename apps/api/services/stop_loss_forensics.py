@@ -42,8 +42,27 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from models.signal import Signal
+from services.phantom_fill import phantom_adjustment
 
 STOP_REASON = "stop_loss"
+
+
+def _honest_net(signal: Signal) -> float:
+    """(#stop-forensics-honest-2026-09-04) Тот же честный PnL, что и в
+    regime_expectancy_report.
+
+    Ветка `tp2_reached` закрывает на 92% пути до цели и книжит полную цену TP2,
+    то есть исполняется лучше рынка. Наценка попадает ТОЛЬКО в группу выживших
+    (стопы фантомными не бывают), поэтому на сыром PnL разрыв между группами
+    выглядел бы шире, чем он есть. Два отчёта по одним и тем же сделкам обязаны
+    давать одно число.
+    """
+    try:
+        net = float(signal.closed_net_pnl or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    is_phantom, adjustment = phantom_adjustment(signal)
+    return net + adjustment if is_phantom else net
 
 # Признаки, у которых благоприятная сторона зависит от направления сделки.
 _SIDE_SIGNED = {"entry_depth.obi", "entry_depth.cvd_ratio", "entry_depth.cvd"}
@@ -196,12 +215,7 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
 
 
 def _group_summary(signals: list[Signal]) -> dict:
-    net = 0.0
-    for s in signals:
-        try:
-            net += float(s.closed_net_pnl or 0.0)
-        except (TypeError, ValueError):
-            pass
+    net = sum(_honest_net(s) for s in signals)
     return {
         "n": len(signals),
         "net_usdt": round(net, 6),
@@ -265,10 +279,7 @@ def _categorical_row(path: str, label: str, stopped: list[Signal],
             key = str(raw)
             slot = levels.setdefault(key, {"stopped": 0, "survived": 0, "net_usdt": 0.0})
             slot[group] += 1
-            try:
-                slot["net_usdt"] = round(slot["net_usdt"] + float(s.closed_net_pnl or 0.0), 6)
-            except (TypeError, ValueError):
-                pass
+            slot["net_usdt"] = round(slot["net_usdt"] + _honest_net(s), 6)
 
     if not levels:
         return None
