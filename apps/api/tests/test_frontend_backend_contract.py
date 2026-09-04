@@ -236,3 +236,25 @@ def test_confidence_legs_written_to_the_plan_are_read_by_the_ui():
     for field in ("effective", "base", "setup_leg", "leg_gap"):
         assert field in written, f"{field} перестало писаться в план"
         assert f"conf.{field}" in page, f"{field} пишется в план, но не показано"
+
+
+def test_every_impulse_kind_has_a_ui_label():
+    """(#entry-impulse-2026-09-04) Виды импульса пишутся в план и показываются
+    на карточке. Новый вид без подписи выведется сырым кодом — а именно этим
+    полем объясняется, почему вход прошёл при падающем ADX.
+    """
+    from services import entry_impulse_latch as latch
+
+    kinds = {latch.IMPULSE_ADX_TURN, latch.IMPULSE_STOCH_CROSS}
+    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+
+    missing = sorted(k for k in kinds if f"{k}:" not in page)
+    assert missing == [], f"виды импульса без подписи в UI: {missing}"
+
+
+def test_shadow_mode_is_visible_to_the_owner():
+    """Пока режим shadow, защёлка ничего не решает. Показывать её без этой
+    пометки значило бы дать владельцу думать, что механизм уже работает.
+    """
+    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+    assert 'impulse_latch.mode === "shadow"' in page

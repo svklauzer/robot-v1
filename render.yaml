@@ -126,6 +126,23 @@ services:
       - key: CONFIDENCE_SYMMETRIC_BLEND
         value: "true"
 
+      # (#entry-impulse-2026-09-04) Защёлка импульса входа. Кандидат — СОСТОЯНИЕ
+      # (4h+1h, держится сутками), условия ТЗ — СОБЫТИЯ (разворот ADX, кросс
+      # Stoch, один бар). Требуются одновременно, а происходят последовательно:
+      # 68 отказов из 71 по adx_not_rising, медиана adx_delta −0.589.
+      # shadow — считается и пишется, вход не меняется. enforce — живая защёлка
+      # снимает ТОЛЬКО adx_not_rising и только когда он единственный блокер.
+      # Переводить в enforce после замера live_and_sole_blocker в
+      # /analytics/entry-gate-census, не раньше.
+      - key: ENTRY_IMPULSE_LATCH_MODE
+        value: "shadow"
+      - key: ENTRY_IMPULSE_TF
+        value: "15m"
+      - key: ENTRY_IMPULSE_WINDOW_SEC
+        value: "1800"
+      - key: ENTRY_IMPULSE_ADX_RISE_MIN
+        value: "0"
+
       # ── ДВИЖКИ (ВСЕ ВКЛЮЧЕНЫ) ─────────────────────────────────────────────
       - key: ENABLE_ORDERBOOK_ENGINE
         value: "true"

@@ -113,6 +113,9 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
     tz_evaluated = 0
     adx_failed = 0
     adx_enforced = 0
+    latch_seen = 0
+    latch_live_sole = 0
+    latch_live_any = 0
 
     for row in rows:
         payload = row.payload_json if isinstance(row.payload_json, dict) else {}
@@ -135,6 +138,19 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
         if ADX_FAMILY not in families:
             continue
         adx_enforced += 1
+
+        # (#entry-impulse-2026-09-04) Была ли в этот момент живая защёлка
+        # импульса. Это и есть проверка гипотезы: если событие произошло
+        # недавно, а состояние подтвердилось только сейчас, то блокировка —
+        # следствие требования ОДНОВРЕМЕННОСТИ, а не отсутствия импульса.
+        latch = payload.get("impulse_latch")
+        if isinstance(latch, dict):
+            latch_seen += 1
+            if latch.get("live"):
+                latch_live_any += 1
+                if families == [ADX_FAMILY]:
+                    latch_live_sole += 1
+
         # Единственный enforce-блокер: только здесь допуск способен открыть вход.
         if families == [ADX_FAMILY] and delta is not None:
             sole_blocker_deltas.append(delta)
@@ -159,6 +175,18 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
             "delta_failed": _percentiles(deltas_failed),
             "delta_sole_blocker": _percentiles(sole_blocker_deltas),
             "would_pass_at_tolerance": would_pass,
+            "impulse_latch": {
+                # Событий, где защёлка вообще записана (поле с 04.09).
+                "observed": latch_seen,
+                # Живая защёлка при заблокированном входе: импульс БЫЛ, просто
+                # раньше, чем подтвердилось состояние.
+                "live_on_adx_block": latch_live_any,
+                # Из них те, где adx_rising — единственный блокер: ровно эти
+                # входы откроет enforce.
+                "live_and_sole_blocker": latch_live_sole,
+                "share_live": (round(latch_live_any / latch_seen, 4)
+                               if latch_seen else None),
+            },
             "thresholds_in_use": {
                 # Два порога одного и того же вопроса, оба взяты на глаз.
                 "tz_entry_shadow": "adx > adx_prev (строго, допуск 0)",

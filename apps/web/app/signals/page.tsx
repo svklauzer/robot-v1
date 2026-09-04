@@ -634,6 +634,13 @@ function MlBadge({ ml }: { ml?: any }) {
   );
 }
 
+// Виды импульса на человеческом языке: разница между ними — это разница между
+// «сила тренда развернулась вверх» и «осциллятор пересёк сигнальную».
+const IMPULSE_KIND: Record<string, string> = {
+  adx_turned_up: "ADX развернулся вверх",
+  stoch_crossed: "Stoch пересёк сигнальную",
+};
+
 function TradeDiagnostics({ plan }: { plan: any }) {
   const tz = plan?.tz_shadow;
   const dyn = plan?.tp2_dynamic || plan?.setup_quality?.tp2_dynamic;
@@ -661,6 +668,32 @@ function TradeDiagnostics({ plan }: { plan: any }) {
                 не пройдено {(tz.failed || []).length}
               </span>
             )}
+            {/* (#entry-impulse-2026-09-04) Кандидат — состояние, живущее сутками;
+                условия ТЗ — события длиной в бар. Требовать их одновременно
+                значит почти всегда опаздывать: 68 отказов из 71 по adx_not_rising.
+                Защёлка помнит импульс, пока состояние подтверждается, и её
+                возраст объясняет, ПОЧЕМУ вход прошёл при падающем ADX. */}
+            {tz.impulse_latch && (
+              <div
+                className="mt-1 text-[11px]"
+                title="Импульс на младшем ТФ случается раньше, чем тренд проступит на 4h и 1h. Защёлка держит событие, пока состояние подтверждается; ни одно условие при этом не ослаблено."
+              >
+                <span className="text-emerald-100/50">Импульс: </span>
+                {tz.impulse_latch.live ? (
+                  <span className="text-emerald-300">
+                    {IMPULSE_KIND[tz.impulse_latch.impulse?.kind] || tz.impulse_latch.impulse?.kind}
+                    {tz.impulse_latch.impulse?.age_sec != null &&
+                      ` ${Math.round(tz.impulse_latch.impulse.age_sec / 60)} мин назад`}
+                  </span>
+                ) : (
+                  <span className="text-emerald-100/40">не было в окне</span>
+                )}
+                {tz.impulse_latch.mode === "shadow" && (
+                  <span className="text-emerald-100/30"> · наблюдение</span>
+                )}
+              </div>
+            )}
+
             {!tz.would_pass && (tz.failed || []).length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
                 {(tz.failed as string[]).map((f) => (

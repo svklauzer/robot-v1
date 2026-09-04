@@ -323,6 +323,18 @@ def enforced_families() -> frozenset[str]:
     return frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
 
 
+def blocking_families(shadow: TZShadow) -> list[str]:
+    """Вооружённые семейства, не прошедшие проверку.
+
+    (#entry-impulse-2026-09-04) Вынесено из should_block, потому что понадобилось
+    второму месту: защёлка импульса снимает отказ, только если `adx_rising` —
+    ЕДИНСТВЕННОЕ заблокировавшее семейство. Считать это выражение там своими
+    силами значило бы завести вторую копию правила, которая рано или поздно
+    разойдётся с этой.
+    """
+    return sorted({_family(code) for code in shadow.failed} & enforced_families())
+
+
 def should_block(shadow: TZShadow, *, sample_size: int) -> tuple[bool, str]:
     """Блокировать ли вход. Возвращает (блокировать, причина решения).
 
@@ -344,7 +356,7 @@ def should_block(shadow: TZShadow, *, sample_size: int) -> tuple[bool, str]:
     if not families:
         return False, "no_conditions_enabled"
 
-    hit = sorted({_family(code) for code in shadow.failed} & families)
+    hit = blocking_families(shadow)
     if not hit:
         return False, "enabled_conditions_passed"
     return True, "blocked_by:" + ",".join(hit)

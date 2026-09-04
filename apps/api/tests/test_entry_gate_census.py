@@ -222,3 +222,66 @@ def test_tp1_viability_is_reported_next_to_tp2(db):
 
     assert row["tp1_hit_rate"] == pytest.approx(0.31)
     assert row["tp2_hit_rate"] == 0.0
+
+
+# ── защёлка импульса (#entry-impulse-2026-09-04) ────────────────────────────
+
+def _tz_latched(db, *, live: bool, blocked_by: str = "adx_rising",
+                age: float = 600.0):
+    db.add(IntelligenceEvent(
+        symbol="SOL/USDT", status="blocked", decision="tz_entry_conditions",
+        action="long", regime="trend_up_candidate",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        payload_json={
+            "evaluated": True, "would_pass": False,
+            "failed": ["adx_not_rising:29.5->29.4"], "adx_delta": -0.1,
+            "enforce_reason": f"blocked_by:{blocked_by}",
+            "impulse_latch": {
+                "mode": "shadow", "window_sec": 1800.0, "live": live,
+                "impulse": ({"kind": "adx_turned_up", "age_sec": age}
+                            if live else None),
+            },
+        },
+    ))
+    db.flush()
+
+
+def test_live_latch_on_a_block_is_the_hypothesis_under_test(db):
+    """Если импульс БЫЛ, просто раньше, чем подтвердилось состояние, то
+    блокировка — следствие требования одновременности, а не отсутствия
+    импульса. Это и есть число, ради которого защёлка сначала идёт в тень."""
+    for _ in range(7):
+        _tz_latched(db, live=True)
+    for _ in range(3):
+        _tz_latched(db, live=False)
+
+    out = build(db)["adx_rising"]["impulse_latch"]
+
+    assert out["observed"] == 10
+    assert out["live_on_adx_block"] == 7
+    assert out["live_and_sole_blocker"] == 7
+    assert out["share_live"] == pytest.approx(0.7)
+
+
+def test_latch_counts_separate_sole_blockers_from_the_rest(db):
+    """Enforce откроет только те входы, где adx_rising — единственный блокер.
+    Считать остальные значило бы пообещать поток, которого не будет."""
+    _tz_latched(db, live=True, blocked_by="adx_rising")
+    _tz_latched(db, live=True, blocked_by="adx_rising,obv")
+
+    out = build(db)["adx_rising"]["impulse_latch"]
+
+    assert out["live_on_adx_block"] == 2
+    assert out["live_and_sole_blocker"] == 1
+
+
+def test_events_without_the_latch_field_are_not_counted_as_absent(db):
+    """Поле пишется с 04.09. Старое событие без него — не «защёлки не было»,
+    а «мы не смотрели»; смешать их значило бы занизить долю."""
+    _tz(db, delta=-0.1)                 # без impulse_latch
+    _tz_latched(db, live=True)
+
+    out = build(db)["adx_rising"]["impulse_latch"]
+
+    assert out["observed"] == 1
+    assert out["share_live"] == pytest.approx(1.0)

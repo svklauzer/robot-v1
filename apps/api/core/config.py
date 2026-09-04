@@ -1399,6 +1399,21 @@ class Settings(BaseSettings):
     # часть сигналов перестанет проходить PROD_GATE.
     CONFIDENCE_SYMMETRIC_BLEND: bool = True
 
+    # (#entry-impulse-2026-09-04) Защёлка импульса входа. Трендовый кандидат —
+    # СОСТОЯНИЕ (4h+1h, держится сутками), условия ТЗ — СОБЫТИЯ (разворот ADX,
+    # кросс Stoch, один бар). Их требуют одновременно, а они последовательны:
+    # импульс случается на младшем ТФ раньше, чем тренд проступит на старших.
+    # Замер 04.09: 68 отказов из 71 по `adx_not_rising`, медиана adx_delta
+    # −0.589, максимум за сутки +0.28.
+    #
+    # shadow — считается и пишется в события, вход не меняется. enforce — живая
+    # защёлка снимает отказ `adx_not_rising`, и ТОЛЬКО его: di, kama и obv
+    # остаются как были.
+    ENTRY_IMPULSE_LATCH_MODE: str = "shadow"
+    ENTRY_IMPULSE_TF: str = "15m"
+    ENTRY_IMPULSE_WINDOW_SEC: float = 1800.0     # два бара 15m
+    ENTRY_IMPULSE_ADX_RISE_MIN: float = 0.0
+
     LEVERAGE_GRADE_A_PLUS: float = 1.0
     LEVERAGE_GRADE_A: float = 0.7
     LEVERAGE_GRADE_B: float = 0.4
