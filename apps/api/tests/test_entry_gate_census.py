@@ -146,7 +146,7 @@ def test_empty_history_does_not_explode(db):
 
 def _tp2(db, symbol: str, *, regime: str = "crt", mfe: float = 0.7742,
          tp1: float = 2.7, tp2: float = 3.1, hit: float = 0.0238,
-         need: float = 0.34):
+         hit1: float = 0.0714, need: float = 0.34):
     db.add(IntelligenceEvent(
         symbol=symbol, status="blocked", decision="tp2_reached_too_rarely",
         action="long", regime=regime,
@@ -154,6 +154,7 @@ def _tp2(db, symbol: str, *, regime: str = "crt", mfe: float = 0.7742,
         payload_json={"evaluated": True, "allowed": False,
                       "median_mfe_pct": mfe, "tp1_dist_pct": tp1,
                       "tp2_dist_pct": tp2, "tp2_hit_rate": hit,
+                      "tp1_hit_rate": hit1,
                       "required_hit_rate": need},
     ))
     db.flush()
@@ -208,3 +209,16 @@ def test_missing_geometry_does_not_invent_a_ratio(db):
     db.flush()
 
     assert build(db)["tp2_reach"]["ADA/USDT|crt"]["tp2_over_mfe"] is None
+
+
+def test_tp1_viability_is_reported_next_to_tp2(db):
+    """(#tp1-viability-2026-09-04) Это число решает направление починки. TP1
+    берётся, TP2 нет — верхняя цель должна быть трейлом, а не точкой. Не
+    берётся и TP1 — сломана вся сетка, и трейл не поможет."""
+    for _ in range(3):
+        _tp2(db, "SOL/USDT", regime="trend_up_candidate", hit1=0.31, hit=0.0)
+
+    row = build(db)["tp2_reach"]["SOL/USDT|trend_up_candidate"]
+
+    assert row["tp1_hit_rate"] == pytest.approx(0.31)
+    assert row["tp2_hit_rate"] == 0.0

@@ -222,10 +222,10 @@ def _tp2_reach(rows) -> dict:
         payload = row.payload_json if isinstance(row.payload_json, dict) else {}
         key = f"{row.symbol}|{row.regime or payload.get('source') or ''}"
         slot = buckets.setdefault(key, {"tp2_dist": [], "tp1_dist": [], "mfe": [],
-                                        "hit": [], "need": []})
+                                        "hit": [], "need": [], "hit1": []})
         for field, name in (("tp2_dist_pct", "tp2_dist"), ("tp1_dist_pct", "tp1_dist"),
                             ("median_mfe_pct", "mfe"), ("tp2_hit_rate", "hit"),
-                            ("required_hit_rate", "need")):
+                            ("tp1_hit_rate", "hit1"), ("required_hit_rate", "need")):
             value = _num(payload.get(field))
             if value is not None:
                 slot[name].append(value)
@@ -241,6 +241,12 @@ def _tp2_reach(rows) -> dict:
             "tp2_dist_pct": round(tp2, 4) if tp2 is not None else None,
             # Во сколько раз цель дальше типичного хода. Это и есть диагноз.
             "tp2_over_mfe": round(tp2 / mfe, 2) if (mfe and tp2) else None,
+            # (#tp1-viability-2026-09-04) Достижимость TP1 — число, решающее
+            # НАПРАВЛЕНИЕ починки. Если TP1 берётся часто, а TP2 нет, то цель
+            # верхнего уровня должна быть трейлом, а не фиксированной точкой.
+            # Если и TP1 не берётся — сломана вся сетка целей, и трейл не
+            # спасёт. Без него можно час спорить, какую из двух чинить.
+            "tp1_hit_rate": round(_median(slot["hit1"]), 4) if slot["hit1"] else None,
             "tp2_hit_rate": round(_median(slot["hit"]), 4) if slot["hit"] else None,
             "required_hit_rate": round(_median(slot["need"]), 4) if slot["need"] else None,
         }
