@@ -62,7 +62,8 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Арбитраж", ("FUNDING_ARB", "CROSS_FARB", "FUNDING_", "ARB_")),
     ("Grid", ("GRID_",)),
     ("ML", ("ML_",)),
-    ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE")),
+    # LOOP_ — поведение самого торгового цикла (пульс отчёта о простое и т.п.).
+    ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_")),
     ("Телеграм и отчёты", ("TELEGRAM_", "REPORT_", "DIGEST_", "SUBSCRIPTION_", "BILLING_", "PAYMENT_")),
     ("Инфраструктура", ("APP_", "DB_", "CORS_", "JWT_", "OWNER_", "PORT", "REDIS_", "DATABASE_")),
 )
@@ -115,6 +116,12 @@ _PINNED_PREFIXES: tuple[str, ...] = (
     # первого изменения дефолта в коде, после чего прод молча уезжает.
     "ANTI_CHOP_", "HTF_ALIGN", "RANGE_POS_",
     "ACTIVE_EXCHANGE", "OKX_",          # маршрут исполнения: какая биржа и чем
+    # (#loop-knobs-pinning-2026-09-04) Поведение самого цикла. Страница
+    # советовала вычистить LOOP_SKIP_HEARTBEAT_SEC — ключ, задающий, как часто
+    # цикл сообщает о простое. Ровно тот же промах, что утром был у ANTI_CHOP_
+    # и POST_TP1_, повторённый через несколько часов: правило пополняется не
+    # само, и каждый новый префикс надо заводить руками.
+    "LOOP_",
     "VALIDATION_",                      # пороги вердикта готовности к live
     "BREAKEVEN_", "MFE_", "PROTECTIVE_",  # защита прибыли на выходе
     "CORR_CLUSTER", "SYMBOL_PERF_", "REENTRY_", "POST_LOSS", "ANTI_DRAIN",
