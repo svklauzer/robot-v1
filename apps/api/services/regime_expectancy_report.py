@@ -43,6 +43,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from models.signal import Signal
+from services.phantom_fill import phantom_adjustment
+
+# (#regime-expectancy-honest-2026-09-04) Доля пути до TP2, на которой ветка
+# `tp2_reached` реально закрывает сделку (exit_policy: current_pct >= tp2*0.92),
+# книжа при этом ПОЛНУЮ цену TP2. Отсюда расхождение, которое иначе выглядит
+# необъяснимым: 11 сделок закрыты как tp2_reached, а MFE дотянулся до цели у
+# одной. Разрыв между двумя измерениями ниже — это и есть зона наценки.
+TP2_TRIGGER_SHARE = 0.92
 
 
 def _median(values: list[float]) -> float | None:
@@ -113,16 +121,20 @@ def build(db: Session, *, window_hours: float = 720.0, bot_id: int | None = None
 
 def _regime_row(regime: str, signals: list[Signal]) -> dict:
     net_total = 0.0
+    net_total_raw = 0.0
     risk_total = 0.0
     counted = 0
     wins = 0
     losses = 0
+    phantom_count = 0
+    phantom_delta = 0.0
 
     by_reason: dict[str, dict] = {}
     mfe_values: list[float] = []
     rr_values: list[float] = []
     tp1_reached = 0
     tp2_reached = 0
+    tp2_triggered = 0
     reach_measured = 0
 
     for s in signals:
@@ -130,22 +142,38 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
         lifecycle = plan.get("lifecycle") or {}
 
         risk = abs(_f(s.net_pnl_stop) or 0.0)
-        net = _f(s.closed_net_pnl)
+        net_raw = _f(s.closed_net_pnl)
+
+        # (#regime-expectancy-honest-2026-09-04) Фантомный филл: записанный
+        # result_pct выше, чем сделка вообще доходила по MFE — исполнение
+        # лучше рынка. Ветка tp2_reached делает это систематически, закрывая
+        # на 92% пути и книжа полную цель. Считать матожидание по сырому
+        # closed_net_pnl значит мерить край по прибыли, которой не было.
+        # Дашборд эту поправку уже применяет (total_net_pnl_honest_usdt) —
+        # первая версия этого отчёта её потеряла.
+        is_phantom, adjustment = phantom_adjustment(s)
+        net = (net_raw + adjustment) if (net_raw is not None and is_phantom) else net_raw
 
         if risk > 0 and net is not None:
             net_total += net
+            net_total_raw += (net_raw or 0.0)
             risk_total += risk
             counted += 1
+            if is_phantom:
+                phantom_count += 1
+                phantom_delta += adjustment
             if net > 0:
                 wins += 1
             elif net < 0:
                 losses += 1
 
         reason = str(s.closed_reason or "unknown")
-        slot = by_reason.setdefault(reason, {"n": 0, "net_usdt": 0.0})
+        slot = by_reason.setdefault(reason, {"n": 0, "net_usdt": 0.0, "phantom": 0})
         slot["n"] += 1
         if net is not None:
             slot["net_usdt"] = round(slot["net_usdt"] + net, 6)
+        if is_phantom:
+            slot["phantom"] += 1
 
         rr = _f(s.net_rr_tp2)
         if rr and rr > 0:
@@ -164,6 +192,9 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
                 tp1_reached += 1
             if mfe >= d2:
                 tp2_reached += 1
+            # Порог, на котором ветка tp2_reached закрывает НА САМОМ ДЕЛЕ.
+            if mfe >= d2 * TP2_TRIGGER_SHARE:
+                tp2_triggered += 1
 
     expectancy_r = (net_total / risk_total) if risk_total > 0 else None
     median_rr = _median(rr_values)
@@ -190,13 +221,23 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
         "losses": losses,
         "winrate_pct": round(wins / counted * 100, 2) if counted else None,
         "net_pnl_usdt": round(net_total, 6),
+        "net_pnl_usdt_raw": round(net_total_raw, 6),
+        "phantom_fills": phantom_count,
+        "phantom_overstatement_usdt": round(abs(phantom_delta), 6),
         "risk_usdt": round(risk_total, 6),
         "expectancy_r": round(expectancy_r, 4) if expectancy_r is not None else None,
+        "expectancy_r_raw": (
+            round(net_total_raw / risk_total, 4) if risk_total > 0 else None
+        ),
         "expectancy_usdt_per_trade": round(net_total / counted, 4) if counted else None,
         "median_net_rr_tp2": round(median_rr, 4) if median_rr else None,
         "tp_reach_required": round(required, 4) if required else None,
         "tp1_reach_realized": round(tp1_reached / reach_measured, 4) if reach_measured else None,
         "tp2_reach_realized": round(tp2_realized, 4) if tp2_realized is not None else None,
+        # Доля, дошедшая до порога, на котором tp2_reached закрывает фактически.
+        "tp2_trigger_realized": (
+            round(tp2_triggered / reach_measured, 4) if reach_measured else None
+        ),
         "median_mfe_pct": round(_median(mfe_values), 4) if mfe_values else None,
         "reach_measured": reach_measured,
         "verdict": verdict,
