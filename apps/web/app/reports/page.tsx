@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
 import { Send, RefreshCw, Trophy, Flame, Clock, BarChart3 } from "lucide-react";
@@ -505,24 +506,6 @@ function StatusBadge({ status }: { status?: string | null }) {
   );
 }
 
-function GradeBadge({ grade }: { grade?: string | null }) {
-  const cls =
-    grade === "A+"
-      ? "bg-emerald-500 text-black"
-      : grade === "A"
-        ? "bg-emerald-800 text-emerald-100"
-        : grade === "B"
-          ? "bg-yellow-600 text-black"
-          : grade === "C"
-            ? "bg-red-700 text-white"
-            : "bg-emerald-950 text-emerald-200";
-
-  return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
-      {grade || "-"}
-    </span>
-  );
-}
 
 function formatEntry(entry: any) {
   if (!entry) return "-";

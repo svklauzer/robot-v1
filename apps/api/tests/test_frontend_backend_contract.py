@@ -188,3 +188,34 @@ def test_live_safety_trade_counter_is_surfaced():
         ui = _read(health)
         assert "trades_today" in ui, "счётчик сделок за сутки не выведен на Health"
         assert "trade_count_blocked" in ui
+
+
+def test_grade_badge_is_not_reimplemented_per_page():
+    """(#grade-axis-2026-09-04) GradeBadge жил в трёх копиях — signals,
+    intelligence, reports, — и все три красили A зелёным, B жёлтым, C красным.
+    Замер по 97 сделкам говорит обратное: A значимо убыточен (−0.4257R), B у
+    нуля. Правка палитры в одной копии оставила бы две страницы, продолжающие
+    врать, — ровно так же, как формула уверенности разъехалась между
+    market_intelligence и main.
+    """
+    shared = WEB / "components" / "GradeBadge.tsx"
+    assert shared.exists(), "общий компонент грейда исчез"
+
+    offenders = [
+        path.name for path in WEB.rglob("app/**/*.tsx")
+        if "function GradeBadge" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"страницы объявляют свой GradeBadge: {offenders}"
+
+
+def test_grade_badge_does_not_paint_a_verdict():
+    """Цвет — это утверждение о результате. Пока ось грейда измерена
+    антипредсказательной, ни зелёного «хорошо», ни красного «плохо» на ней быть
+    не должно; инвертировать палитру тоже нельзя — B не «хорош», он у нуля.
+    """
+    source = (WEB / "components" / "GradeBadge.tsx").read_text(encoding="utf-8")
+
+    verdict_colours = [c for c in ("emerald-500", "emerald-800", "yellow-600", "red-700")
+                       if c in source]
+    assert verdict_colours == [], f"грейд снова покрашен как вердикт: {verdict_colours}"
+    assert "title=" in source, "измерение обязано быть в подсказке, а не только в коде"

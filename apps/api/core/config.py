@@ -1375,6 +1375,19 @@ class Settings(BaseSettings):
     # Суммарный риск по ВСЕМ открытым сделкам, % эквити (портфельный бюджет).
     PORTFOLIO_RISK_BUDGET_PCT: float = 6.0
     # Множители conviction по грейду (вклад в плечо).
+    # (#grade-axis-2026-09-04) Обе оси ниже дают грейду A БОЛЬШЕ, чем B. Замер
+    # по 97 закрытым сделкам говорит обратное: confidence, по которой ставится
+    # грейд, предсказывает СТОП (AUC 0.6605, ДИ [0.549; 0.772], z=2.81), а сам
+    # грейд A значимо убыточен (−0.4257R, ДИ [−0.75; −0.07]) при B, неотличимом
+    # от нуля. Сейчас обе оси плоские и вреда не наносят: ENABLE_SMART_LEVERAGE
+    # выключен, DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE = 1.0. Включённая любая из них
+    # начнёт ставить больше именно на проигрышное ведро.
+    #
+    # Снимается не правкой этой строки, а замером: когда ожидание грейда A
+    # перестанет быть значимо отрицательным, флаг переводится в true ОСОЗНАННО
+    # (тот же порядок, что у UNIFIED_MARGIN_ACCOUNTING ниже).
+    GRADE_AXIS_VALIDATED: bool = False
+
     LEVERAGE_GRADE_A_PLUS: float = 1.0
     LEVERAGE_GRADE_A: float = 0.7
     LEVERAGE_GRADE_B: float = 0.4
@@ -2327,6 +2340,33 @@ class Settings(BaseSettings):
                 )
             if float(self.LIVE_MAX_LEVERAGE) > 1.0 and not self.ENABLE_FUTURES:
                 blockers.append("LIVE_MAX_LEVERAGE > 1 requires ENABLE_FUTURES=true")
+        # (#grade-axis-2026-09-04) Пока грейд антипредсказателен, сайзинг по
+        # нему усиливает убыток. Блокер, а не комментарий: обе оси сейчас
+        # плоские, и ровно поэтому их легко включить, не вспомнив, что ось
+        # измерена и измерена в минус.
+        if not self.GRADE_AXIS_VALIDATED:
+            grade_sizing = []
+            if self.ENABLE_SMART_LEVERAGE:
+                grade_sizing.append(
+                    f"ENABLE_SMART_LEVERAGE (плечо по грейду: A={self.LEVERAGE_GRADE_A}, "
+                    f"B={self.LEVERAGE_GRADE_B})"
+                )
+            if float(self.DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE) < 1.0:
+                grade_sizing.append(
+                    f"DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE={self.DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE} "
+                    f"(режет размер B ниже A)"
+                )
+            if grade_sizing:
+                blockers.append(
+                    "grade-based sizing is enabled (" + ", ".join(grade_sizing) + ") "
+                    "while the grade axis is measured antipredictive: confidence "
+                    "separates stopped from survived at AUC 0.66 [0.549; 0.772] and "
+                    "grade A expectancy is -0.4257R [-0.75; -0.07] against B at zero. "
+                    "These axes give A more than B, so enabling them bets harder on "
+                    "the losing bucket. Fix the composite score, re-measure, then set "
+                    "GRADE_AXIS_VALIDATED=true deliberately"
+                )
+
         if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
             blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
 

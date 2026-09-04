@@ -4,6 +4,7 @@ from typing import Any
 import pandas as pd
 
 from core.config import settings
+from services.confidence_scale import confidence_base, structure_for_side
 from services.market_data import MarketDataService
 from services.range_strategy import RangeStrategyService
 from services.crt_strategy import CRTStrategyService
@@ -1757,32 +1758,13 @@ class MarketIntelligenceEngine:
             reason = radar_state
 
         # ── Direction-aware confidence_hint ─────────────────────────────────
-        # _score_context uses a "bullishness" scale (trend_up=75, trend_down=25).
-        # For SHORT signals this means bearish alignment scores LOW — the opposite
-        # of what we want. We flip trend and momentum for shorts so that a strong
-        # downtrend correctly yields high confidence for a short candidate.
-        raw_trend      = float(scores.get("trend", 50.0))
-        raw_momentum   = float(scores.get("momentum", 50.0))
-        raw_volume     = float(scores.get("volume", 50.0))
-        raw_structure  = float(scores.get("structure", 50.0))
-        raw_volatility = float(scores.get("volatility", 50.0))
-
-        if action == "short":
-            dir_trend    = 100.0 - raw_trend       # 25 → 75 for trend_down
-            dir_momentum = 100.0 - raw_momentum    # 30 → 70 for bearish
-        else:
-            dir_trend    = raw_trend
-            dir_momentum = raw_momentum
-
+        # `_score_context` считает по бычьей шкале (trend_up=75, trend_down=25),
+        # поэтому для шорта направленные оценки отражаются. Формула живёт в
+        # services/confidence_scale — раньше она была в двух копиях, здесь и в
+        # `_intelligence_effective_confidence`, и правка зеркала в одной из них
+        # дала бы одному сигналу две разные уверенности.
         if action in ("long", "short"):
-            confidence_hint = round(
-                dir_trend    * 0.30
-                + dir_momentum * 0.20
-                + raw_volume   * 0.20
-                + raw_structure * 0.20
-                + raw_volatility * 0.10,
-                2,
-            )
+            confidence_hint = confidence_base(scores, action)
         # hold keeps the raw total computed above
 
         setup_quality = self._score_setup_quality(
@@ -1984,7 +1966,11 @@ class MarketIntelligenceEngine:
             elif weak_volume_count == 2:
                 penalty += 12
 
-        structure_quality = min(scores.get("structure", 0), 100) * 0.25
+        # (#structure-mirror-2026-09-04) По шкале СТОРОНЫ, а не по бычьей.
+        # Здесь ошибка стоила дороже, чем в базе: множитель 0.25 против веса
+        # 0.20, то есть до 7.5 пункта setup_score — больше, чем 7 пунктов между
+        # порогами A (65) и B (58).
+        structure_quality = min(structure_for_side(scores, action), 100) * 0.25
         volatility_quality = min(scores.get("volatility", 0), 100) * 0.15
 
         if "watch_long" in regime and action == "long":
