@@ -115,8 +115,27 @@ def _reached(signal: Signal, plan: dict, marker: str) -> bool | None:
 
 
 def _expectancy(pairs: list[tuple[float, float]]) -> float | None:
+    """Σnet/Σrisk — как в regime_expectancy_report. Взвешено по риску."""
     risk = sum(r for _, r in pairs)
     return (sum(n for n, _ in pairs) / risk) if risk > 0 else None
+
+
+def _mean_r(pairs: list[tuple[float, float]]) -> float | None:
+    """Среднее R ПО СДЕЛКАМ, а не по риску.
+
+    (#tp1-weighting-2026-09-04) Порог выводится из уравнения
+    p*E[дошла] + (1-p)*E[не дошла] = 0, где p — доля СДЕЛОК. Подставлять туда
+    Σnet/Σrisk нельзя: это средневзвешенное по риску, и сравнивать полученный
+    порог с долей по числу сделок значит сравнивать разные величины. На замере
+    04.09 это стоило заметного искажения: у дошедших до TP1 риск на сделку
+    1.572, у недошедших 1.144, так что доля по сделкам 0.271, а по риску 0.338.
+
+    Для решения «брать ли ЭТУ сделку» правильна именно посделочная величина:
+    вопрос не о вкладе в портфель, а об ожидании одного входа.
+    """
+    if not pairs:
+        return None
+    return sum(net / risk for net, risk in pairs) / len(pairs)
 
 
 def _required_rate(e_reached: float | None, e_missed: float | None) -> float | None:
@@ -150,7 +169,7 @@ def _bootstrap(reached: list[tuple[float, float]],
     for _ in range(_ITERS):
         sample_hit = [reached[rng.randrange(len(reached))] for _ in range(len(reached))]
         sample_miss = [missed[rng.randrange(len(missed))] for _ in range(len(missed))]
-        a, b = _expectancy(sample_hit), _expectancy(sample_miss)
+        a, b = _mean_r(sample_hit), _mean_r(sample_miss)
         if a is None or b is None:
             continue
         e_hit.append(a)
@@ -185,9 +204,14 @@ def _group(pairs: list[tuple[float, float]], signals: list[Signal]) -> dict:
         slot["net_usdt"] = round(slot["net_usdt"] + _honest_net(signal), 4)
 
     expectancy = _expectancy(pairs)
+    mean_r = _mean_r(pairs)
     return {
         "n": len(pairs),
+        # Взвешенное по риску — для сопоставимости с остальными отчётами.
         "expectancy_r": round(expectancy, 4) if expectancy is not None else None,
+        # Посделочное — из него и выводится порог.
+        "mean_r": round(mean_r, 4) if mean_r is not None else None,
+        "risk_usdt": round(sum(r for _, r in pairs), 4),
         "net_usdt": round(sum(n for n, _ in pairs), 4),
         "by_close_reason": dict(
             sorted(by_reason.items(), key=lambda kv: kv[1]["n"], reverse=True)
@@ -229,11 +253,15 @@ def build(db: Session, *, window_hours: float = 720.0, marker: str = "geometric"
             missed_pairs.append(pair)
             missed_signals.append(signal)
 
-    e_reached = _expectancy(reached_pairs)
-    e_missed = _expectancy(missed_pairs)
+    e_reached = _mean_r(reached_pairs)
+    e_missed = _mean_r(missed_pairs)
     required = _required_rate(e_reached, e_missed)
     total = len(reached_pairs) + len(missed_pairs)
     observed = (len(reached_pairs) / total) if total else None
+
+    risk_reached = sum(r for _, r in reached_pairs)
+    risk_total = risk_reached + sum(r for _, r in missed_pairs)
+    observed_risk_share = (risk_reached / risk_total) if risk_total > 0 else None
 
     return {
         "window_hours": float(window_hours),
@@ -243,6 +271,11 @@ def build(db: Session, *, window_hours: float = 720.0, marker: str = "geometric"
         "reached_tp1": _group(reached_pairs, reached_signals),
         "missed_tp1": _group(missed_pairs, missed_signals),
         "observed_rate": round(observed, 4) if observed is not None else None,
+        # Та же доля, но взвешенная по риску. Печатается рядом, потому что
+        # сравнивать порог надо с ОДНОЙ из них, и разница между ними бывает
+        # велика: 04.09 это 0.271 против 0.338.
+        "observed_risk_share": (round(observed_risk_share, 4)
+                                if observed_risk_share is not None else None),
         # Честный порог: частота достижения TP1, при которой сделка в нуле.
         # Заменяет 1/(1+RR), где выигрыш и проигрыш постулированы.
         "required_rate": round(required, 4) if required is not None else None,
@@ -254,7 +287,10 @@ def build(db: Session, *, window_hours: float = 720.0, marker: str = "geometric"
             "Сравнивать с observed_rate. Если required_rate = null, дошедшие до "
             "TP1 не лучше недошедших: порога не существует и чинить надо не "
             "гейт, а сам выход. Интервал порога бутстрапится целиком; при "
-            "spread_positive_share < 0.95 порог не установлен."
+            "spread_positive_share < 0.95 порог не установлен. Порог и "
+            "observed_rate — обе величины ПОСДЕЛОЧНЫЕ; expectancy_r и "
+            "observed_risk_share взвешены по риску и приведены для сравнения с "
+            "остальными отчётами, но между собой эти две пары не смешивать."
         ),
     }
 

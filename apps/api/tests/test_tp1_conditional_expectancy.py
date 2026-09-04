@@ -235,3 +235,42 @@ def test_empty_history_does_not_explode(db):
     assert out["closed"] == 0
     assert out["required_rate"] is None
     assert out["verdict"] == "sample_too_thin"
+
+
+def test_threshold_and_observed_rate_are_the_same_kind_of_quantity(db):
+    """(#tp1-weighting-2026-09-04) Моя же ошибка в первом замере: порог
+    выводился из Σnet/Σrisk (взвешено по РИСКУ), а сравнивался с долей по
+    ЧИСЛУ сделок. При разном риске на сделку это разные величины.
+
+    Здесь у дошедших риск вдвое больше. Порог обязан считаться по посделочному
+    среднему и сходиться с долей по сделкам, а взвешенная по риску доля —
+    печататься отдельно и заметно отличаться.
+    """
+    for _ in range(6):
+        _sig(db, net=2.0, mfe=1.5, risk=2.0)      # +1R на сделку, риск 2.0
+    for _ in range(6):
+        _sig(db, net=-1.0, mfe=0.2, risk=1.0)     # −1R на сделку, риск 1.0
+
+    out = build(db)
+
+    assert out["reached_tp1"]["mean_r"] == pytest.approx(1.0)
+    assert out["reached_tp1"]["expectancy_r"] == pytest.approx(1.0)
+    assert out["required_rate"] == pytest.approx(0.5, abs=1e-4)
+
+    assert out["observed_rate"] == pytest.approx(0.5)          # по сделкам
+    assert out["observed_risk_share"] == pytest.approx(2 / 3, abs=1e-4)  # по риску
+    assert out["verdict"] == "clears_the_bar"
+
+
+def test_risk_weighted_view_is_kept_for_comparison_with_other_reports(db):
+    """expectancy_r остаётся Σnet/Σrisk — тем же, что в regime_expectancy_report
+    и stop_loss_forensics. Три отчёта по одним сделкам обязаны давать одно
+    число, иначе сверить их между собой нельзя."""
+    _sig(db, net=4.0, mfe=1.5, risk=4.0)
+    _sig(db, net=1.0, mfe=1.5, risk=1.0)
+
+    group = build(db)["reached_tp1"]
+
+    assert group["expectancy_r"] == pytest.approx(1.0)   # 5.0 / 5.0
+    assert group["mean_r"] == pytest.approx(1.0)
+    assert group["risk_usdt"] == pytest.approx(5.0)
