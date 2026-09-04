@@ -876,6 +876,11 @@ function decisionLabel(code: string | null | undefined) {
     loop_skip_live_safety: "⛔ Цикл стоит: предохранитель live-safety",
     loop_skip_validation_gates: "⛔ Цикл стоит: гейты готовности к live",
     loop_resumed: "▶ Цикл возобновил работу",
+    // (#scan-visibility-2026-09-05) Вторая ось молчания: цикл работает, шаги
+    // делаются, но ни один символ не дошёл до одобрения. 04.09 лента молчала
+    // так семь часов и читалась как остановка робота.
+    scan_no_candidate: "😴 Ни одного кандидата за проход",
+    scan_candidates_resumed: "▶ Кандидаты снова появились",
 
     // качество сетапа (learning-контур)
     setup_confirmed: "Сетап подтверждён",

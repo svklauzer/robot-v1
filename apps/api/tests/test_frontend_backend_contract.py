@@ -258,3 +258,20 @@ def test_shadow_mode_is_visible_to_the_owner():
     """
     page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
     assert 'impulse_latch.mode === "shadow"' in page
+
+
+def test_scan_silence_codes_are_labelled_in_the_feed():
+    """(#scan-visibility-2026-09-05) Код без подписи выводится сырым, а эта
+    запись существует ровно затем, чтобы отличить «робот встал» от «рынок не
+    даёт сетапов». Сырой `scan_no_candidate` в ленте не отвечает ни на один из
+    этих вопросов.
+    """
+    from services.loop_skip_reporter import (
+        DECISION_SCAN_NO_CANDIDATE, DECISION_SCAN_RESUMED,
+    )
+
+    page = (WEB / "app" / "intelligence" / "page.tsx").read_text(encoding="utf-8")
+
+    missing = sorted(code for code in (DECISION_SCAN_NO_CANDIDATE, DECISION_SCAN_RESUMED)
+                     if f"{code}:" not in page)
+    assert missing == [], f"коды молчания без подписи в ленте: {missing}"
