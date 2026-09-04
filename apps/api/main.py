@@ -41,6 +41,7 @@ from services.market_data import MarketDataService
 from services.market_connectivity import MarketConnectivityService
 from services.exchange_reconciliation import ExchangeReconciliationService
 from services import exchange_switch_guard
+from services.loop_skip_reporter import LoopSkipReporter
 from services.strategy_engine import StrategyEngine
 from services.ml_scorer import MLScorer
 from services.telegram_router import TelegramRouter
@@ -158,6 +159,10 @@ async def background_robot_loop():
     await asyncio.sleep(5)
 
     loop = RobotLoop()
+    # (#loop-skip-visibility-2026-09-04) Состояние между тиками: пишем причину
+    # простоя на смену состояния и редким пульсом, а не каждый тик — иначе за
+    # 5.5-часовой простой лента получила бы ~320 одинаковых записей.
+    skip_reporter = LoopSkipReporter()
 
     while robot_loop_enabled:
         db = SessionLocal()
@@ -181,18 +186,48 @@ async def background_robot_loop():
                     # background_manage_loop, этот гейт её не задевает.
                     exchange_switch = await asyncio.to_thread(exchange_switch_guard.check)
 
+                # (#loop-skip-visibility-2026-09-04) Причина простоя обязана
+                # попадать в ЛЕНТУ РЕШЕНИЙ, а не только в лог Render. 04.09
+                # цикл стоял 5 ч 50 мин, и на всех экранах это выглядело как
+                # работающая система: робот «running», задача жива, сеть цела,
+                # лента просто пуста. Час ушёл на поиск того, что должно
+                # читаться с экрана.
                 if validation_gates.get("live_blockers"):
-                    pass
+                    skip_reporter.report(
+                        db, loop.decisions,
+                        reason="loop_skip_validation_gates",
+                        payload={"blockers": validation_gates.get("live_blockers")},
+                    )
+                    db.commit()
                 elif not exchange_switch.get("safe", True):
                     log_event(logger, logging.WARNING, "robot_loop_exchange_switch_skip", **exchange_switch)
+                    skip_reporter.report(
+                        db, loop.decisions,
+                        reason="loop_skip_exchange_switch",
+                        payload=exchange_switch,
+                    )
+                    db.commit()
                 else:
                     equity_usdt = await asyncio.to_thread(effective_equity_usdt)
                     safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
 
                     if safety.get("blocked"):
-                        db.commit()
                         log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
+                        skip_reporter.report(
+                            db, loop.decisions,
+                            reason="loop_skip_live_safety",
+                            payload={"blockers": safety.get("blockers"), **{
+                                k: safety.get(k) for k in
+                                ("daily_loss_pct", "max_daily_loss_pct",
+                                 "trades_today", "max_trades_per_day",
+                                 "kill_switch_enabled", "kill_switch_reason")
+                            }},
+                        )
+                        db.commit()
                     else:
+                        # Цикл дошёл до торговли — если до этого стоял, лента
+                        # обязана зафиксировать момент возобновления.
+                        skip_reporter.report(db, loop.decisions, reason=None)
                         async with position_manage_lock:
                             await loop.step(
                                 db=db,
