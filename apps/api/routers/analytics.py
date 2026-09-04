@@ -228,6 +228,29 @@ def analytics_regime_expectancy(window_hours: float = 720.0, max_rows: int = 400
         db.close()
 
 
+@router.get("/stop-forensics", dependencies=[Depends(require_owner_action)])
+def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = None,
+                             max_rows: int = 4000):
+    """(#stop-forensics-2026-09-04) Чем сделка, дошедшая до стопа, отличалась
+    НА ВХОДЕ от остальных.
+
+    Замер 04.09: 37 стопов дали −53.82 USDT, остальные 54 сделки +34.16. Без
+    стопов система прибыльна — весь минус в одном ведре, и сопровождение тут
+    ни при чём (tz_kama режет в среднем по −0.38, breakeven_stop вообще в
+    плюс). Значит вопрос к отбору входов.
+
+    Сравнивает распределения признаков входа между двумя группами. Ничего не
+    блокирует и ничего не меняет — только показания.
+    """
+    from services.stop_loss_forensics import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, regime=regime, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/depth-coverage", dependencies=[Depends(require_owner_action)])
 def analytics_depth_coverage(limit: int = 200):
     """(#depth-failopen-2026-07-27) Сколько входов прошло БЕЗ данных стакана.
