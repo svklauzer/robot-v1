@@ -124,6 +124,8 @@ def test_snapshot_carries_the_reasoning_not_just_a_flag():
     assert snap["impulse"]["age_sec"] == pytest.approx(600.0)
     assert snap["mode"] == "shadow"
     assert snap["window_sec"] == pytest.approx(1800.0)
+    # Третье значение того же порога — рядом со снимком, а не только в коде.
+    assert snap["adx_rise_min"] == pytest.approx(0.0)
 
 
 # ── влияние на вход ─────────────────────────────────────────────────────────

@@ -177,6 +177,12 @@ class ImpulseLatch:
         return {
             "mode": mode(),
             "window_sec": _window_sec(),
+            # (#adx-label-2026-09-05) Порог печатается рядом со снимком: «растёт
+            # ли ADX» проверяется в трёх местах и с разными ответами — строго
+            # больше нуля в условиях ТЗ, ANTI_CHOP_YOUNG_ADX_RISE_MIN в
+            # анти-чопе, эта настройка здесь. Пока значения не видно в
+            # телеметрии, расхождение приходится искать по коду.
+            "adx_rise_min": float(getattr(settings, "ENTRY_IMPULSE_ADX_RISE_MIN", 0.0)),
             "live": impulse is not None,
             "impulse": impulse.as_dict(moment) if impulse else None,
         }
