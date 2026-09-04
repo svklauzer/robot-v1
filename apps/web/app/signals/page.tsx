@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import GradeBadge from "../../components/GradeBadge";
 import { RefreshCw } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
@@ -721,21 +722,6 @@ function ExchangeBadge({ exchange }: { exchange?: string | null }) {
   );
 }
 
-function GradeBadge({ grade }: { grade?: string | null }) {
-  return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${gradeClass(grade)}`}>
-      {grade || "-"}
-    </span>
-  );
-}
-
-function gradeClass(grade?: string | null) {
-  if (grade === "A+") return "bg-emerald-500 text-black";
-  if (grade === "A") return "bg-emerald-800 text-emerald-100";
-  if (grade === "B") return "bg-yellow-600 text-black";
-  if (grade === "C") return "bg-red-700 text-white";
-  return "bg-emerald-950 text-emerald-200";
-}
 
 function statusClass(status?: string | null) {
   if (status === "opened") return "bg-blue-700 text-white";

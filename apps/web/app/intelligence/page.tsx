@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import { RefreshCw } from "lucide-react";
@@ -724,22 +725,6 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function GradeBadge({ grade }: { grade: string }) {
-  const cls =
-    grade === "A+"
-      ? "bg-emerald-500 text-black"
-      : grade === "A"
-        ? "bg-emerald-800 text-emerald-100"
-        : grade === "B"
-          ? "bg-yellow-600 text-black"
-          : "bg-red-700 text-white";
-
-  return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
-      {grade}
-    </span>
-  );
-}
 
 function PlanBadge({ valid }: { valid: boolean }) {
   return (

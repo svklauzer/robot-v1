@@ -51,10 +51,20 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # торговый порог выглядит как случайная инфраструктурная переменная.
     ("Выходы", ("EXIT_", "BREAKEVEN_", "MFE_", "TP1_", "TP2_", "TP_", "POST_TP1_",
                 "PROTECTIVE_", "FAILED_SETUP_")),
-    ("Риск и сайзинг", ("RISK_", "MAX_POSITION", "MAX_USED", "SIZING_", "DYNAMIC_MARGIN", "LEVERAGE", "MAX_LEVERAGE")),
+    # (#grade-axis-2026-09-04) GRADE_ — это про размер ставки, а не про качество
+    # сигнала: флаг разрешает сайзинг по грейду, ось которого измерена
+    # антипредсказательной. В «Прочем» предохранитель выглядит как техническая
+    # переменная и снимается не глядя.
+    ("Риск и сайзинг", ("RISK_", "MAX_POSITION", "MAX_USED", "SIZING_", "DYNAMIC_MARGIN",
+                        "LEVERAGE", "MAX_LEVERAGE", "GRADE_AXIS")),
     # ANTI_CHOP_ — гейт входа, а не «прочее»: он решает, брать ли сделку вообще.
     ("Анти-дрейн и гейты", ("ANTI_DRAIN", "ANTI_CHOP_", "HTF_ALIGN", "RANGE_POS_",
-                            "PROD_GATE", "SYMBOL_PERF", "REENTRY_", "POST_LOSS", "CORR_CLUSTER")),
+                            "PROD_GATE", "SYMBOL_PERF", "REENTRY_", "POST_LOSS", "CORR_CLUSTER",
+                            # GRADE_*_MIN_SCORE решают, КАКОЙ грейд получит сигнал,
+                            # то есть это пороги отбора рядом с PROD_GATE_, а не
+                            # сайзинг. GRADE_AXIS_ выше — про размер ставки, и
+                            # совпадает раньше по порядку групп.
+                            "GRADE_")),
     ("Стакан / ликвидность", ("OB_", "ORDERBOOK", "LIQUIDITY", "DEPTH_", "SLIPPAGE")),
     # OKX_ и ACTIVE_EXCHANGE — там же, где HTX_: это маршрут исполнения.
     ("Комиссии и маршрут", ("SPOT_", "FUTURES_", "EXECUTION_", "MARKET_", "HTX_",
@@ -116,6 +126,11 @@ _PINNED_PREFIXES: tuple[str, ...] = (
     # первого изменения дефолта в коде, после чего прод молча уезжает.
     "ANTI_CHOP_", "HTF_ALIGN", "RANGE_POS_",
     "ACTIVE_EXCHANGE", "OKX_",          # маршрут исполнения: какая биржа и чем
+    # (#grade-axis-2026-09-04) Предохранитель сайзинга по грейду. Совпадает с
+    # дефолтом кода — и именно поэтому обязан стоять в блупринте явно: смена
+    # дефолта на true молча разблокировала бы ставку на измеренно убыточное
+    # ведро, без единой строки в диффе прода.
+    "GRADE_AXIS_",
     # (#loop-knobs-pinning-2026-09-04) Поведение самого цикла. Страница
     # советовала вычистить LOOP_SKIP_HEARTBEAT_SEC — ключ, задающий, как часто
     # цикл сообщает о простое. Ровно тот же промах, что утром был у ANTI_CHOP_

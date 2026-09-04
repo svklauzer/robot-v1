@@ -34,6 +34,7 @@ from models.payment import BillingPlan, Payment, PaymentEvent
 from models.funding_arbitrage import FundingArbOpportunity, FundingArbPosition
 
 from workers.robot_loop import RobotLoop
+from services.confidence_scale import confidence_base
 from services.signal_broadcaster import SignalBroadcaster
 from services.signal_lifecycle import SignalLifecycleManager
 from services.signal_quality import SignalQualityService
@@ -2705,7 +2706,8 @@ def _intelligence_effective_confidence(result) -> float:
     Калибрует confidence для Intelligence-сигналов.
 
     Этапы:
-    1. Base = direction-aware confidence_hint (inverting trend/momentum for shorts)
+    1. Base = direction-aware confidence_hint (trend/momentum/structure зеркалятся
+       для шортов — см. services/confidence_scale)
     2. Setup quality adjustment via setup_score
     3. Cap at 88 для strong setups, 80 для moderate
 
@@ -2715,29 +2717,16 @@ def _intelligence_effective_confidence(result) -> float:
     """
     raw_base = float(result.confidence_hint or 0)
 
-    # Direction-aware base: mirror the formula in _build_multi_timeframe_candidate
+    # (#structure-mirror-2026-09-04) Формула была скопирована сюда из
+    # `_build_multi_timeframe_candidate`, и docstring честно называл её
+    # «mirror the formula in ...». Копия и оригинал обязаны совпадать до
+    # знака, поэтому теперь обе зовут services/confidence_scale: правка
+    # зеркала, попавшая в одну из них, давала бы одному сигналу две разные
+    # уверенности — на скане одну, в опубликованном сигнале другую.
     action = str(getattr(result, "action", "") or "").lower()
     scores = result.scores if isinstance(result.scores, dict) else {}
 
-    if action in ("long", "short") and scores:
-        raw_trend    = float(scores.get("trend", 50.0))
-        raw_momentum = float(scores.get("momentum", 50.0))
-        if action == "short":
-            dir_trend    = 100.0 - raw_trend
-            dir_momentum = 100.0 - raw_momentum
-        else:
-            dir_trend    = raw_trend
-            dir_momentum = raw_momentum
-        base = round(
-            dir_trend    * 0.30
-            + dir_momentum * 0.20
-            + float(scores.get("volume", 50.0))    * 0.20
-            + float(scores.get("structure", 50.0)) * 0.20
-            + float(scores.get("volatility", 50.0)) * 0.10,
-            2,
-        )
-    else:
-        base = raw_base
+    base = confidence_base(scores, action) if (action in ("long", "short") and scores) else raw_base
 
     setup_quality = result.setup_quality if isinstance(result.setup_quality, dict) else {}
     setup_score   = float(setup_quality.get("final_score") or 0)
