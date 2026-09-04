@@ -275,3 +275,18 @@ def test_scan_silence_codes_are_labelled_in_the_feed():
     missing = sorted(code for code in (DECISION_SCAN_NO_CANDIDATE, DECISION_SCAN_RESUMED)
                      if f"{code}:" not in page)
     assert missing == [], f"коды молчания без подписи в ленте: {missing}"
+
+
+def test_backtest_page_shows_which_exit_model_it_replayed():
+    """(#replay-partials-2026-09-05) Модель описывала лестницу от 27.07, а живой
+    выход с тех пор получил частичную фиксацию на TP1 и на TP2. Инструмент
+    выглядел одинаково авторитетно в обоих случаях, и его собственная проверка
+    точности уже показывала разрыв 3.81 п.п. при выводе в 0.04.
+
+    Поля модели без места на странице — телеметрия, которую никто не откроет.
+    """
+    page = (WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8")
+
+    for field in ("exit_model", "tp1_partial_share", "tp2_partial_share",
+                  "trades_without_targets", "sources"):
+        assert field in page, f"страница не показывает {field}"

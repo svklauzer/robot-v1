@@ -67,6 +67,103 @@ def _load_rows(path: Path) -> list[dict]:
     return rows
 
 
+def rows_from_db(limit: int, *, db=None) -> list[dict]:
+    """Строки для replay из БД (#replay-durable-source-2026-09-05).
+
+    Логгер пишет в `trade_outcomes.jsonl` на постоянном диске Render, и файл
+    переживает деплои — я сперва решил обратное и ошибся. Причина взять БД
+    другая: строка логгера не несёт геометрию целей, а без `tp1_dist_pct` и
+    `tp2_dist_pct` нельзя воспроизвести частичные фиксации, то есть половину
+    сегодняшней лестницы выхода.
+
+    Файл не выбрасывается: он хранит сделки, которых в окне выборки БД может
+    уже не быть. Источники сливаются по `signal_id`, БД главнее — она заведомо
+    полнее по полям.
+    """
+    from models.signal import Signal
+
+    own_session = db is None
+    session = db
+    try:
+        if own_session:
+            from core.db import SessionLocal
+            session = SessionLocal()
+        signals = (
+            session.query(Signal)
+            .filter(Signal.status == "closed", Signal.closed_at.isnot(None))
+            .order_by(Signal.closed_at.desc())
+            .limit(int(limit))
+            .all()
+        )
+    except Exception:  # noqa: BLE001
+        # Недоступная БД не имеет права ронять инструмент: до этой правки он
+        # читал только файл и работал. Второй источник обязан добавлять данные,
+        # а не отнимать работоспособность. Отсутствие видно в `sources`.
+        return []
+    finally:
+        if own_session and session is not None:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    rows: list[dict] = []
+    for s in reversed(signals):            # хронологический порядок, как в файле
+        plan = s.plan_json if isinstance(s.plan_json, dict) else {}
+        rows.append({
+            "signal_id": s.id,
+            "symbol": s.symbol,
+            "trade_mode": plan.get("trade_mode"),
+            "result_pct": s.result_pct,
+            "qty": s.qty,
+            "closed_total_cost": s.closed_total_cost,
+            "closed_reason": s.closed_reason,
+            "lifecycle": plan.get("lifecycle") or {},
+            # Геометрия целей — ради неё БД и понадобилась: без дистанций до
+            # TP1/TP2 частичные фиксации не воспроизводятся вовсе.
+            "tp_reach": plan.get("tp_reach") or {},
+        })
+    return rows
+
+
+def _merged_rows(limit: int, *, db=None) -> tuple[list[dict], dict]:
+    """БД плюс уцелевший файл, без дублей. Возвращает (строки, сводка источников).
+
+    Сводка возвращается наружу намеренно: пустой результат обязан объяснять
+    себя. «Нет данных» и «файл стёрт деплоем, а в БД 96 закрытых сделок» — это
+    разные ответы, и первый из них полдня выглядел как поломка инструмента.
+    """
+    db_rows = rows_from_db(limit, db=db)
+
+    from services.ml_trade_logger import MLTradeLogger
+    file_rows = _load_rows(Path(MLTradeLogger().path))
+
+    by_id: dict = {}
+    # Строки без `signal_id` дедуплицировать не по чему, но выбрасывать их
+    # нельзя: логгер пишет идентификатор не всегда, и молчаливая потеря таких
+    # сделок уменьшила бы выборку без единого следа в отчёте.
+    unkeyed: list[dict] = []
+    for row in file_rows:
+        key = row.get("signal_id")
+        if key is None:
+            unkeyed.append(row)
+        else:
+            by_id[key] = row
+
+    file_keyed = len(by_id)
+    for row in db_rows:
+        by_id[row["signal_id"]] = row      # БД главнее: у неё есть геометрия целей
+
+    merged = (unkeyed + list(by_id.values()))[-int(limit):]
+    return merged, {
+        "db_rows": len(db_rows),
+        "file_rows": len(file_rows),
+        "file_without_id": len(unkeyed),
+        "file_only": max(0, file_keyed - sum(1 for r in db_rows if r["signal_id"] in by_id)),
+        "used": len(merged),
+    }
+
+
 def _honest_final_pct(row: dict, traj: list, final_pct: float) -> tuple[float, bool]:
     """(#replay-honesty-2026-07-25) Честный результат фактического закрытия.
 
@@ -177,6 +274,11 @@ def _replay_trend_one(
     capture_drawdown: float = 0.30,
     capture_share: float = 0.40,
     cost_pct: float = 0.0,
+    tp1_pct: float | None = None,
+    tp2_pct: float | None = None,
+    tp1_share: float = 0.0,
+    tp2_share: float = 0.0,
+    tp2_trigger: float = 0.92,
 ) -> tuple[float, str]:
     """(#backtest-trend-2026-07-27) Трендовая лестница выхода по траектории.
 
@@ -200,8 +302,33 @@ def _replay_trend_one(
     `final_pct` уже чистый. Пороги (`min_protective`, `band_floor`) сравниваются
     с ВАЛОВЫМ `pct` — так же, как в бою: `exit_policy` смотрит на движение цены,
     а издержки вычитаются при закрытии.
+
+    (#replay-partials-2026-09-05) Частичные фиксации. Лестница выше описывала
+    выход по состоянию на 27.07, а живой контур с тех пор закрывает долю на TP1,
+    ведёт остаток трейлом, закрывает ещё долю на TP2 (на 92% пути) и трейлит
+    хвост. Модель без этих ног отвечает про машину, которой у нас нет, — и
+    встроенный `_fidelity_verdict` это уже показывал: разрыв модели с фактом
+    3.81 п.п. при собственном выводе в 0.04, то есть ошибка в 91 раз больше
+    заключения.
+
+    Издержки при этом остаются сравнимыми между вариантами, хотя число филлов
+    у них разное. Вход оплачен один раз на полный объём, а сумма долей выходов
+    равна единице при любом дроблении — значит совокупный круг тот же. Разными
+    были бы проскальзывание и минимальный размер ордера, но их replay и так не
+    моделирует ни в одном варианте.
     """
     mfe = 0.0
+    # Доля позиции, ещё не закрытая, и уже забронированный результат по
+    # закрытым долям. Пока частичные фиксации выключены (доли 0), обе величины
+    # ведут себя как раньше: остаток 1.0, бронь 0.0.
+    remaining = 1.0
+    booked = 0.0
+    tp1_done = tp1_pct is None or tp1_share <= 0.0
+    tp2_done = tp2_pct is None or tp2_share <= 0.0
+
+    def close(part: float, at_pct: float, reason: str) -> tuple[float, str]:
+        return booked + part * at_pct - cost_pct, reason
+
     for point in traj:
         try:
             pct = _sanitize_float(point[1], 0.0)
@@ -209,10 +336,21 @@ def _replay_trend_one(
             continue
         mfe = max(mfe, pct)
 
+        # Частичные фиксации идут ПЕРВЫМИ на баре: в бою они срабатывают на
+        # достижении цели, до того как защитные ярусы посмотрят на откат.
+        if not tp1_done and pct >= tp1_pct:
+            booked += remaining * tp1_share * tp1_pct
+            remaining -= remaining * tp1_share
+            tp1_done = True
+        if not tp2_done and pct >= tp2_pct * tp2_trigger:
+            booked += remaining * tp2_share * pct
+            remaining -= remaining * tp2_share
+            tp2_done = True
+
         if mfe >= ride_arm:
             protect = mfe * (1.0 - ride_trail)
             if pct <= protect and pct >= min_protective:
-                return pct - cost_pct, "replay_trend_trail"
+                return close(remaining, pct, "replay_trend_trail")
         elif capture_start is not None and mfe >= capture_start:
             # adaptive_mfe_capture: пик набран, откат превысил порог — забираем
             # долю пика. Ярус живёт МЕЖДУ ride и полосой захвата, поэтому его
@@ -220,16 +358,26 @@ def _replay_trend_one(
             if (mfe - pct) >= capture_drawdown and pct >= max(
                 mfe * capture_share, min_protective
             ):
-                return pct - cost_pct, "replay_mfe_capture"
+                return close(remaining, pct, "replay_mfe_capture")
         elif mfe >= band_arm:
             if (mfe - pct) >= mfe * band_give and pct >= max(band_floor, min_protective):
-                return pct - cost_pct, "replay_capture_band"
+                return close(remaining, pct, "replay_capture_band")
 
         # Замок безубытка — последний рубеж; срабатывает, когда цена вернулась
         # к входу. Порогом min_protective НЕ гейтится: это стоп, а не фиксация.
         if mfe >= be_arm and pct <= be_floor:
-            return pct - cost_pct, "replay_breakeven"
+            return close(remaining, pct, "replay_breakeven")
 
+    # Ни один ярус не сработал: остаток закрывается фактом. Уже снятые доли
+    # сохраняются — иначе частичная фиксация исчезала бы всякий раз, когда
+    # сделка досидела до конца, то есть ровно в самых обычных случаях.
+    if booked or remaining < 1.0:
+        # (#replay-units-2026-08-03, продолжение) Доли забронированы ВАЛОВЫМИ,
+        # а `final_pct` уже чистый. Смешивать нельзя: остаток возвращается к
+        # валовой шкале, и круг издержек снимается один раз со всей позиции —
+        # ровно как у ярусов выше. При выключенных долях выражение сводится к
+        # `final_pct`, то есть прежнее поведение сохраняется в точности.
+        return booked + remaining * (final_pct + cost_pct) - cost_pct, "actual_close_partial"
     return final_pct, "actual_close"
 
 
@@ -328,9 +476,7 @@ def _split_check(trades: list[dict], run, best_key: dict, keyfn) -> dict:
 
 
 def build(limit: int = 2000) -> dict:
-    from services.ml_trade_logger import MLTradeLogger
-    path = MLTradeLogger().path
-    rows = _load_rows(Path(path))[-int(limit):]
+    rows, sources = _merged_rows(limit)
 
     trades = []
     skipped_no_traj = 0
@@ -471,7 +617,7 @@ def build_trend(limit: int = 2000) -> dict:
     """
     from services.ml_trade_logger import MLTradeLogger
 
-    rows = _load_rows(Path(MLTradeLogger().path))[-int(limit):]
+    rows, sources = _merged_rows(limit)
 
     trades: list[dict] = []
     skipped_no_traj = 0
@@ -499,12 +645,20 @@ def build_trend(limit: int = 2000) -> dict:
             "symbol": r.get("symbol"),
             "signal_id": r.get("signal_id"),
             "mfe_pct": lc.get("mfe_pct"),
+            # (#replay-partials-2026-09-05) Дистанции до целей. Есть только у
+            # строк из БД: логгер их не пишет. Без них частичные фиксации у
+            # сделки не воспроизводятся, и она считается по старой лестнице —
+            # такие сделки пересчитываются отдельно, чтобы частично
+            # смоделированная выборка не выглядела полностью смоделированной.
+            "tp1_dist_pct": _sanitize_float((r.get("tp_reach") or {}).get("tp1_dist_pct"), 0.0) or None,
+            "tp2_dist_pct": _sanitize_float((r.get("tp_reach") or {}).get("tp2_dist_pct"), 0.0) or None,
         })
 
     if not trades:
         return {
             "status": "no_data",
             "profile": "trend",
+            "sources": sources,
             "skipped_no_trajectory": skipped_no_traj,
             "message": ("Нет трендовых сделок с записанной траекторией. "
                         "Траектории пишутся с момента включения TRAJ_RECORD_ENABLED."),
@@ -553,6 +707,20 @@ def build_trend(limit: int = 2000) -> dict:
     min_protectives = sorted({*min_protectives, current["min_protective_pct"]})
     ride_arms = sorted({*ride_arms, current["ride_arm_pct"]})
 
+    # (#replay-partials-2026-09-05) Частичные фиксации берутся ЖИВЫЕ и
+    # одинаковые для всех вариантов. Перебирать их вместе с семью параметрами
+    # лестницы означало бы умножить сетку и вернуться к подгонке, от которой
+    # тут стоит `_split_check`. Сначала модель обязана воспроизводить машину,
+    # которая реально работает; перебор долей — следующий разговор.
+    partials = {
+        "tp1_share": (_sanitize_float(getattr(settings, "TP1_PARTIAL_CLOSE_SHARE", 0.5), 0.5)
+                      if bool(getattr(settings, "TP1_PARTIAL_ENABLED", True)) else 0.0),
+        "tp2_share": (_sanitize_float(getattr(settings, "TP2_PARTIAL_CLOSE_SHARE", 0.5), 0.5)
+                      if bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True)) else 0.0),
+        "tp2_trigger": 0.92,
+    }
+    with_targets = sum(1 for t in trades if t.get("tp1_dist_pct"))
+
     def _run(subset: list[dict]) -> list[dict]:
         out = []
         for be_arm, be_floor, band_arm, band_give, ride_trail, min_prot, ride_arm in product(
@@ -569,6 +737,11 @@ def build_trend(limit: int = 2000) -> dict:
                     ride_arm=ride_arm, ride_trail=ride_trail,
                     min_protective=min_prot,
                     cost_pct=t.get("cost_pct", 0.0),
+                    tp1_pct=t.get("tp1_dist_pct"),
+                    tp2_pct=t.get("tp2_dist_pct"),
+                    tp1_share=partials["tp1_share"],
+                    tp2_share=partials["tp2_share"],
+                    tp2_trigger=partials["tp2_trigger"],
                 )
                 total += pct
                 wins += int(pct > 0)
@@ -641,6 +814,22 @@ def build_trend(limit: int = 2000) -> dict:
     return {
         "status": "ok",
         "profile": "trend",
+        # (#replay-partials-2026-09-05) Чем именно моделировали. Без этого блока
+        # инструмент выглядит одинаково авторитетно и когда воспроизводит
+        # сегодняшний выход, и когда отвечает про лестницу от 27.07.
+        "exit_model": {
+            "ladder": ["breakeven_lock", "capture_band", "mfe_capture", "ride_trail"],
+            "tp1_partial_share": partials["tp1_share"],
+            "tp2_partial_share": partials["tp2_share"],
+            "tp2_trigger_share": partials["tp2_trigger"],
+            "trades_with_targets": with_targets,
+            "trades_without_targets": len(trades) - with_targets,
+            "note": ("Доли частичных фиксаций берутся живые и одинаковые для всех "
+                     "вариантов — перебирается только лестница. Сделки без "
+                     "геометрии целей считаются по старой лестнице: у строк из "
+                     "файла логгера дистанций до TP1/TP2 нет."),
+        },
+        "sources": sources,
         "fidelity": fidelity,
         "inert_axes": inert_axes,
         "trades_replayed": len(trades),
@@ -747,7 +936,7 @@ def _load_trades(regime: str, limit: int) -> tuple[list[dict], int, int]:
     from services.ml_trade_logger import MLTradeLogger
 
     allowed = REGIME_MODES.get(regime, REGIME_MODES["trend"])
-    rows = _load_rows(Path(MLTradeLogger().path))[-int(limit):]
+    rows, sources = _merged_rows(limit)
 
     trades: list[dict] = []
     skipped = 0
