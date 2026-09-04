@@ -105,6 +105,14 @@ export default function BacktestPage() {
               Пропущено без траектории: {data.skipped_no_trajectory}
             </p>
           )}
+          {/* «Данных нет» обязано объяснять себя: пустой файл логгера и пустая
+              БД — разные диагнозы, а выглядят одинаково. */}
+          {data.sources && (
+            <p className="mt-2 text-xs text-yellow-100/50">
+              Источник: БД {data.sources.db_rows} строк · файл логгера {data.sources.file_rows} ·
+              в работе {data.sources.used}.
+            </p>
+          )}
         </section>
       )}
 
@@ -152,6 +160,43 @@ export default function BacktestPage() {
               }
             />
           </section>
+
+          {/* (#replay-partials-2026-09-05) Чем моделировали — прежде таблицы и
+              прежде проверки на подгонку. До этой правки страница выглядела
+              одинаково авторитетно и когда воспроизводила сегодняшний выход, и
+              когда отвечала про лестницу от 27.07: частичные фиксации на TP1 и
+              TP2 в модели отсутствовали вовсе. Читателю нужно знать, про какую
+              машину ответ, прежде чем читать сам ответ. */}
+          {data.exit_model && (
+            <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
+              <h2 className="text-lg font-semibold text-emerald-100">Что моделировали</h2>
+              <p className="mt-2 text-sm text-emerald-100/70">
+                Лестница: {(data.exit_model.ladder || []).join(" → ")}. Частичные фиксации берутся
+                живые и одинаковые для всех вариантов: на TP1 закрывается{" "}
+                <b>{Math.round((data.exit_model.tp1_partial_share ?? 0) * 100)}%</b>, на{" "}
+                <b>{Math.round((data.exit_model.tp2_trigger_share ?? 0) * 100)}%</b> пути до TP2 —
+                ещё <b>{Math.round((data.exit_model.tp2_partial_share ?? 0) * 100)}%</b> остатка.
+                Перебирается только лестница.
+              </p>
+              {data.exit_model.trades_without_targets > 0 && (
+                <p className="mt-2 text-xs text-yellow-200/80">
+                  У {data.exit_model.trades_without_targets} из{" "}
+                  {(data.exit_model.trades_with_targets ?? 0) +
+                    data.exit_model.trades_without_targets}{" "}
+                  сделок нет геометрии целей — они посчитаны по старой лестнице, без частичных
+                  фиксаций. Частично смоделированная выборка не должна читаться как полная.
+                </p>
+              )}
+              {data.sources && (
+                <p className="mt-2 text-xs text-emerald-100/40">
+                  Источник: БД {data.sources.db_rows} строк · файл логгера {data.sources.file_rows}
+                  {data.sources.file_without_id > 0 &&
+                    ` (без signal_id: ${data.sources.file_without_id})`}{" "}
+                  · в работе {data.sources.used}.
+                </p>
+              )}
+            </section>
+          )}
 
           {/* Проверка на подгонку — до таблицы, а не после. */}
           {overfit && (

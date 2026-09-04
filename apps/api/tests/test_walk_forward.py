@@ -20,6 +20,11 @@ from services import exit_replay
 from services.walkforward_monitor import history
 
 
+# Своя тысяча идентификаторов на режим. Детерминированно и без hash(): у строк
+# он не стабилен между запусками, и набор получал бы новые id каждый прогон.
+_MODE_ID_BASE: dict[str, int] = {}
+
+
 def _rows(n: int, mode: str = "trend"):
     """Синтетические сделки: половина едет в плюс, половина сразу в минус."""
     out = []
@@ -34,7 +39,11 @@ def _rows(n: int, mode: str = "trend"):
             "trade_mode": mode,
             "result_pct": result,
             "symbol": "ADA/USDT",
-            "signal_id": i,
+            # (#replay-durable-source-2026-09-05) Идентификаторы уникальны по
+            # всему набору: источники сливаются по `signal_id`, и одинаковые
+            # id у трендового и скальп-набора схлопывали бы их друг в друга. В
+            # бою так не бывает — у сигнала один id и один режим.
+            "signal_id": _MODE_ID_BASE.setdefault(mode, len(_MODE_ID_BASE) * 10_000) + i,
             "lifecycle": {"mfe_pct": max(p[1] for p in traj), "traj": traj},
         })
     return out
