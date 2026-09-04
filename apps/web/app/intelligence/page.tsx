@@ -884,6 +884,14 @@ function decisionLabel(code: string | null | undefined) {
     blocked_depth_gate: "Заблокирован стаканом",
     blocked_active_signal_per_symbol: "По символу уже есть активный сигнал",
 
+    // (#loop-skip-visibility-2026-09-04) Простой самого цикла. До этого три
+    // пути пропуска писали только в лог Render, и остановка на 5.5 часа
+    // выглядела на экранах как работающая система с пустой лентой.
+    loop_skip_exchange_switch: "⛔ Цикл стоит: гейт переключения биржи",
+    loop_skip_live_safety: "⛔ Цикл стоит: предохранитель live-safety",
+    loop_skip_validation_gates: "⛔ Цикл стоит: гейты готовности к live",
+    loop_resumed: "▶ Цикл возобновил работу",
+
     // качество сетапа (learning-контур)
     setup_confirmed: "Сетап подтверждён",
     learning_setup_approved: "Сетап одобрен (обучение)",
