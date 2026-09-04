@@ -96,6 +96,12 @@ _NUMERIC: tuple[tuple[str, str], ...] = (
     ("entry_zone_plan.depth.near_depth_share", "объём вблизи входа"),
     # приборы тренда
     ("tz_shadow.adx", "ADX на входе"),
+    # (#adx-delta-2026-09-04) Уровень ADX не отличает разгорающийся тренд от
+    # затухающего — только производная. Композитная оценка, по которой ставится
+    # грейд, не содержит НИ ОДНОЙ производной: trend/momentum/volume — уровни,
+    # trend_alignment — счётчик согласных ТФ. Тренд, подтверждённый на 4h+1h+15m,
+    # получает максимум и на третьем баре, и на трёхсотом.
+    ("tz_shadow.adx_delta", "прирост ADX на входе"),
     ("tz_shadow.di_spread", "разведение DI по стороне"),
     ("tz_shadow.stoch_k", "Stoch %K"),
     ("trend_trigger.extension_atr", "растянутость от опоры, ATR"),

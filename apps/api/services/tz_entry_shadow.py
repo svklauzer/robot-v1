@@ -121,6 +121,14 @@ class TZShadow:
     stoch_k: float | None
     stoch_d: float | None
     obv_vs_ema: float | None
+    # (#adx-delta-2026-09-04) Производная ADX, а не только уровень. Условие
+    # `adx_not_rising` считало её с первого дня, но в план попадал лишь `adx`,
+    # и гипотеза строкой выше — «все крупные убытки: вход в тренд, который УЖЕ
+    # затухал» — оставалась непроверяемой постфактум: затухающий тренд с ADX 30
+    # и разгорающийся с ADX 30 в журнале выглядели одинаково. Дефолт None даёт
+    # позиционным конструкторам выше остаться как есть; у сделок, закрытых до
+    # этой правки, поля просто нет — и это честнее, чем нуль.
+    adx_delta: float | None = None
 
     def as_dict(self) -> dict:
         payload = asdict(self)
@@ -259,6 +267,7 @@ def evaluate(timeframes, *, regime: str, side: str) -> TZShadow:
         stoch_k=round(stoch_k, 4),
         stoch_d=round(stoch_d, 4) if stoch_d is not None else None,
         obv_vs_ema=round(obv_vs_ema, 4) if obv_vs_ema is not None else None,
+        adx_delta=round(adx - adx_prev, 4) if adx_prev is not None else None,
     )
 
 

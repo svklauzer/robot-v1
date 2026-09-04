@@ -13,12 +13,17 @@ from services import tz_entry_shadow as tz
 
 
 def _tf(adx=30.0, plus_di=25.0, minus_di=10.0, k=20.0, d=15.0,
-        obv=100.0, obv_ema=50.0):
-    return {
+        obv=100.0, obv_ema=50.0, adx_prev=None):
+    ctx = {
         "adx14": adx, "plus_di": plus_di, "minus_di": minus_di,
         "stoch_rsi_k": k, "stoch_rsi_d": d,
         "obv": obv, "obv_ema20": obv_ema,
     }
+    # Ключа нет, пока его не попросили: без предыдущего ADX условие
+    # `adx_not_rising` не срабатывает, и прежние тесты остаются про своё.
+    if adx_prev is not None:
+        ctx["adx14_prev"] = adx_prev
+    return ctx
 
 
 def _tfs(**kw):
@@ -126,7 +131,24 @@ def test_result_is_serialisable_for_the_plan(monkeypatch):
     assert payload["evaluated"] is True
     assert payload["would_pass"] is False
     assert set(payload) == {"regime", "side", "evaluated", "would_pass", "failed",
-                            "adx", "di_spread", "stoch_k", "stoch_d", "obv_vs_ema"}
+                            "adx", "di_spread", "stoch_k", "stoch_d", "obv_vs_ema",
+                            "adx_delta"}
+
+
+def test_adx_delta_is_written_down_with_its_sign():
+    """(#adx-delta-2026-09-04) Затухающий тренд с ADX 30 и разгорающийся с
+    ADX 30 в журнале выглядели ОДИНАКОВО: в план шёл только уровень. Гипотеза
+    «крупные убытки — вход в тренд, который уже затухал» была непроверяема
+    постфактум не потому, что неверна, а потому что число не сохранялось.
+    """
+    assert _long(adx=30.0, adx_prev=26.0).adx_delta == pytest.approx(4.0)
+    assert _long(adx=30.0, adx_prev=34.0).adx_delta == pytest.approx(-4.0)
+
+
+def test_adx_delta_is_none_without_history():
+    """Отсутствие предыдущего замера не имеет права выглядеть как нулевой
+    прирост: ноль — это «тренд встал», а None — «мы не знаем»."""
+    assert _long(adx=30.0).adx_delta is None
 
 
 def test_thresholds_come_from_settings(monkeypatch):
