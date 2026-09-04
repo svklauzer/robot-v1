@@ -38,6 +38,7 @@ from core.config import settings
 from models.intelligence_event import IntelligenceEvent
 
 TZ_DECISION = "tz_entry_conditions"
+TP2_DECISION = "tp2_reached_too_rarely"
 ADX_FAMILY = "adx_rising"
 
 # Допуски, на которых считается «сколько бы прошло». Не рекомендация, а шкала:
@@ -64,6 +65,16 @@ def _blocked_families(payload: dict) -> list[str]:
     if not reason.startswith("blocked_by:"):
         return []
     return [f for f in reason.split(":", 1)[1].split(",") if f]
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
 def _percentiles(values: list[float]) -> dict:
@@ -137,6 +148,8 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
         "window_hours": float(window_hours),
         "events": len(rows),
         "by_decision": dict(sorted(by_decision.items(), key=lambda kv: kv[1], reverse=True)),
+        "concentration": _concentration(rows),
+        "tp2_reach": _tp2_reach(rows),
         "adx_rising": {
             "tz_evaluated": tz_evaluated,
             "adx_not_rising_failed": adx_failed,
@@ -162,3 +175,73 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
             "них прошло бы при условии adx_delta > -tolerance."
         ),
     }
+
+
+def _concentration(rows) -> dict:
+    """Сколько РАЗНЫХ символов стоит за каждой причиной.
+
+    (#census-concentration-2026-09-04) Счётчик событий переоценивает символы,
+    которые переоцениваются чаще: ADA в режиме crt тикает примерно раз в минуту
+    и за сутки даёт сотни записей одной и той же блокировки. Без этого разреза
+    «504 события» читается как «система упирается в достижимость TP2», хотя
+    может означать «один символ упирается, а мы посчитали его 504 раза».
+    """
+    per_decision: dict[str, dict[str, int]] = {}
+    for row in rows:
+        decision = str(row.decision or "unknown")
+        symbol = str(row.symbol or "unknown")
+        slot = per_decision.setdefault(decision, {})
+        slot[symbol] = slot.get(symbol, 0) + 1
+
+    out: dict[str, dict] = {}
+    for decision, symbols in per_decision.items():
+        ordered = sorted(symbols.items(), key=lambda kv: kv[1], reverse=True)
+        total = sum(symbols.values())
+        out[decision] = {
+            "events": total,
+            "symbols": len(symbols),
+            "top": dict(ordered[:4]),
+            # Доля самого шумного символа: 1.0 значит, что вся причина — это он.
+            "top_share": round(ordered[0][1] / total, 4) if total else None,
+        }
+    return dict(sorted(out.items(), key=lambda kv: kv[1]["events"], reverse=True))
+
+
+def _tp2_reach(rows) -> dict:
+    """Насколько цель дальше типичного хода — по каждому (символ, режим).
+
+    Гейт достижимости не «слишком строг»: он сравнивает дистанцию до цели с
+    измеренным ходом инструмента. Если цель вчетверо больше типичного хода, это
+    не блокировка, а диагноз геометрии — и чинится он постановкой целей, а не
+    ослаблением гейта.
+    """
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for row in rows:
+        if str(row.decision or "") != TP2_DECISION:
+            continue
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        key = f"{row.symbol}|{row.regime or payload.get('source') or ''}"
+        slot = buckets.setdefault(key, {"tp2_dist": [], "tp1_dist": [], "mfe": [],
+                                        "hit": [], "need": []})
+        for field, name in (("tp2_dist_pct", "tp2_dist"), ("tp1_dist_pct", "tp1_dist"),
+                            ("median_mfe_pct", "mfe"), ("tp2_hit_rate", "hit"),
+                            ("required_hit_rate", "need")):
+            value = _num(payload.get(field))
+            if value is not None:
+                slot[name].append(value)
+
+    out: dict[str, dict] = {}
+    for key, slot in buckets.items():
+        mfe = _median(slot["mfe"])
+        tp2 = _median(slot["tp2_dist"])
+        out[key] = {
+            "events": len(slot["tp2_dist"]) or len(slot["mfe"]),
+            "median_mfe_pct": round(mfe, 4) if mfe is not None else None,
+            "tp1_dist_pct": round(_median(slot["tp1_dist"]), 4) if slot["tp1_dist"] else None,
+            "tp2_dist_pct": round(tp2, 4) if tp2 is not None else None,
+            # Во сколько раз цель дальше типичного хода. Это и есть диагноз.
+            "tp2_over_mfe": round(tp2 / mfe, 2) if (mfe and tp2) else None,
+            "tp2_hit_rate": round(_median(slot["hit"]), 4) if slot["hit"] else None,
+            "required_hit_rate": round(_median(slot["need"]), 4) if slot["need"] else None,
+        }
+    return dict(sorted(out.items(), key=lambda kv: kv[1]["events"], reverse=True))

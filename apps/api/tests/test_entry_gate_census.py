@@ -140,3 +140,71 @@ def test_empty_history_does_not_explode(db):
     out = build(db)
     assert out["events"] == 0
     assert out["adx_rising"]["delta_all"] == {}
+
+
+# ── концентрация и геометрия (#census-concentration-2026-09-04) ─────────────
+
+def _tp2(db, symbol: str, *, regime: str = "crt", mfe: float = 0.7742,
+         tp1: float = 2.7, tp2: float = 3.1, hit: float = 0.0238,
+         need: float = 0.34):
+    db.add(IntelligenceEvent(
+        symbol=symbol, status="blocked", decision="tp2_reached_too_rarely",
+        action="long", regime=regime,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        payload_json={"evaluated": True, "allowed": False,
+                      "median_mfe_pct": mfe, "tp1_dist_pct": tp1,
+                      "tp2_dist_pct": tp2, "tp2_hit_rate": hit,
+                      "required_hit_rate": need},
+    ))
+    db.flush()
+
+
+def test_one_noisy_symbol_does_not_read_as_a_system_wide_problem(db):
+    """Счётчик событий переоценивает символы, которые тикают чаще. 500
+    блокировок одного символа и 500 блокировок пяти разных — это разные
+    диагнозы, а в `by_decision` они выглядят одинаково."""
+    for _ in range(20):
+        _tp2(db, "ADA/USDT")
+    _tp2(db, "XRP/USDT")
+
+    slot = build(db)["concentration"]["tp2_reached_too_rarely"]
+
+    assert slot["events"] == 21
+    assert slot["symbols"] == 2
+    assert slot["top"]["ADA/USDT"] == 20
+    assert slot["top_share"] == pytest.approx(0.9524, abs=1e-4)
+
+
+def test_geometry_gap_is_reported_as_a_ratio(db):
+    """Гейт достижимости не «слишком строг»: он сравнивает цель с измеренным
+    ходом инструмента. Отношение и есть диагноз — цель вчетверо дальше
+    типичного хода чинится постановкой целей, а не ослаблением гейта."""
+    for _ in range(3):
+        _tp2(db, "ADA/USDT", mfe=0.7742, tp2=3.1)
+
+    row = build(db)["tp2_reach"]["ADA/USDT|crt"]
+
+    assert row["median_mfe_pct"] == pytest.approx(0.7742)
+    assert row["tp2_dist_pct"] == pytest.approx(3.1)
+    assert row["tp2_over_mfe"] == pytest.approx(4.0, abs=0.01)
+
+
+def test_symbols_and_regimes_do_not_get_mixed(db):
+    _tp2(db, "ADA/USDT", regime="crt", tp2=3.1)
+    _tp2(db, "ADA/USDT", regime="scalp", tp2=0.8)
+
+    reach = build(db)["tp2_reach"]
+
+    assert reach["ADA/USDT|crt"]["tp2_dist_pct"] == pytest.approx(3.1)
+    assert reach["ADA/USDT|scalp"]["tp2_dist_pct"] == pytest.approx(0.8)
+
+
+def test_missing_geometry_does_not_invent_a_ratio(db):
+    db.add(IntelligenceEvent(
+        symbol="ADA/USDT", status="blocked", decision="tp2_reached_too_rarely",
+        regime="crt", created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        payload_json={"evaluated": True},
+    ))
+    db.flush()
+
+    assert build(db)["tp2_reach"]["ADA/USDT|crt"]["tp2_over_mfe"] is None
