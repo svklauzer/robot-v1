@@ -44,6 +44,7 @@ def db():
 
 def _sig(db, *, reason: str, side: str = "long", net: float = -1.0,
          obi: float = 0.0, adx: float = 25.0, score: float = 80.0,
+         structure: float = 12.0,
          regime: str = "trend_up_candidate", grade: str = "A"):
     signal = Signal(
         bot_id=db.bot_id, symbol="X/USDT", side=side, status="closed",
@@ -61,7 +62,7 @@ def _sig(db, *, reason: str, side: str = "long", net: float = -1.0,
                           "would_pass": False},
             "setup_quality": {"final_score": score, "trend_alignment": 50.0,
                               "entry_timing": 20.0, "volume_confirmation": 15.0,
-                              "structure_quality": 12.0, "penalty": 0.0},
+                              "structure_quality": structure, "penalty": 0.0},
             "ml": {"ml_score": 0.5},
             "tp_reach": {"tp1_dist_pct": 1.0, "tp2_dist_pct": 3.0},
             "sizing": {"conviction": 1.0},
@@ -182,7 +183,7 @@ def test_categorical_shows_stop_rate_per_level(db):
     _sig(db, reason="tp2_reached", net=2.0, grade="A")
 
     levels = next(c for c in build(db, min_group=1)["categorical"]
-                  if c["feature"] == "grade")["levels"]
+                  if c["feature"] == "signal.grade")["levels"]
 
     assert levels["B"]["n"] == 4
     assert levels["B"]["stop_rate"] == pytest.approx(0.75)
@@ -235,3 +236,35 @@ def test_signal_level_fields_are_reachable(db):
     assert row["median_stopped"] == pytest.approx(80.0)
     assert row["median_survived"] == pytest.approx(65.0)
     assert row["auc"] == 1.0, "выше confidence — чаще стоп; это и надо увидеть"
+
+
+def test_side_filter_splits_the_sample(db):
+    """(#structure-mirror-2026-09-04) structure_score считается по шкале
+    «хорошо для лонга» (близко к support = 70) и для шортов не зеркалится ни в
+    confidence, ни в setup_quality. Значит у лонгов компонент работает верно
+    (выше structure → чаще выживают), а у шортов ровно наоборот.
+
+    На смешанной выборке эти две противоположные связи гасят друг друга ТОЧНО в
+    0.5 — признак выглядит бесполезным именно там, где он вреден. Разрез по
+    стороне разводит их обратно.
+    """
+    for _ in range(6):
+        _sig(db, reason="stop_loss", side="short", structure=17.5)
+        _sig(db, reason="tp2_reached", side="short", net=2.0, structure=10.0)
+        _sig(db, reason="stop_loss", side="long", structure=10.0)
+        _sig(db, reason="tp2_reached", side="long", net=2.0, structure=17.5)
+
+    def structure_auc(**kw):
+        out = build(db, min_group=5, **kw)
+        return next(r for r in out["numeric"]
+                    if r["feature"] == "setup_quality.structure_quality")["auc"]
+
+    assert structure_auc(side="short") == 1.0   # выше structure → стоп
+    assert structure_auc(side="long") == 0.0    # выше structure → выжила
+    assert structure_auc() == 0.5               # смешанное: ровно ничего
+
+
+def test_side_filter_is_reported_back(db):
+    _sig(db, reason="stop_loss", side="short")
+    assert build(db, side="short", min_group=1)["side"] == "short"
+    assert build(db, side="long", min_group=1)["stopped"]["n"] == 0
