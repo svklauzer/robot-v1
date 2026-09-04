@@ -1,10 +1,21 @@
 """(#okx-satellite-2026-09-02) Не дать переключению ACTIVE_EXCHANGE молча
 осиротить открытые позиции/ордера на бирже, с которой ушли.
 
-Нет столбца "какая биржа" в Signal/Position/Order (и не нужен — торгует
-всегда ровно одна биржа), поэтому проверяем НЕактивную биржу напрямую через
-её API, а не через БД: если она отвечает и на ней есть что-то открытое,
-значит переключение застало сделки врасплох.
+ТОЛЬКО ДЛЯ РЕАЛЬНЫХ ДЕНЕГ (#switch-guard-paper-2026-09-04). В paper бот на
+биржу ничего не выставляет — его позиции живут в таблице Position, — поэтому
+осиротить переключением там нечего по построению, а fetch_open_orders/
+fetch_positions спрашивают РЕАЛЬНЫЙ счёт владельца. 04.09 это остановило всю
+бумажную торговлю на 5.5 часа из-за постороннего остатка на счёте HTX.
+Проверка предмета, которого в режиме не существует, — не защита, а простой.
+
+Проверяем НЕактивную биржу напрямую через её API, а не через БД: если она
+отвечает и на ней есть что-то открытое, значит переключение застало сделки
+врасплох.
+
+(#okx-satellite-exchange-routing-2026-09-02) С появлением Signal.exchange
+каждый сигнал ведётся через СВОЮ биржу независимо от ACTIVE_EXCHANGE — гейт
+перестал быть единственной защитой и остался вторичной страховкой для НОВЫХ
+входов. Прежняя посылка докстринга «столбца биржи нет и не нужен» устарела.
 
 Два разных отказа:
   - неактивная биржа НЕДОСТУПНА (сеть/DNS/размыкатель) → fail-open. Она и так
@@ -45,6 +56,37 @@ def _inactive_client():
     return "okx", OKXClient()
 
 
+def _describe(item: dict, kind: str) -> dict:
+    """Короткая карточка позиции/ордера для вывода наружу.
+
+    (#switch-guard-blind-2026-09-04) Гейт отдавал только СЧЁТЧИК. При
+    `open_positions: 1` владелец не мог узнать ни символа, ни размера — а
+    различить нужно два совершенно разных случая: реальный остаток на счёте
+    (закрывать руками) и запись, у которой ccxt не отдал размер и которую
+    _position_is_open засчитал открытой по fail-closed (чинить код).
+    Стоимость ошибки высокая: гейт держит ВСЮ торговлю и сам не разожмётся.
+    """
+    if not isinstance(item, dict):
+        return {"kind": kind, "raw": str(item)[:120]}
+
+    size = None
+    for key in ("contracts", "contractSize", "size", "amount", "filled"):
+        if item.get(key) is not None:
+            size = item.get(key)
+            break
+
+    return {
+        "kind": kind,
+        "symbol": item.get("symbol") or item.get("info", {}).get("symbol") if isinstance(item.get("info"), dict) else item.get("symbol"),
+        "side": item.get("side"),
+        "size": size,
+        # None здесь означает «ccxt не отдал ни одного известного поля размера»
+        # — то есть запись прошла именно по fail-closed, а не по факту объёма.
+        "size_unknown": size is None,
+        "id": item.get("id"),
+    }
+
+
 def _position_is_open(p: dict) -> bool:
     for key in ("contracts", "contractSize", "size", "amount"):
         val = p.get(key)
@@ -78,9 +120,42 @@ def check(*, force: bool = False) -> dict:
         "reachable": False,
         "open_orders": 0,
         "open_positions": 0,
+        "found": [],
         "safe": True,
+        "enabled": True,
         "error": None,
     }
+
+    # (#switch-guard-blind-2026-09-04) Выключатель. У гейта, способного
+    # остановить ВСЮ торговлю, обязан быть флаг: 04.09 он держал систему
+    # 5.5 часа, и снять его можно было только правкой кода или откатом
+    # ACTIVE_EXCHANGE.
+    if not bool(getattr(settings, "EXCHANGE_SWITCH_GUARD_ENABLED", True)):
+        result["enabled"] = False
+        result["error"] = "guard_disabled_by_flag"
+        _cache = result
+        _cache_at = now
+        return result
+
+    # (#switch-guard-paper-2026-09-04) КОРЕНЬ проблемы 04.09: в paper гейт
+    # смотрел не туда. fetch_open_orders/fetch_positions спрашивают РЕАЛЬНЫЙ
+    # счёт через ccxt, а бумажный бот на биржу не выставляет ничего — его
+    # позиции живут в таблице Position. Осиротить переключением ему там нечего
+    # по построению.
+    #
+    # Следствие в бою: посторонний остаток на счёте HTX (ручная сделка, старый
+    # live, артефакт ccxt) остановил ВСЮ бумажную торговлю на 5.5 часа. Гейт
+    # сработал ровно так, как написан, — просто его предмет в paper не
+    # существует.
+    #
+    # Тот же приём, что у ValidationGateService.live_blockers: условие,
+    # осмысленное только для реальных денег, не имеет права гейтить paper.
+    if not bool(getattr(settings, "is_live_enabled", False)):
+        result["safe"] = True
+        result["error"] = "paper_mode_no_exchange_side_positions"
+        _cache = result
+        _cache_at = now
+        return result
 
     try:
         orders = client.fetch_open_orders() or []
@@ -95,6 +170,10 @@ def check(*, force: bool = False) -> dict:
         result["reachable"] = True
         result["open_orders"] = len(orders)
         result["open_positions"] = len(open_positions)
+        result["found"] = (
+            [_describe(o, "order") for o in orders[:10]]
+            + [_describe(p, "position") for p in open_positions[:10]]
+        )
         result["safe"] = not (orders or open_positions)
 
         if not result["safe"]:
