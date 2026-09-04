@@ -155,3 +155,60 @@ def test_every_loop_skip_code_has_a_ui_label():
     ui = web.read_text(encoding="utf-8")
     missing = sorted(c for c in codes if f"{c}:" not in ui)
     assert not missing, f"код простоя без ярлыка в ленте: {missing}"
+
+
+# ── вторая ось молчания (#scan-visibility-2026-09-05) ───────────────────────
+
+def test_scan_silence_is_a_separate_axis_from_loop_silence():
+    """04.09 лента молчала семь часов, и это было неотличимо от остановки
+    цикла: задача была жива, шаги делались, но ни один символ не доходил до
+    одобрения — а все выходы до одобрения идут через `continue`, без записи.
+
+    Полчаса ушло на проверку живости задачи вместо чтения с экрана. Две оси
+    молчания обязаны иметь разные коды возобновления, иначе «поехало» не
+    отвечает на вопрос, ЧТО именно поехало.
+    """
+    from services.loop_skip_reporter import (
+        DECISION_RESUMED, DECISION_SCAN_NO_CANDIDATE, DECISION_SCAN_RESUMED,
+    )
+
+    assert DECISION_SCAN_RESUMED != DECISION_RESUMED
+    assert DECISION_SCAN_NO_CANDIDATE != DECISION_RESUMED
+
+
+def test_each_reporter_writes_its_own_resume_code():
+    from services.loop_skip_reporter import LoopSkipReporter
+
+    db, decisions = object(), _Recorder()
+    reporter = LoopSkipReporter(resumed_decision="scan_candidates_resumed")
+
+    reporter.report(db, decisions, reason="scan_no_candidate")
+    reporter.report(db, decisions, reason=None)
+
+    assert [r["decision"] for r in decisions.rows] == [
+        "scan_no_candidate", "scan_candidates_resumed",
+    ]
+
+
+def test_scan_summary_is_written_once_per_step_not_per_symbol():
+    """Цикл тикает раз в ~66 с при семи символах. Запись на символ дала бы ~450
+    строк в час в таблицу, где уже 58 тысяч событий, — лента перестала бы
+    читаться ровно тогда, когда она нужна."""
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+
+    assert source.count("self.scan_reporter.report(") == 1
+
+    call_at = source.index("self.scan_reporter.report(")
+    loop_at = source.index('for symbol in bot.config_json.get("symbols", [])')
+    assert call_at > loop_at, "итог шага записывается внутри цикла по символам"
+
+
+def test_summary_names_the_reason_for_every_symbol():
+    """Одна строка «одобрено 0» без разбивки не отличает «рынок не даёт
+    сетапов» от «сломался анализ»: и то и другое выглядит как тишина."""
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+
+    for marker in ('_scan_skips[symbol] = "no_analysis"',
+                   '_scan_skips[symbol] = f"hold:',
+                   '"by_symbol": _scan_skips'):
+        assert marker in source, f"пропала разбивка по символам: {marker}"

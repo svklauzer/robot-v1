@@ -43,13 +43,25 @@ SYSTEM_SYMBOL = "SYSTEM"
 
 DECISION_RESUMED = "loop_resumed"
 
+# Вторая ось молчания: шаг сделан, но ни один символ не дошёл до одобрения.
+# 04.09 лента молчала семь часов подряд именно так, и это было неотличимо от
+# остановки цикла — диагностика ушла на проверку живости задачи, хотя система
+# работала и просто не находила сетапов.
+DECISION_SCAN_NO_CANDIDATE = "scan_no_candidate"
+DECISION_SCAN_RESUMED = "scan_candidates_resumed"
+
 
 class LoopSkipReporter:
     """Состояние между тиками: что писали в прошлый раз и когда."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, resumed_decision: str = DECISION_RESUMED) -> None:
         self._reason: str | None = None
         self._last_at: float = 0.0
+        # (#scan-visibility-2026-09-05) Своя отметка возобновления на каждую ось
+        # молчания. Их две: цикл не сделал шаг вовсе и цикл прошёл шаг, но ни
+        # один символ не дошёл до одобрения. С общим кодом «поехало» нельзя
+        # понять, что именно поехало.
+        self._resumed_decision = resumed_decision
 
     def _heartbeat_sec(self) -> float:
         return float(getattr(settings, "LOOP_SKIP_HEARTBEAT_SEC", 900.0))
@@ -68,7 +80,7 @@ class LoopSkipReporter:
             self._last_at = 0.0
             if prev:
                 return self._write(
-                    db, decisions, DECISION_RESUMED, "ok",
+                    db, decisions, self._resumed_decision, "ok",
                     {"after_skip": prev, "note": "цикл возобновил работу"},
                 )
             return False

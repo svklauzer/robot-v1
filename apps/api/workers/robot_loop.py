@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 from core.config import settings
 
 from services.confidence_scale import confidence_calibration
+from services.loop_skip_reporter import (
+    DECISION_SCAN_NO_CANDIDATE, DECISION_SCAN_RESUMED, LoopSkipReporter,
+)
 from services.entry_impulse_latch import ImpulseLatch, substitutes_adx_rising
 from services.market_data import MarketDataService
 from services.news_filter import NewsFilter
@@ -59,6 +62,11 @@ class RobotLoop:
         # после перезапуска запись означала бы разрешение входа по событию,
         # которого никто не видел.
         self.impulse_latch = ImpulseLatch()
+        # (#scan-visibility-2026-09-05) Вторая ось молчания ленты. Первая —
+        # цикл не сделал шаг (её пишет skip_reporter). Эта — шаг сделан, но ни
+        # один символ не дошёл до одобрения: тогда все выходы идут через
+        # `continue` до первой записи, и лента гаснет полностью.
+        self.scan_reporter = LoopSkipReporter(resumed_decision=DECISION_SCAN_RESUMED)
         # (#setup-reach-2026-07-30) Геометрия сделки из фактического разброса
         # сетапа: цель туда, куда он доходит, стоп туда, куда шум не достаёт.
         self.setup_reach = SetupReachService()
@@ -148,6 +156,12 @@ class RobotLoop:
                 print(f"[DYNAMIC MARGIN ERROR] {exc}")
                 dyn_budget, analyses_cache, _dyn_free = None, {}, 0.0
 
+        # Почему каждый символ не дошёл до одобрения. Собирается ради одной
+        # записи в конце шага: семь часов тишины 04.09 читались как остановка
+        # цикла, и на проверку живости задачи ушло полчаса.
+        _scan_skips: dict[str, str] = {}
+        _approved = 0
+
         for symbol in bot.config_json.get("symbols", []):
             # (#egress-guard-2026-07-26) analyze_symbol — синхронные сетевые вызовы
             # (OHLCV по 5 ТФ). Держать их в event loop нельзя: при сетевом сбое
@@ -158,9 +172,11 @@ class RobotLoop:
                 else await asyncio.to_thread(self.intelligence.analyze_symbol, symbol)
             )
             if result is None:
+                _scan_skips[symbol] = "no_analysis"
                 continue
 
             if result.action == "hold":
+                _scan_skips[symbol] = f"hold:{getattr(result, 'reason', '') or 'no_reason'}"
                 continue
 
             # (#entry-impulse-2026-09-04) Импульс замечается ДО всех отсевов.
@@ -171,7 +187,12 @@ class RobotLoop:
                 self.impulse_latch.observe(symbol, _side, getattr(result, "timeframes", None))
 
             if result.setup_decision != "approve":
+                _comment = ((result.setup_quality or {}).get("comment")
+                            if isinstance(getattr(result, "setup_quality", None), dict) else None)
+                _scan_skips[symbol] = f"{result.setup_decision}:{_comment or 'no_comment'}"
                 continue
+
+            _approved += 1
 
             # RANGE-скальп идёт по своему скорингу. Он обходит трендовые гейты
             # (grade-публикация, production_gate, symbol-policy), но проходит
@@ -1400,6 +1421,18 @@ class RobotLoop:
                 is_public=should_publish,
                 result=result,
             )
+
+        # Ни один символ не дошёл до одобрения — записываем ОДНУ строку с
+        # причиной по каждому. Без неё «цикл встал» и «рынок не даёт сетапов»
+        # выглядят в ленте одинаково: никак.
+        self.scan_reporter.report(
+            db,
+            self.decisions,
+            reason=DECISION_SCAN_NO_CANDIDATE if _approved == 0 else None,
+            payload={"symbols": len(_scan_skips), "approved": _approved,
+                     "by_symbol": _scan_skips},
+        )
+        db.flush()
 
 
     def _check_symbol_policy_profile(self, policy_profile: dict, gate_payload: dict) -> dict:
