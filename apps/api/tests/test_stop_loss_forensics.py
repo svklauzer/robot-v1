@@ -215,3 +215,23 @@ def test_empty_history_does_not_explode(db):
     out = build(db)
     assert out["stopped"]["n"] == 0
     assert out["numeric"] == []
+
+
+def test_signal_level_fields_are_reachable(db):
+    """(#confidence-axis-2026-09-04) confidence живёт на самой записи, а не в
+    plan_json. Пока разбор смотрел только в план, ось, на которой построен
+    грейд, оставалась непроверенной — а именно она и оказалась разделяющей."""
+    for _ in range(6):
+        s = _sig(db, reason="stop_loss")
+        s.confidence = 80.0
+    for _ in range(6):
+        s = _sig(db, reason="tp2_reached", net=2.0)
+        s.confidence = 65.0
+    db.flush()
+
+    row = next(r for r in build(db, min_group=5)["numeric"]
+               if r["feature"] == "signal.confidence")
+
+    assert row["median_stopped"] == pytest.approx(80.0)
+    assert row["median_survived"] == pytest.approx(65.0)
+    assert row["auc"] == 1.0, "выше confidence — чаще стоп; это и надо увидеть"
