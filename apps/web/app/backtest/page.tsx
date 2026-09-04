@@ -58,9 +58,15 @@ export default function BacktestPage() {
             Back test — выходы по реальным траекториям
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-emerald-100/60">
+            {/* (#replay-ui-parity-2026-09-05) Методика расчёта отсюда убрана. Она
+                приходит с бэкенда блоком «как это считается», а заголовок держал
+                ВТОРУЮ, устаревшую копию: обещал сравнение по ВАЛОВЫМ, тогда как
+                бэкенд на том же экране объяснял, что эта формулировка неверна и
+                сравнение идёт по ЧИСТЫМ. Две копии одного объяснения расходятся
+                молча — расходиться должно быть нечему. */}
             Перебор параметров выхода по записанным траекториям закрытых сделок. Replay может закрыть
             сделку только <b>раньше</b> факта и книжит выход по текущей точке — «улучшить задним
-            числом» нельзя. Издержки у всех вариантов одинаковы, поэтому сравнение идёт по gross-%.
+            числом» нельзя.
           </p>
         </div>
 
@@ -198,6 +204,49 @@ export default function BacktestPage() {
             </section>
           )}
 
+          {/* (#replay-ui-parity-2026-09-05) Воспроизводит ли модель саму себя.
+              Бэкенд считал это с 03.08 и НИ РАЗУ не показывал: реплей текущего
+              конфига расходился с фактом на 3.81 п.п. при выводе в 0.04 — ошибка
+              в 91 раз больше заключения, — и страница про это молчала. Проверка
+              на подгонку без неё бессмысленна: она отвечает «устойчив ли лидер»,
+              когда сперва надо ответить «а лидер вообще про нашу систему?». */}
+          {data.fidelity && (
+            <section
+              className={`rounded-2xl border p-5 ${
+                data.fidelity.trustworthy
+                  ? "border-emerald-900/70 bg-emerald-950/20"
+                  : "border-red-900/70 bg-red-950/25"
+              }`}
+            >
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-emerald-100">
+                {!data.fidelity.trustworthy && <TriangleAlert size={18} className="text-red-300" />}
+                Воспроизводит ли модель факт
+              </h2>
+              <p className={`mt-2 text-sm ${data.fidelity.trustworthy ? "text-emerald-200" : "text-red-200"}`}>
+                {data.fidelity.verdict}
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-emerald-950 bg-black/25 p-3">
+                  <Row label="Реплей текущего конфига" value={fmtPct(data.fidelity.current_replayed_pct)} />
+                  <Row label="Факт" value={fmtPct(data.fidelity.actual_pct)} />
+                </div>
+                <div className="rounded-xl border border-emerald-950 bg-black/25 p-3">
+                  <Row label="Разрыв модели" value={fmtPct(data.fidelity.gap_pct)} />
+                  <Row label="Доля от результата" value={data.fidelity.gap_share_of_result} />
+                </div>
+                <div className="rounded-xl border border-emerald-950 bg-black/25 p-3">
+                  <Row label="Дельта лидера" value={fmtPct(data.fidelity.best_edge_pct)} />
+                  <Row label="Разрыв / дельта" value={data.fidelity.gap_over_edge ?? "—"} />
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-emerald-100/50">
+                Реплей боевого конфига на тех же сделках обязан дать примерно факт — это один конфиг
+                на одних данных. Когда разрыв больше дельты лидера, «вариант X лучше» сравнивает две
+                МОДЕЛИ, а не две реальности, и менять конфиг по такому сравнению нельзя.
+              </p>
+            </section>
+          )}
+
           {/* Проверка на подгонку — до таблицы, а не после. */}
           {overfit && (
             <section
@@ -264,6 +313,13 @@ export default function BacktestPage() {
                         <th className="pr-3">band arm</th>
                         <th className="pr-3">giveback</th>
                         <th className="pr-3">ride trail</th>
+                        {/* (#replay-ui-parity-2026-09-05) ride_arm перебирается с
+                            #band-corridor, но колонки не имел. В таблице шли строки
+                            с одинаковыми видимыми параметрами и одинаковым итогом —
+                            они выглядели дублями, хотя различались по невидимой
+                            оси. Скрытая ось перебора хуже отсутствующей: она
+                            заставляет не верить таблице целиком. */}
+                        <th className="pr-3">ride arm</th>
                         <th className="pr-3">min prot</th>
                       </>
                     ) : (
@@ -299,6 +355,7 @@ export default function BacktestPage() {
                             <td className="pr-3">{v.band_arm_pct}</td>
                             <td className="pr-3">{v.band_giveback_share}</td>
                             <td className="pr-3">{v.ride_trail_share}</td>
+                            <td className="pr-3">{v.ride_arm_pct}</td>
                             <td className={`pr-3 ${v.min_protective_pct >= 1.8 ? "text-red-300" : "text-emerald-300"}`}>
                               {v.min_protective_pct}
                             </td>
@@ -346,7 +403,11 @@ function fmtPct(v: any) {
 function sameConfig(v: any, cur: any, isTrend: boolean): boolean {
   if (!cur) return false;
   const keys = isTrend
-    ? ["be_arm_pct", "be_floor_pct", "band_arm_pct", "band_giveback_share", "ride_trail_share", "min_protective_pct"]
+    // (#replay-ui-parity-2026-09-05) ride_arm_pct входит сюда наравне с прочими:
+    // без него «сейчас» подсвечивало ПЕРВУЮ строку, совпавшую по шести осям из
+    // семи, то есть не обязательно боевой конфиг.
+    ? ["be_arm_pct", "be_floor_pct", "band_arm_pct", "band_giveback_share",
+       "ride_trail_share", "ride_arm_pct", "min_protective_pct"]
     : ["arm_pct", "giveback_share", "time_stop_min"];
   return keys.every((k) => v[k] === cur[k]);
 }

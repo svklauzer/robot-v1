@@ -290,3 +290,53 @@ def test_backtest_page_shows_which_exit_model_it_replayed():
     for field in ("exit_model", "tp1_partial_share", "tp2_partial_share",
                   "trades_without_targets", "sources"):
         assert field in page, f"страница не показывает {field}"
+
+
+def test_backtest_page_shows_the_fidelity_check_it_computes():
+    """(#replay-ui-parity-2026-09-05) `_fidelity_verdict` считался с 03.08 и не
+    показывался НИ РАЗУ. Он отвечает на вопрос, который стоит прежде всех
+    остальных: воспроизводит ли модель факт. На боевых данных разрыв был
+    3.81 п.п. при выводе в 0.04 — ошибка в 91 раз больше заключения, — и
+    страница про это молчала, показывая таблицу вариантов как готовый совет.
+    """
+    page = (WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8")
+
+    for field in ("fidelity", "trustworthy", "gap_pct", "best_edge_pct"):
+        assert field in page, f"проверка точности модели не показана: {field}"
+
+
+def test_backtest_page_does_not_restate_the_methodology_the_backend_owns():
+    """Заголовок держал вторую копию объяснения и обещал сравнение по gross-%,
+    тогда как бэкенд на том же экране объяснял, что формулировка неверна и
+    сравнение идёт по чистым. Две копии расходятся молча."""
+    page = (WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8")
+    header = page[:page.index("</header>")]
+
+    assert "gross-%" not in header, "заголовок снова пересказывает методику расчёта"
+
+
+def test_every_swept_axis_has_a_column():
+    """Ось перебора без колонки хуже отсутствующей: в таблице появляются строки
+    с одинаковыми видимыми параметрами и одинаковым итогом, и она выглядит
+    сломанной. ride_arm_pct стал осью с #band-corridor и колонки не имел."""
+    page = (WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8")
+
+    for axis in ("be_arm_pct", "be_floor_pct", "band_arm_pct", "band_giveback_share",
+                 "ride_trail_share", "ride_arm_pct", "min_protective_pct"):
+        assert f"v.{axis}" in page, f"ось перебора без колонки: {axis}"
+
+
+def test_both_profiles_explain_themselves_the_same_way():
+    """Скальп отдавал меньше полей, чем тренд, и страница показывала «—% на
+    сделку» и ни слова о модели. Читатель не обязан помнить, какая из двух
+    вкладок одного инструмента честнее."""
+    import inspect
+
+    from services import exit_replay
+
+    scalp = inspect.getsource(exit_replay.build)
+    trend = inspect.getsource(exit_replay.build_trend)
+
+    for field in ('"exit_model"', '"sources"', '"actual_avg_pct"'):
+        assert field in scalp, f"скальп-профиль не отдаёт {field}"
+        assert field in trend, f"трендовый профиль не отдаёт {field}"
