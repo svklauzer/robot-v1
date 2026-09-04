@@ -205,6 +205,29 @@ def analytics_outcome_root_cause(reason: str = "failed_setup_exit", limit: int =
         db.close()
 
 
+@router.get("/regime-expectancy", dependencies=[Depends(require_owner_action)])
+def analytics_regime_expectancy(window_hours: float = 720.0, max_rows: int = 4000):
+    """(#regime-expectancy-report-2026-09-04) Что режим РЕАЛЬНО даёт против
+    того, что требует гейт входа.
+
+    04.09 система сутки не открыла ни одной сделки, главный блокер —
+    `tp2_reached_too_rarely`. Гейт требует долю достижений TP2 не ниже
+    1/(1+RR), то есть безубыточную частоту для ставки «всё или ничего». Но мы
+    так не торгуем: на TP1 фиксируется половина, после TP1 стоп в безубытке,
+    защитные выходы банкуют часть хода.
+
+    Здесь эти две величины стоят рядом, чтобы решать по факту, а не по
+    предположению, какой из конъюнктивных гейтов виноват.
+    """
+    from services.regime_expectancy_report import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/depth-coverage", dependencies=[Depends(require_owner_action)])
 def analytics_depth_coverage(limit: int = 200):
     """(#depth-failopen-2026-07-27) Сколько входов прошло БЕЗ данных стакана.
