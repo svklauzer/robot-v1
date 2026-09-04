@@ -189,6 +189,9 @@ def test_paper_mode_never_blocks_on_exchange_side_state(monkeypatch):
 
     assert result["safe"] is True
     assert result["error"] == "paper_mode_no_exchange_side_positions"
+    # Биржу не спрашивали — значит и «недоступна» утверждать нельзя.
+    # False здесь читалось бы как факт о HTX, которого мы не проверяли.
+    assert result["reachable"] is None
 
 
 def test_paper_mode_does_not_touch_the_exchange_at_all(monkeypatch):

@@ -152,6 +152,11 @@ def check(*, force: bool = False) -> dict:
     # осмысленное только для реальных денег, не имеет права гейтить paper.
     if not bool(getattr(settings, "is_live_enabled", False)):
         result["safe"] = True
+        # None, а не False: мы биржу НЕ СПРАШИВАЛИ. False здесь читался бы как
+        # «HTX недоступна» — то есть поле сообщало бы факт, которого не
+        # проверяло. Ровно тот вид тихого вранья, ради которого этот гейт и
+        # переписывается.
+        result["reachable"] = None
         result["error"] = "paper_mode_no_exchange_side_positions"
         _cache = result
         _cache_at = now
