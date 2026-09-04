@@ -68,6 +68,16 @@ def _honest_net(signal: Signal) -> float:
 _SIDE_SIGNED = {"entry_depth.obi", "entry_depth.cvd_ratio", "entry_depth.cvd"}
 
 _NUMERIC: tuple[tuple[str, str], ...] = (
+    # (#confidence-axis-2026-09-04) Собственная оценка качества. Проверялась
+    # последней, а оказалась главной: грейд — пороговая функция от неё, и
+    # A-грейд измерен как значимо убыточный (−0.43R, ДИ [−0.75; −0.07]) при
+    # вдвое меньшем MFE и вдвое меньшей достижимости TP1, чем у B. Признаки из
+    # plan_json не разделяли группы вовсе — потому что разделяет композитная
+    # оценка, и разделяет в ОБРАТНУЮ сторону.
+    ("signal.confidence", "confidence сигнала"),
+    ("signal.net_rr_tp1", "плановый RR до TP1"),
+    ("signal.net_rr_tp2", "плановый RR до TP2"),
+    ("signal.required_margin", "маржа позиции"),
     # микроструктура на момент входа
     ("entry_depth.spread_pct", "спред в стакане"),
     ("entry_depth.obi", "перекос стакана В СТОРОНУ сделки"),
@@ -229,7 +239,12 @@ def _numeric_row(path: str, label: str, stopped: list[Signal],
         out: list[float] = []
         for s in items:
             plan = s.plan_json or {}
-            value = _num(_dig(plan, path))
+            # Префикс signal. — поле самой записи, а не плана. Без него ось
+            # confidence, на которой стоит весь грейд, осталась непроверенной.
+            if path.startswith("signal."):
+                value = _num(getattr(s, path.split(".", 1)[1], None))
+            else:
+                value = _num(_dig(plan, path))
             if value is None:
                 continue
             if path in _SIDE_SIGNED:
