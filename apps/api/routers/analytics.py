@@ -257,6 +257,29 @@ def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = N
         db.close()
 
 
+@router.get("/entry-gate-census", dependencies=[Depends(require_owner_action)])
+def analytics_entry_gate_census(window_hours: float = 24.0, max_rows: int = 20000):
+    """(#entry-gate-census-2026-09-04) Что на самом деле не пускает входы.
+
+    04.09 при активном рынке за час не прошёл ни один вход, и ни одна
+    блокировка не была связана с уверенностью — правки оценки поток не резали.
+    Держат два гейта: условия ТЗ (почти всегда `adx_rising`) и достижимость TP2.
+
+    Главное число отчёта — `sole_enforce_blocker`: у скольких событий
+    `adx_rising` ЕДИНСТВЕННОЕ не прошедшее enforce-условие. Ослабление порога
+    способно открыть вход только для них.
+
+    Ничего не блокирует и не меняет — только показания.
+    """
+    from services.entry_gate_census import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/depth-coverage", dependencies=[Depends(require_owner_action)])
 def analytics_depth_coverage(limit: int = 200):
     """(#depth-failopen-2026-07-27) Сколько входов прошло БЕЗ данных стакана.
