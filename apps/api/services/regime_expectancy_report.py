@@ -38,6 +38,7 @@ regime_expectancy_sizer).
 """
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -72,6 +73,50 @@ def _f(value) -> float | None:
         return None
 
 
+def _bootstrap_ci(pairs: list[tuple[float, float]], *, iters: int = 2000,
+                  seed: int = 20260904) -> tuple[float | None, float | None]:
+    """95% интервал для Σnet/Σrisk бутстрапом по сделкам.
+
+    (#expectancy-ci-2026-09-04) Точечная оценка на 40–50 сделках не отличает
+    убыток от нуля, и без интервала легко объявить находкой то, что является
+    разбросом. В коде уже записан прецедент: 30.07 грейд измерили как
+    A +0.090R [−0.210; +0.434] против B −0.070R [−0.181; +0.048] — оба
+    интервала накрывают ноль, ось ничего не предсказывает. Сейчас та же ось
+    показывает противоположный знак, что для шума нормально. Чтобы это было
+    видно, а не выводилось на глаз, интервал считается здесь.
+
+    Бутстрап, а не нормальное приближение: распределение результата сделки
+    имеет тяжёлый хвост (редкие крупные плюсы), и симметричный интервал вокруг
+    среднего ему не подходит.
+
+    Seed фиксирован: один и тот же набор сделок обязан давать один и тот же
+    интервал, иначе отчёт выглядит пляшущим и ему перестают верить.
+    """
+    if len(pairs) < 5:
+        return None, None
+
+    rng = random.Random(seed)
+    n = len(pairs)
+    samples: list[float] = []
+    for _ in range(iters):
+        net_sum = 0.0
+        risk_sum = 0.0
+        for _ in range(n):
+            net, risk = pairs[rng.randrange(n)]
+            net_sum += net
+            risk_sum += risk
+        if risk_sum > 0:
+            samples.append(net_sum / risk_sum)
+
+    if len(samples) < iters // 2:
+        return None, None
+
+    samples.sort()
+    lo = samples[int(0.025 * len(samples))]
+    hi = samples[min(int(0.975 * len(samples)), len(samples) - 1)]
+    return round(lo, 4), round(hi, 4)
+
+
 def _dist_pct(entry: float | None, level: float | None) -> float | None:
     """Дистанция до уровня в процентах входа — та же величина, по которой
     tp_reachability сравнивает MFE."""
@@ -104,10 +149,24 @@ def build(db: Session, *, window_hours: float = 720.0, bot_id: int | None = None
     regimes = [_regime_row(name, items) for name, items in buckets.items()]
     regimes.sort(key=lambda r: r["sample"], reverse=True)
 
+    # (#expectancy-ci-2026-09-04) Грейд — ось, по которой раздаются пороги
+    # входа и срок жизни сигнала. 30.07 её уже измеряли и признали
+    # непредсказывающей (оба интервала накрывали ноль). Считаем ту же величину
+    # тем же способом, чтобы сравнение было like-for-like, а не «на глаз».
+    grade_buckets: dict[str, list[Signal]] = {}
+    for signal in rows:
+        grade = str(signal.grade or "unknown").upper()
+        grade_buckets.setdefault(grade, []).append(signal)
+    grades = [_regime_row(name, items) for name, items in grade_buckets.items()]
+    grades.sort(key=lambda r: r["sample"], reverse=True)
+    for row in grades:
+        row["grade"] = row.pop("regime")
+
     return {
         "window_hours": float(window_hours),
         "closed_signals": len(rows),
         "regimes": regimes,
+        "grades": grades,
         "note": (
             "expectancy_r = Σ closed_net_pnl / Σ |net_pnl_stop| — средний "
             "результат сделки в R, издержки и частичная фиксация TP1 уже "
@@ -129,6 +188,7 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
     phantom_count = 0
     phantom_delta = 0.0
 
+    pairs: list[tuple[float, float]] = []
     by_reason: dict[str, dict] = {}
     mfe_values: list[float] = []
     rr_values: list[float] = []
@@ -158,6 +218,7 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
             net_total += net
             net_total_raw += (net_raw or 0.0)
             risk_total += risk
+            pairs.append((net, risk))
             counted += 1
             if is_phantom:
                 phantom_count += 1
@@ -197,6 +258,13 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
                 tp2_triggered += 1
 
     expectancy_r = (net_total / risk_total) if risk_total > 0 else None
+    ci_low, ci_high = _bootstrap_ci(pairs)
+    # Отличим ли результат от нуля вообще. Без этого точечная оценка на
+    # четырёх десятках сделок читается как факт, которым не является.
+    significant = (
+        None if (ci_low is None or ci_high is None)
+        else not (ci_low <= 0.0 <= ci_high)
+    )
     median_rr = _median(rr_values)
     required = (1.0 / (1.0 + median_rr)) if median_rr else None
     tp2_realized = (tp2_reached / reach_measured) if reach_measured else None
@@ -226,6 +294,8 @@ def _regime_row(regime: str, signals: list[Signal]) -> dict:
         "phantom_overstatement_usdt": round(abs(phantom_delta), 6),
         "risk_usdt": round(risk_total, 6),
         "expectancy_r": round(expectancy_r, 4) if expectancy_r is not None else None,
+        "expectancy_r_ci": [ci_low, ci_high],
+        "significant": significant,
         "expectancy_r_raw": (
             round(net_total_raw / risk_total, 4) if risk_total > 0 else None
         ),
