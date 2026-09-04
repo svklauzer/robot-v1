@@ -46,13 +46,13 @@ def db():
 def _closed(db, *, regime: str, net: float, risk: float, entry: float = 100.0,
             tp1: float = 101.0, tp2: float = 103.0, mfe: float = 0.0,
             rr: float = 2.0, reason: str = "stop_loss",
-            required_margin: float = 200.0):
+            required_margin: float = 200.0, grade: str = "A"):
     signal = Signal(
         bot_id=db.bot_id, symbol="X/USDT", side="long", status="closed",
         entry_zone_json={"from": entry, "to": entry},
         stop_price=entry * 0.99,
         tp_json={"tp1": tp1, "tp2": tp2},
-        confidence=70.0, rationale="t", grade="A", is_public=True,
+        confidence=70.0, rationale="t", grade=grade, is_public=True,
         closed_at=datetime.now(timezone.utc) - timedelta(hours=1),
         closed_net_pnl=net,
         net_pnl_stop=-abs(risk),
@@ -244,3 +244,76 @@ def test_two_reach_measures_expose_the_92_percent_trigger(db):
 
     assert row["tp2_reach_realized"] == 0.0
     assert row["tp2_trigger_realized"] == 1.0
+
+
+# ── интервал: отличим ли результат от нуля (#expectancy-ci-2026-09-04) ─────
+#
+# В коде уже записан прецедент (signal_quality.py, 30.07): грейд измерили как
+# A +0.090R [−0.210; +0.434] против B −0.070R [−0.181; +0.048]. Оба интервала
+# накрывают ноль — ось ничего не предсказывает. 04.09 та же ось показала
+# ПРОТИВОПОЛОЖНЫЙ знак (A хуже B), что для шума нормально и находкой не
+# является. Без интервала это различить нельзя, а точечная оценка на четырёх
+# десятках сделок читается как факт.
+
+def test_noisy_sample_is_not_called_significant(db):
+    """Разнородные исходы вокруг нуля: точечная оценка отрицательна, но
+    интервал накрывает ноль — вывод «режим убыточен» делать нельзя."""
+    for net in (2.0, -1.0, 3.0, -2.0, 1.0, -3.0, 0.5, -1.5, 2.5, -2.5):
+        _closed(db, regime="noisy", net=net, risk=1.0)
+
+    row = build(db)["regimes"][0]
+
+    lo, hi = row["expectancy_r_ci"]
+    assert lo < 0 < hi
+    assert row["significant"] is False
+
+
+def test_consistent_loss_is_called_significant(db):
+    """Обратная сторона: когда убыток устойчив, интервал ноль не накрывает и
+    вывод делать можно."""
+    for _ in range(30):
+        _closed(db, regime="bad", net=-0.9, risk=1.0)
+
+    row = build(db)["regimes"][0]
+
+    lo, hi = row["expectancy_r_ci"]
+    assert hi < 0
+    assert row["significant"] is True
+
+
+def test_tiny_sample_gets_no_interval_at_all(db):
+    """На четырёх сделках интервал не считается: любая его ширина создавала бы
+    видимость измерения там, где его нет."""
+    for _ in range(4):
+        _closed(db, regime="tiny", net=-1.0, risk=1.0)
+
+    row = build(db)["regimes"][0]
+
+    assert row["expectancy_r_ci"] == [None, None]
+    assert row["significant"] is None
+
+
+def test_interval_is_reproducible(db):
+    """Один и тот же набор сделок обязан давать один и тот же интервал —
+    иначе отчёт выглядит пляшущим и ему перестают верить."""
+    for net in (1.0, -2.0, 3.0, -1.0, 0.5, -0.5, 2.0, -3.0):
+        _closed(db, regime="r", net=net, risk=1.0)
+
+    assert build(db)["regimes"][0]["expectancy_r_ci"] == \
+           build(db)["regimes"][0]["expectancy_r_ci"]
+
+
+def test_grade_axis_is_measured_the_same_way(db):
+    """Грейд раздаёт пороги входа и срок жизни сигнала. Меряем его той же
+    величиной и тем же способом, что режимы, — иначе сравнивать с июльским
+    замером нечего."""
+    for _ in range(12):
+        _closed(db, regime="r", net=-1.0, risk=1.0, grade="A")
+    for _ in range(12):
+        _closed(db, regime="r", net=1.0, risk=1.0, grade="B")
+
+    grades = {g["grade"]: g for g in build(db)["grades"]}
+
+    assert grades["A"]["expectancy_r"] == pytest.approx(-1.0)
+    assert grades["B"]["expectancy_r"] == pytest.approx(1.0)
+    assert grades["A"]["significant"] is True
