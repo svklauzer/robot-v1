@@ -10,7 +10,11 @@
 """
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+API = Path(__file__).resolve().parents[1]
 
 import pytest
 from sqlalchemy import create_engine
@@ -20,7 +24,7 @@ from core.db import Base
 from models.bot import Bot
 from models.signal import Signal
 from models.user import User
-from services.stop_loss_forensics import _auc, build
+from services.stop_loss_forensics import _CATEGORICAL, _NUMERIC, _auc, build
 
 
 @pytest.fixture
@@ -268,3 +272,37 @@ def test_side_filter_is_reported_back(db):
     _sig(db, reason="stop_loss", side="short")
     assert build(db, side="short", min_group=1)["side"] == "short"
     assert build(db, side="long", min_group=1)["stopped"]["n"] == 0
+
+
+def _trade_plan_keys() -> set[str]:
+    """Ключи словаря plan_json, который боевой путь пишет в сделку."""
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value for k in node.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        if {"tz_shadow", "tp_reach", "entry_reason"} <= keys:
+            return keys
+    raise AssertionError("не найден словарь plan_json боевого пути")
+
+
+def test_every_measured_feature_actually_reaches_the_plan():
+    """(#setup-quality-plan-2026-09-04) Признак, которого нет в плане, не
+    «показывает 0.5» — он молча выпадает из отчёта за нехваткой данных.
+
+    Именно это и произошло: шесть признаков setup_quality.* перечислялись в
+    списке замера, а в боевой plan_json ключ `setup_quality` не писался вовсе.
+    Со стороны это выглядело как «признак не разделяет группы» — то есть
+    отсутствие данных читалось как результат. Разница между «измерили и ничего
+    не нашли» и «не измерили» — единственное, ради чего этот отчёт существует.
+    """
+    plan_keys = _trade_plan_keys()
+    paths = [p for p, _ in _NUMERIC] + [p for p, _ in _CATEGORICAL]
+
+    missing = sorted({
+        path.split(".")[0] for path in paths
+        if not path.startswith("signal.") and path.split(".")[0] not in plan_keys
+    })
+
+    assert missing == [], f"признаки замеряются, но в план не пишутся: {missing}"
