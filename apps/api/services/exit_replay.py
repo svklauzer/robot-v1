@@ -579,9 +579,28 @@ def build(limit: int = 2000) -> dict:
     return {
         "status": "ok",
         "profile": "scalp",
+        # (#replay-ui-parity-2026-09-05) Скальп-профиль отдавал меньше полей,
+        # чем трендовый, и страница показывала «—% на сделку» и ни слова о том,
+        # что моделировали. Две вкладки одного инструмента не имеют права
+        # объяснять себя по-разному: читатель не обязан помнить, какая из них
+        # честнее.
+        "exit_model": {
+            "ladder": ["arm", "giveback", "time_stop"],
+            "tp1_partial_share": 0.0,
+            "tp2_partial_share": 0.0,
+            "tp2_trigger_share": 0.0,
+            "trades_with_targets": 0,
+            "trades_without_targets": len(trades),
+            "note": ("Скальп-профиль частичные фиксации не моделирует: у него своя "
+                     "лестница arm/giveback/time-stop. Долей TP1/TP2 здесь нет "
+                     "не потому, что они нулевые, а потому что этот контур ведёт "
+                     "сделку иначе."),
+        },
+        "sources": sources,
         "trades_replayed": len(trades),
         "skipped_no_trajectory": skipped_no_traj,
         "actual_total_pct": actual_total,
+        "actual_avg_pct": round(actual_total / len(trades), 4),
         "booked_total_pct": round(sum(t["booked_pct"] for t in trades), 4),
         "phantom_fill_trades": phantom_count,
         "current_config": current,
