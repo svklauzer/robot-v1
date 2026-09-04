@@ -49,6 +49,23 @@ def _frontend_labels(page: str, dict_name: str) -> set[str]:
     return set(re.findall(r"^\s{2,}([a-z0-9_]+):", body, re.M))
 
 
+def _rendered(page: str) -> str:
+    """Текст страницы без комментариев (#analytics-audit-2026-09-05).
+
+    Проверки вида «страница больше не обещает X» трижды подряд падали на моих же
+    комментариях, объясняющих, почему X убрали. Тест обязан смотреть на то, что
+    видит пользователь: комментарий — объяснение для читателя кода, а не
+    содержимое экрана. Иначе выбор такой: либо не писать причину рядом с
+    правкой, либо ослабить проверку. Оба варианта хуже, чем убрать комментарии
+    из сравнения.
+    """
+    import re as _re
+
+    without_jsx = _re.sub(r"\{/\*.*?\*/\}", "", page, flags=_re.S)
+    without_block = _re.sub(r"/\*.*?\*/", "", without_jsx, flags=_re.S)
+    return _re.sub(r"^\s*//.*$", "", without_block, flags=_re.M)
+
+
 def test_every_close_reason_has_a_ui_label():
     backend = _backend_close_reasons()
     frontend = _frontend_labels("app/signals/page.tsx", "CLOSE_REASON_LABELS")
@@ -309,7 +326,7 @@ def test_backtest_page_does_not_restate_the_methodology_the_backend_owns():
     """Заголовок держал вторую копию объяснения и обещал сравнение по gross-%,
     тогда как бэкенд на том же экране объяснял, что формулировка неверна и
     сравнение идёт по чистым. Две копии расходятся молча."""
-    page = (WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8")
+    page = _rendered((WEB / "app" / "backtest" / "page.tsx").read_text(encoding="utf-8"))
     header = page[:page.index("</header>")]
 
     assert "gross-%" not in header, "заголовок снова пересказывает методику расчёта"
@@ -340,3 +357,50 @@ def test_both_profiles_explain_themselves_the_same_way():
     for field in ('"exit_model"', '"sources"', '"actual_avg_pct"'):
         assert field in scalp, f"скальп-профиль не отдаёт {field}"
         assert field in trend, f"трендовый профиль не отдаёт {field}"
+
+
+def test_analytics_shows_the_sample_size_before_the_ratios():
+    """(#analytics-audit-2026-09-05) Эндпоинт ожидания возвращает `sample`, а
+    страница показывала payoff и winrate без него — ровно ту ловушку, о которой
+    предупреждает примечание того же ответа: 67% побед при payoff 0.11 это
+    убыточная система. Соседняя страница бэктеста ставит размер выборки первым
+    намеренно.
+    """
+    page = (WEB / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "expectancy.sample" in page, "ожидание показано без размера выборки"
+    assert page.index("expectancy.sample") < page.index("payoff_ratio"), (
+        "выборка идёт после производных величин"
+    )
+
+
+def test_analytics_does_not_retell_the_backend_note():
+    """Примечание к ожиданию приходит с бэкенда и обязано жить в одном месте:
+    пересказ во фронте — вторая копия, расходящаяся молча. Ровно так разъехалась
+    методика на странице бэктеста."""
+    page = (WEB / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "expectancy.note" in page, "примечание бэкенда не показано"
+
+
+def test_readiness_panel_lives_on_one_page_only():
+    """Production readiness была на /analytics и на /health одновременно, причём
+    на /health — с сетевой диагностикой и состоянием бирж, то есть с контекстом,
+    без которого блокер не разобрать. Две поверхности правды расходятся молча;
+    тот же довод убрал отсюда Telegram delivery 28.07.
+    """
+    analytics = _rendered((WEB / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8"))
+    health = (WEB / "app" / "health" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "Production blockers" in health, "перечень блокеров исчез со /health"
+    assert "Production readiness" not in analytics, "панель готовности вернулась дублем"
+
+
+def test_analytics_subtitle_matches_what_the_page_holds():
+    """Подзаголовок обещал Telegram delivery ещё полтора месяца после того, как
+    панель убрали. Описание, живущее отдельно от содержимого, устаревает молча.
+    """
+    page = _rendered((WEB / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8"))
+    header = page[:page.index("</header>")]
+
+    assert "Telegram" not in header, "подзаголовок снова обещает раздел, которого нет"
