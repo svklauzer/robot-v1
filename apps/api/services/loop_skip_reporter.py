@@ -55,20 +55,22 @@ class LoopSkipReporter:
     """Состояние между тиками: что писали в прошлый раз и когда."""
 
     def __init__(self, *, resumed_decision: str = DECISION_RESUMED,
-                 min_duration_sec: float = 0.0) -> None:
+                 clear_hold_sec: float = 0.0) -> None:
         self._reason: str | None = None
         self._last_at: float = 0.0
-        # (#scan-flap-2026-09-05) Когда состояние держится один тик, пара
-        # «замолчал → возобновил» не сообщает ничего и пишется каждые два тика.
-        # Так и вышло у оси сканирования: `_approved` растёт, едва символ прошёл
-        # ОТБОР СЕТАПА, а вход дальше блокируется своим гейтом и пишет своё
-        # событие. За два часа лента набрала 19 системных записей, ни одна из
-        # которых не отвечала на вопрос «стоим мы или нет».
+        # (#scan-flap-2026-09-05, ревизия 2) Гистерезис стоит на СНЯТИИ, а не на
+        # объявлении. Первый вариант ждал, пока причина продержится, — и на
+        # чередующемся состоянии (а оно чередуется каждый тик: символ проходит
+        # отбор сетапа и тут же блокируется своим гейтом) отсчёт сбрасывался
+        # каждый раз. Порог не набирался никогда, и не писалось НИЧЕГО: дребезг
+        # обменялся на полную тишину, то есть на ту самую проблему, ради которой
+        # репортёр и написан.
         #
-        # Порог задаёт, сколько состояние обязано продержаться, прежде чем его
-        # запишут. Ноль — прежнее поведение: у оси «цикл не сделал шаг» задержка
-        # вредна, там важна каждая секунда простоя.
-        self._min_duration = float(min_duration_sec)
+        # Правильная сторона — снятие. Молчание объявляется сразу, а вот считать
+        # его законченным можно лишь когда работа возобновилась НАДОЛГО. Один
+        # тик с одобренным символом — не возобновление.
+        self._clear_hold = float(clear_hold_sec)
+        self._clear_since: float = 0.0
         self._since: float = 0.0
         self._announced: bool = False
         # (#scan-visibility-2026-09-05) Своя отметка возобновления на каждую ось
@@ -90,15 +92,27 @@ class LoopSkipReporter:
         prev = self._reason
 
         if not reason:
+            if prev is None:
+                return False
+            if self._clear_hold > 0:
+                if not self._clear_since:
+                    self._clear_since = now
+                if (now - self._clear_since) < self._clear_hold:
+                    # Работа возобновилась, но ещё не доказала, что надолго.
+                    # Состояние не снимаем: иначе следующий пустой проход
+                    # объявит новое молчание, и пара запишется заново.
+                    return False
+
             announced = self._announced
             held_sec = (now - self._since) if self._since else 0.0
             self._reason = None
             self._last_at = 0.0
             self._since = 0.0
             self._announced = False
+            self._clear_since = 0.0
             # Возобновление пишется только там, где было о чём объявлять:
             # без этого маркер закрывал молчание, которого читатель не видел.
-            if prev and announced:
+            if announced:
                 return self._write(
                     db, decisions, self._resumed_decision, "ok",
                     {"after_skip": prev, "held_sec": round(held_sec, 1),
@@ -106,15 +120,13 @@ class LoopSkipReporter:
                 )
             return False
 
+        # Молчание продолжается — отсчёт возобновления обнуляется.
+        self._clear_since = 0.0
+
         changed = reason != prev
         if changed:
             self._since = now
             self._announced = False
-
-        # Состояние обязано продержаться: одиночный тик — не простой.
-        if (now - self._since) < self._min_duration:
-            self._reason = reason
-            return False
 
         stale = self._announced and (now - self._last_at) >= self._heartbeat_sec()
         if self._announced and not stale:
