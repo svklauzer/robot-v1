@@ -306,3 +306,27 @@ def test_every_measured_feature_actually_reaches_the_plan():
     })
 
     assert missing == [], f"признаки замеряются, но в план не пишутся: {missing}"
+
+
+def test_latched_entries_form_their_own_cohort(db):
+    """(#latch-cohort-2026-09-05) Защёлка импульса впускает сделки с пометкой
+    `adx_rising_latched`. Это единственный способ ответить, стали ли входы,
+    пойманные в фазе импульса, лучше остальных: без разреза они растворятся в
+    общей массе, и вооружение защёлки останется непроверяемым.
+    """
+    for _ in range(3):
+        s = _sig(db, reason="stop_loss")
+        s.plan_json = {**s.plan_json,
+                       "tz_shadow": {"enforce_reason": "adx_rising_latched"}}
+    for _ in range(2):
+        s = _sig(db, reason="tp2_reached", net=2.0)
+        s.plan_json = {**s.plan_json,
+                       "tz_shadow": {"enforce_reason": "enabled_conditions_passed"}}
+    db.flush()
+
+    levels = next(c for c in build(db, min_group=1)["categorical"]
+                  if c["feature"] == "tz_shadow.enforce_reason")["levels"]
+
+    assert levels["adx_rising_latched"]["n"] == 3
+    assert levels["adx_rising_latched"]["stop_rate"] == pytest.approx(1.0)
+    assert levels["enabled_conditions_passed"]["stop_rate"] == pytest.approx(0.0)
