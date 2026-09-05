@@ -218,3 +218,43 @@ def test_negative_and_zero_mfe_ignored(monkeypatch, tmp_path):
     out = tr.evaluate(symbol="SOL/USDT", regime="trend_up_candidate",
                       tp1_dist_pct=0.9, tp2_dist_pct=2.0, net_rr_tp2=2.9)
     assert out.sample == 40
+
+
+def test_shadow_still_records_its_own_verdict(monkeypatch, tmp_path):
+    """(#shadow-verdict-2026-09-06) В shadow `allowed` всегда True, а `reason`
+    — «mode_shadow»: собственное решение гейта в записи не оставалось совсем.
+
+    06.09 режим отпущен именно ради проверки «прав ли гейт»: он судит по
+    достижению TP2, тогда как сделка платится через TP1 и трейл (замер 04.09:
+    дошедшая до TP1 даёт +0.98R против −0.83R у недошедшей). Ответить можно
+    только сравнив исходы пропущенных и остановленных сделок — а для этого
+    вердикт обязан лежать в плане, а не выводиться заново из чисел по памяти.
+    """
+    monkeypatch.setattr(settings, "TP_REACH_MODE", "shadow", raising=False)
+    _seed(monkeypatch, tmp_path, _rows(40, 0.2))          # до цели не доходят
+
+    out = tr.evaluate(symbol="SOL/USDT", regime="trend_up_candidate",
+                      tp1_dist_pct=0.9, tp2_dist_pct=2.0, net_rr_tp2=2.0)
+
+    assert out.allowed is True, "shadow обязан пропускать"
+    assert out.reason == "mode_shadow"
+    assert out.would_block is True, "вердикт гейта потерян — эксперимент не разобрать"
+
+
+def test_verdict_matches_the_block_when_enforcing(monkeypatch, tmp_path):
+    """Вердикт и действие обязаны совпадать в enforce, иначе разрез по нему
+    описывал бы не тот гейт, что работал."""
+    _seed(monkeypatch, tmp_path, _rows(40, 0.2))
+
+    blocked = tr.evaluate(symbol="SOL/USDT", regime="trend_up_candidate",
+                          tp1_dist_pct=0.9, tp2_dist_pct=2.0, net_rr_tp2=2.0)
+    assert blocked.allowed is False and blocked.would_block is True
+
+    _seed(monkeypatch, tmp_path, _rows(40, 3.0))
+    tr._CACHE["ts"] = 0.0
+    tr._CACHE["by_key"] = {}
+    tr._CACHE["by_regime"] = {}
+
+    passed = tr.evaluate(symbol="SOL/USDT", regime="trend_up_candidate",
+                         tp1_dist_pct=0.9, tp2_dist_pct=2.0, net_rr_tp2=2.0)
+    assert passed.allowed is True and passed.would_block is False
