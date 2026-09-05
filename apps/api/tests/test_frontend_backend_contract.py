@@ -404,3 +404,24 @@ def test_analytics_subtitle_matches_what_the_page_holds():
     header = page[:page.index("</header>")]
 
     assert "Telegram" not in header, "подзаголовок снова обещает раздел, которого нет"
+
+
+def test_the_ml_step_in_confidence_is_visible_not_a_contradiction():
+    """(#ml-blend-visible-2026-09-06) Карточка сигнала #475 показывала 71.7 в
+    диагностике и 60.67 в шапке — два разных числа под одним словом
+    «уверенность». Разница в смешивании с MLScorer (71.7×0.7 + 35×0.3), и
+    различить их было нечем: шапка выглядела опечаткой.
+
+    Смешивание идёт независимо от ML_MODE, а уверенность гейтит вход и задаёт
+    грейд: у #476 оно опустило 75.8 до 63.54 и сменило грейд с A на B в режиме,
+    который обещает «на сделки НЕ влияет». Пока шаг не виден, этого не заметить.
+    """
+    source = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+
+    assert '"ml_blend"' in source, "шаг ML не пишется в план"
+    for field in ("before_ml", "ml_confidence", "after_ml", "ml_mode"):
+        assert field in source, f"в записи шага нет {field}"
+
+    assert "conf.ml_blend" in page, "шаг ML не показан на карточке"
+    assert "after_ml" in page, "итог после ML не показан рядом с шапкой"
