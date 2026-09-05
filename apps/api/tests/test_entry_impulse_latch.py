@@ -182,3 +182,34 @@ def test_rise_minimum_is_configurable(monkeypatch):
 
     strong = _tf(adx=30.0, adx_prev=29.0, k=40.0, k_prev=40.0, d=35.0, d_prev=35.0)
     assert detect(strong, "long")[0] == IMPULSE_ADX_TURN
+
+
+def test_only_an_adx_impulse_substitutes_for_the_adx_condition(monkeypatch):
+    """(#latch-kind-2026-09-05) Прямо из ленты 05.09: у ADA защёлка стояла на
+    кроссе Stoch при adx_delta −0.87 и в enforce сняла бы отказ `adx_rising`
+    там, где ADX ПАДАЛ.
+
+    Подменять условие можно только его собственным событием. Вдобавок `stoch`
+    не входит в вооружённые семейства — теневой сигнал снимал бы
+    enforce-блокировку.
+    """
+    monkeypatch.setattr(settings, "ENTRY_IMPULSE_LATCH_MODE", "enforce", raising=False)
+    latch = ImpulseLatch()
+
+    # ADX падает, но Stoch пересёк — импульс записан, основанием не является.
+    latch.observe("ADA/USDT", "long",
+                  _tf(adx=21.3, adx_prev=22.2, k=3.2, k_prev=0.0, d=1.1, d_prev=2.0),
+                  now=0.0)
+    snap = latch.snapshot("ADA/USDT", "long", now=60.0)
+
+    assert snap["live"] is True, "наблюдение обязано сохраниться"
+    assert snap["impulse"]["kind"] == IMPULSE_STOCH_CROSS
+    assert substitutes_adx_rising(snap) is False
+
+
+def test_an_adx_impulse_still_substitutes(monkeypatch):
+    monkeypatch.setattr(settings, "ENTRY_IMPULSE_LATCH_MODE", "enforce", raising=False)
+    latch = ImpulseLatch()
+    latch.observe("XRP/USDT", "long", _tf(adx=19.2, adx_prev=18.8), now=0.0)
+
+    assert substitutes_adx_rising(latch.snapshot("XRP/USDT", "long", now=1600.0)) is True

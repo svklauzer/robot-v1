@@ -285,3 +285,31 @@ def test_events_without_the_latch_field_are_not_counted_as_absent(db):
 
     assert out["observed"] == 1
     assert out["share_live"] == pytest.approx(1.0)
+
+
+def test_latch_counts_are_split_by_kind(db):
+    """(#latch-kind-2026-09-05) Общий счётчик «живая защёлка» смешивал импульс
+    по ADX с кроссом Stoch и завышал ожидаемый эффект enforce: снять отказ
+    `adx_rising` вправе только событие ПО ADX.
+    """
+    for _ in range(4):
+        _tz_latched(db, live=True)                       # adx_turned_up
+    db.add(IntelligenceEvent(
+        symbol="ADA/USDT", status="blocked", decision="tz_entry_conditions",
+        action="long", regime="trend_up_candidate",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        payload_json={
+            "evaluated": True, "failed": ["adx_not_rising:22.2->21.3"],
+            "adx_delta": -0.87, "enforce_reason": "blocked_by:adx_rising",
+            "impulse_latch": {"mode": "shadow", "live": True,
+                              "impulse": {"kind": "stoch_crossed", "age_sec": 60.0}},
+        },
+    ))
+    db.flush()
+
+    out = build(db)["adx_rising"]["impulse_latch"]
+
+    assert out["live_on_adx_block"] == 5
+    assert out["live_by_kind"]["adx_turned_up"] == 4
+    assert out["live_by_kind"]["stoch_crossed"] == 1
+    assert out["sole_blocker_by_kind"]["adx_turned_up"] == 4
