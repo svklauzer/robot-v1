@@ -156,9 +156,9 @@ def test_chop_is_still_rejected(young):
     )
 
     assert ok is False
-    assert "adx=14.0<20" in note
+    assert "adx=14.00<20.00" in note
     assert "adx_falling" in note or "adx_rise_too_small" in note
-    assert "di_spread=1.0<15" in note
+    assert "di_spread=1.00<15.00" in note
 
 
 def test_dying_trend_does_not_get_the_young_pass(young):
@@ -178,7 +178,7 @@ def test_direction_is_respected(young):
     ok, note = _svc()._young_trend_override(_anchor(), "short")
 
     assert ok is False
-    assert "di_spread=-28.2" in note
+    assert "di_spread=-28.16" in note
 
 
 def test_flag_off_restores_previous_behaviour(monkeypatch, young):

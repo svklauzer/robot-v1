@@ -248,8 +248,13 @@ class MarketIntelligenceEngine:
         adx_rise = adx - adx_prev
 
         failed = []
+        # (#miss-precision-2026-09-05) Значение и порог печатаются с ОДНОЙ
+        # точностью. В ленте 05.09 стояло «di_spread=15.0<15» — сообщение,
+        # противоречащее само себе: величина 14.97 округлялась до 15.0, а порог
+        # печатался целым. Читается как ошибка сравнения, хотя сравнение верное;
+        # тот же класс, что и «adx_not_rising=34.0->34.1» вчера.
         if adx < adx_min:
-            failed.append(f"adx={adx:.1f}<{adx_min:.0f}")
+            failed.append(f"adx={adx:.2f}<{adx_min:.2f}")
         if adx_rise < rise_min:
             # (#adx-label-2026-09-05) Раньше обе ветви писались как
             # `adx_not_rising`, и в разборе появлялось «adx_not_rising=34.0->34.1»
@@ -270,7 +275,7 @@ class MarketIntelligenceEngine:
             else:
                 failed.append(f"adx_falling={adx_prev:.1f}->{adx:.1f}")
         if di_spread < di_min:
-            failed.append(f"di_spread={di_spread:.1f}<{di_min:.0f}")
+            failed.append(f"di_spread={di_spread:.2f}<{di_min:.2f}")
 
         if failed:
             return False, "young_trend_failed:" + ",".join(failed)

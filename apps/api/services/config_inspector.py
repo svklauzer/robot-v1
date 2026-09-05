@@ -73,7 +73,8 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Grid", ("GRID_",)),
     ("ML", ("ML_",)),
     # LOOP_ — поведение самого торгового цикла (пульс отчёта о простое и т.п.).
-    ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_")),
+    ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_",
+                         "SCAN_SILENCE")),
     ("Телеграм и отчёты", ("TELEGRAM_", "REPORT_", "DIGEST_", "SUBSCRIPTION_", "BILLING_", "PAYMENT_")),
     ("Инфраструктура", ("APP_", "DB_", "CORS_", "JWT_", "OWNER_", "PORT", "REDIS_", "DATABASE_")),
 )
@@ -130,7 +131,7 @@ _PINNED_PREFIXES: tuple[str, ...] = (
     # дефолтом кода — и именно поэтому обязан стоять в блупринте явно: смена
     # дефолта на true молча разблокировала бы ставку на измеренно убыточное
     # ведро, без единой строки в диффе прода.
-    "GRADE_AXIS_", "CONFIDENCE_", "ENTRY_IMPULSE_",
+    "GRADE_AXIS_", "CONFIDENCE_", "ENTRY_IMPULSE_", "SCAN_SILENCE",
     # (#loop-knobs-pinning-2026-09-04) Поведение самого цикла. Страница
     # советовала вычистить LOOP_SKIP_HEARTBEAT_SEC — ключ, задающий, как часто
     # цикл сообщает о простое. Ровно тот же промах, что утром был у ANTI_CHOP_
