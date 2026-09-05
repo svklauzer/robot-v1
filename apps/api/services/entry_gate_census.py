@@ -116,6 +116,12 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
     latch_seen = 0
     latch_live_sole = 0
     latch_live_any = 0
+    # (#latch-kind-2026-09-05) Разрез по виду события. Снять отказ `adx_rising`
+    # вправе только импульс ПО ADX: кросс Stoch — другое условие, и `stoch` даже
+    # не входит в вооружённые семейства. Общий счётчик «живая защёлка» смешивал
+    # их и завышал ожидаемый эффект enforce.
+    latch_by_kind: dict[str, int] = {}
+    latch_sole_by_kind: dict[str, int] = {}
 
     for row in rows:
         payload = row.payload_json if isinstance(row.payload_json, dict) else {}
@@ -148,8 +154,11 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
             latch_seen += 1
             if latch.get("live"):
                 latch_live_any += 1
+                kind = str((latch.get("impulse") or {}).get("kind") or "unknown")
+                latch_by_kind[kind] = latch_by_kind.get(kind, 0) + 1
                 if families == [ADX_FAMILY]:
                     latch_live_sole += 1
+                    latch_sole_by_kind[kind] = latch_sole_by_kind.get(kind, 0) + 1
 
         # Единственный enforce-блокер: только здесь допуск способен открыть вход.
         if families == [ADX_FAMILY] and delta is not None:
@@ -186,6 +195,12 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
                 "live_and_sole_blocker": latch_live_sole,
                 "share_live": (round(latch_live_any / latch_seen, 4)
                                if latch_seen else None),
+                "live_by_kind": dict(sorted(latch_by_kind.items(),
+                                            key=lambda kv: kv[1], reverse=True)),
+                # Открыть вход в enforce способен ТОЛЬКО adx_turned_up: остальные
+                # виды записываются как наблюдение и основанием не служат.
+                "sole_blocker_by_kind": dict(sorted(latch_sole_by_kind.items(),
+                                                    key=lambda kv: kv[1], reverse=True)),
             },
             "thresholds_in_use": {
                 # Два порога одного и того же вопроса, оба взяты на глаз.
