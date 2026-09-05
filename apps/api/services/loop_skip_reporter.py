@@ -54,9 +54,23 @@ DECISION_SCAN_RESUMED = "scan_candidates_resumed"
 class LoopSkipReporter:
     """Состояние между тиками: что писали в прошлый раз и когда."""
 
-    def __init__(self, *, resumed_decision: str = DECISION_RESUMED) -> None:
+    def __init__(self, *, resumed_decision: str = DECISION_RESUMED,
+                 min_duration_sec: float = 0.0) -> None:
         self._reason: str | None = None
         self._last_at: float = 0.0
+        # (#scan-flap-2026-09-05) Когда состояние держится один тик, пара
+        # «замолчал → возобновил» не сообщает ничего и пишется каждые два тика.
+        # Так и вышло у оси сканирования: `_approved` растёт, едва символ прошёл
+        # ОТБОР СЕТАПА, а вход дальше блокируется своим гейтом и пишет своё
+        # событие. За два часа лента набрала 19 системных записей, ни одна из
+        # которых не отвечала на вопрос «стоим мы или нет».
+        #
+        # Порог задаёт, сколько состояние обязано продержаться, прежде чем его
+        # запишут. Ноль — прежнее поведение: у оси «цикл не сделал шаг» задержка
+        # вредна, там важна каждая секунда простоя.
+        self._min_duration = float(min_duration_sec)
+        self._since: float = 0.0
+        self._announced: bool = False
         # (#scan-visibility-2026-09-05) Своя отметка возобновления на каждую ось
         # молчания. Их две: цикл не сделал шаг вовсе и цикл прошёл шаг, но ни
         # один символ не дошёл до одобрения. С общим кодом «поехало» нельзя
@@ -76,25 +90,48 @@ class LoopSkipReporter:
         prev = self._reason
 
         if not reason:
+            announced = self._announced
+            held_sec = (now - self._since) if self._since else 0.0
             self._reason = None
             self._last_at = 0.0
-            if prev:
+            self._since = 0.0
+            self._announced = False
+            # Возобновление пишется только там, где было о чём объявлять:
+            # без этого маркер закрывал молчание, которого читатель не видел.
+            if prev and announced:
                 return self._write(
                     db, decisions, self._resumed_decision, "ok",
-                    {"after_skip": prev, "note": "цикл возобновил работу"},
+                    {"after_skip": prev, "held_sec": round(held_sec, 1),
+                     "note": "цикл возобновил работу"},
                 )
             return False
 
         changed = reason != prev
-        stale = (now - self._last_at) >= self._heartbeat_sec()
-        if not (changed or stale):
+        if changed:
+            self._since = now
+            self._announced = False
+
+        # Состояние обязано продержаться: одиночный тик — не простой.
+        if (now - self._since) < self._min_duration:
+            self._reason = reason
             return False
+
+        stale = self._announced and (now - self._last_at) >= self._heartbeat_sec()
+        if self._announced and not stale:
+            return False
+
+        # «Повтор» — это «ту же причину уже объявляли», а не «пора по пульсу».
+        # На первом событии `_last_at` равен нулю, и любая проверка на давность
+        # считает его просроченным: запись получала repeat=True с порога.
+        is_repeat = self._announced
 
         self._reason = reason
         self._last_at = now
+        self._announced = True
 
         body = dict(payload or {})
-        body["repeat"] = not changed
+        body["repeat"] = is_repeat
+        body["held_sec"] = round(now - self._since, 1)
         return self._write(db, decisions, reason, "blocked", body)
 
     def _write(self, db, decisions, decision: str, status: str, payload: dict) -> bool:

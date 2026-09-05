@@ -1414,6 +1414,11 @@ class Settings(BaseSettings):
     ENTRY_IMPULSE_WINDOW_SEC: float = 1800.0     # два бара 15m
     ENTRY_IMPULSE_ADX_RISE_MIN: float = 0.0
 
+    # (#scan-flap-2026-09-05) Сколько проход обязан молчать, прежде чем это
+    # запишут в ленту. Один тик без одобренных — норма; сообщать о нём значит
+    # писать пару «замолчал → возобновил» каждые две минуты.
+    SCAN_SILENCE_MIN_SEC: float = 300.0
+
     LEVERAGE_GRADE_A_PLUS: float = 1.0
     LEVERAGE_GRADE_A: float = 0.7
     LEVERAGE_GRADE_B: float = 0.4
