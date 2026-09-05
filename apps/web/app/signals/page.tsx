@@ -739,6 +739,22 @@ function TradeDiagnostics({ plan }: { plan: any }) {
                 только оценка рынка
               </div>
             )}
+            {/* (#ml-blend-visible-2026-09-06) Шаг ML. На #475 карточка
+                показывала 71.7 здесь и 60.67 в шапке — два разных числа под
+                одним словом «уверенность». Разница в этом смешивании, и без
+                него шапка выглядела опечаткой. */}
+            {conf.ml_blend && (
+              <div
+                className="mt-1 text-[11px] text-yellow-200/70"
+                title="MLScorer смешивается в уверенность с весом 0.3 НЕЗАВИСИМО от ML_MODE. Именно это число попадает в грейд и в гейт входа."
+              >
+                после ML: {fmt(conf.ml_blend.after_ml, 1)}{" "}
+                <span className="text-emerald-100/40">
+                  (ML {fmt(conf.ml_blend.ml_confidence, 0)} · вес{" "}
+                  {fmt(conf.ml_blend.weight, 2)} · режим {conf.ml_blend.ml_mode})
+                </span>
+              </div>
+            )}
           </div>
         )}
 

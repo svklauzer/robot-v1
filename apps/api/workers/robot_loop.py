@@ -478,7 +478,8 @@ class RobotLoop:
                 "reason": f"intelligence_{result.reason}",
             }
 
-            effective_confidence = self._intelligence_effective_confidence(result)
+            _conf_details: dict = {}
+            effective_confidence = self._intelligence_effective_confidence(result, _conf_details)
 
             setup_quality = result.setup_quality if isinstance(result.setup_quality, dict) else {}
             setup_score = setup_quality.get("final_score")
@@ -1386,7 +1387,7 @@ class RobotLoop:
                     # нельзя было отличить «обе ноги согласны и высоки» от
                     # «расходятся, и храповик взял большую» — а это ровно та
                     # разница, из-за которой ведро A наполнялось.
-                    "confidence": confidence_calibration(result).as_dict(),
+                    "confidence": _conf_details or confidence_calibration(result).as_dict(),
                     "trend_trigger": _trigger.as_dict(),
                     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
                     # OBV. Режим задаётся TZ_MODE; при enforce блокируют только
@@ -1767,7 +1768,7 @@ class RobotLoop:
             db.flush()
             return False
 
-    def _intelligence_effective_confidence(self, result) -> float:
+    def _intelligence_effective_confidence(self, result, details: dict | None = None) -> float:
         """
         Калибрует confidence для Intelligence-сигналов перед grade/publish.
 
@@ -1780,7 +1781,10 @@ class RobotLoop:
         3. MLScorer v2 adjustment — выравнивает через multi-factor features
         """
 
-        calibrated = confidence_calibration(result).effective
+        _calibration = confidence_calibration(result)
+        calibrated = _calibration.effective
+        if details is not None:
+            details.update(_calibration.as_dict())
 
         # ── MLScorer v2 secondary calibration ────────────────────────────────
         # Extract features from the primary signal timeframe (15m preferred, else 5m).
@@ -1808,8 +1812,31 @@ class RobotLoop:
                 ml_confidence = ml_result.confidence  # [35, 95]
 
                 # Blend: 70% calibrated (from intelligence) + 30% MLScorer
+                #
+                # (#ml-blend-visible-2026-09-06) Шаг записывается в план. На
+                # #475 карточка показывала 71.7 в диагностике и 60.67 в шапке —
+                # два разных числа под одним словом «уверенность», и различить
+                # их было нечем: 71.7 это ДО смешивания, 60.67 после
+                # (71.7×0.7 + 35×0.3).
+                #
+                # Режима здесь нет вовсе: смешивание идёт и при ML_MODE=shadow,
+                # хотя контракт в ml_controller гласит «на сделки НЕ влияет».
+                # Уверенность задаёт грейд и гейтит вход: у #476 она опустила
+                # 75.8 до 63.54 и сменила грейд с A на B. Поведение НЕ меняется
+                # здесь намеренно — 06.09 запущен эксперимент с
+                # TP_REACH_MODE=shadow, и вторая одновременная правка входа
+                # сделала бы его нечитаемым.
+                before_ml = calibrated
                 blended = calibrated * 0.70 + ml_confidence * 0.30
                 calibrated = round(min(blended, 92.0), 2)
+                if details is not None:
+                    details["ml_blend"] = {
+                        "before_ml": round(before_ml, 2),
+                        "ml_confidence": round(float(ml_confidence), 2),
+                        "weight": 0.30,
+                        "after_ml": calibrated,
+                        "ml_mode": str(getattr(settings, "ML_MODE", "off")),
+                    }
         except Exception:
             pass  # MLScorer errors must never block signal generation
 
