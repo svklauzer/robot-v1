@@ -233,37 +233,55 @@ def _frozen(moment: float):
 
 # ── дребезг (#scan-flap-2026-09-05) ─────────────────────────────────────────
 
-def test_a_single_tick_of_silence_is_not_reported():
-    """05.09 лента набрала 19 системных записей за два часа: пара «замолчал →
-    возобновил» каждые два тика. `_approved` растёт, едва символ прошёл ОТБОР
-    СЕТАПА, а вход дальше блокируется своим гейтом и пишет своё событие — так
-    состояние и мигало каждый проход.
+def test_a_single_productive_tick_does_not_end_the_silence():
+    """Суть ревизии. 05.09 лента набрала 19 системных записей за два часа: пара
+    «замолчал → возобновил» каждые два тика. Состояние чередуется каждый проход
+    — символ проходит отбор сетапа и тут же блокируется своим гейтом.
 
-    Один проход без одобренных — не простой. Запись обязана дождаться, пока
-    состояние продержится.
+    Первый вариант правки ждал, пока причина ПРОДЕРЖИТСЯ, и на чередовании
+    отсчёт сбрасывался каждый раз: не писалось ничего вообще. Гистерезис стоит
+    на снятии — молчание объявляется сразу, а заканчивается только когда работа
+    возобновилась надолго.
     """
     from services.loop_skip_reporter import LoopSkipReporter
 
     db, rec = object(), _Recorder()
-    reporter = LoopSkipReporter(min_duration_sec=300.0)
+    reporter = LoopSkipReporter(resumed_decision="scan_candidates_resumed",
+                                clear_hold_sec=300.0)
 
     import time as _t
     base = _t.time()
 
     with _frozen(base):
-        assert reporter.report(db, rec, reason="scan_no_candidate") is False
-    with _frozen(base + 60):
-        assert reporter.report(db, rec, reason=None) is False
+        assert reporter.report(db, rec, reason="scan_no_candidate") is True
+    for offset in (66, 132, 198, 264):          # чередование каждый тик
+        with _frozen(base + offset):
+            reporter.report(db, rec, reason=None if offset % 132 else "scan_no_candidate")
 
-    assert rec.rows == [], "мигание записано в ленту"
+    assert [r["decision"] for r in rec.rows] == ["scan_no_candidate"], (
+        "мигание снова попало в ленту"
+    )
 
 
-def test_sustained_silence_is_reported_once_and_then_closed():
+def test_silence_is_announced_immediately_not_after_a_delay():
+    """Иначе получается обмен дребезга на тишину: ровно это и произошло в первой
+    версии правки, и вопрос «стоим мы или рынок ничего не даёт» снова остался
+    без ответа."""
+    from services.loop_skip_reporter import LoopSkipReporter
+
+    db, rec = object(), _Recorder()
+    reporter = LoopSkipReporter(clear_hold_sec=300.0)
+
+    assert reporter.report(db, rec, reason="scan_no_candidate") is True
+    assert rec.rows[0]["payload"]["repeat"] is False
+
+
+def test_sustained_recovery_closes_the_silence_with_its_length():
     from services.loop_skip_reporter import LoopSkipReporter
 
     db, rec = object(), _Recorder()
     reporter = LoopSkipReporter(resumed_decision="scan_candidates_resumed",
-                                min_duration_sec=300.0)
+                                clear_hold_sec=300.0)
 
     import time as _t
     base = _t.time()
@@ -271,44 +289,45 @@ def test_sustained_silence_is_reported_once_and_then_closed():
     with _frozen(base):
         reporter.report(db, rec, reason="scan_no_candidate")
     with _frozen(base + 400):
-        assert reporter.report(db, rec, reason="scan_no_candidate") is True
-    with _frozen(base + 500):
+        assert reporter.report(db, rec, reason=None) is False   # ждём подтверждения
+    with _frozen(base + 800):
         assert reporter.report(db, rec, reason=None) is True
 
     assert [r["decision"] for r in rec.rows] == [
         "scan_no_candidate", "scan_candidates_resumed",
     ]
-    assert rec.rows[0]["payload"]["repeat"] is False
     assert rec.rows[1]["payload"]["held_sec"] >= 400
 
 
-def test_resume_is_not_written_for_a_silence_nobody_saw():
-    """Маркер возобновления закрывает объявленное молчание. Если о молчании не
-    сообщали, закрывать нечего — иначе в ленте появляется «поехало» без «стоим».
-    """
+def test_heartbeat_still_marks_a_long_silence():
+    """Пульс — единственное, чем «стоим уже час» отличается от «стояли минуту»."""
     from services.loop_skip_reporter import LoopSkipReporter
 
     db, rec = object(), _Recorder()
-    reporter = LoopSkipReporter(min_duration_sec=300.0)
+    reporter = LoopSkipReporter(clear_hold_sec=300.0)
 
     import time as _t
     base = _t.time()
 
     with _frozen(base):
         reporter.report(db, rec, reason="scan_no_candidate")
-    with _frozen(base + 10):
-        reporter.report(db, rec, reason=None)
+    with _frozen(base + 1000):
+        assert reporter.report(db, rec, reason="scan_no_candidate") is True
 
-    assert not any(r["status"] == "ok" for r in rec.rows)
+    assert rec.rows[1]["payload"]["repeat"] is True
+    assert rec.rows[1]["payload"]["held_sec"] >= 1000
 
 
-def test_immediate_reporting_stays_the_default():
-    """У оси «цикл не сделал шаг» задержка вредна: там важна каждая секунда
-    простоя, и первое же событие обязано попасть в ленту."""
+def test_immediate_clearing_stays_the_default():
+    """У оси «цикл не сделал шаг» задержки нет ни с одной стороны: там простой
+    начинается и кончается мгновенно, и важна каждая секунда."""
     from services.loop_skip_reporter import LoopSkipReporter
 
     db, rec = object(), _Recorder()
     reporter = LoopSkipReporter()
 
     assert reporter.report(db, rec, reason="loop_skip_live_safety") is True
-    assert rec.rows[0]["payload"]["repeat"] is False
+    assert reporter.report(db, rec, reason=None) is True
+    assert [r["decision"] for r in rec.rows] == [
+        "loop_skip_live_safety", "loop_resumed",
+    ]
