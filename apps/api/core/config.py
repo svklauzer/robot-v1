@@ -1,6 +1,18 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
+# (#mode-typo-2026-09-05) Допустимые значения строковых режимов. Список живёт
+# рядом с проверкой в production_blockers(): гейт, сравнивающий режим строкой,
+# без него разоружается опечаткой молча.
+_MODE_CHOICES: dict[str, frozenset[str]] = {
+    "ENTRY_IMPULSE_LATCH_MODE": frozenset({"shadow", "enforce"}),
+    "TZ_MODE": frozenset({"shadow", "enforce"}),
+    "TREND_TRIGGER_MODE": frozenset({"shadow", "enforce"}),
+    "TP_REACH_MODE": frozenset({"shadow", "enforce"}),
+    "ML_MODE": frozenset({"off", "shadow", "advisory", "full_auto"}),
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -2396,6 +2408,24 @@ class Settings(BaseSettings):
                     "These axes give A more than B, so enabling them bets harder on "
                     "the losing bucket. Fix the composite score, re-measure, then set "
                     "GRADE_AXIS_VALIDATED=true deliberately"
+                )
+
+        # (#mode-typo-2026-09-05) Режимы сравниваются строкой: `!= "enforce"`
+        # означает тень. Опечатка в значении — `eforce` вместо `enforce` —
+        # молча РАЗОРУЖАЕТ работающий гейт, и отличить это от намеренной тени
+        # нельзя ни в логе, ни на экране. Ровно так 05.09 и вышло при попытке
+        # вооружить защёлку импульса.
+        #
+        # Неизвестное значение теперь блокер: опечатка обязана выглядеть как
+        # ошибка, а не как настройка.
+        for key, allowed in _MODE_CHOICES.items():
+            value = str(getattr(self, key, "") or "").lower().strip()
+            if value and value not in allowed:
+                blockers.append(
+                    f"{key}={value!r} is not a valid mode; expected one of "
+                    f"{sorted(allowed)}. Modes are compared as strings, so an "
+                    f"unrecognised value silently falls back to the permissive "
+                    f"branch and disarms the gate without a word in the log"
                 )
 
         if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
