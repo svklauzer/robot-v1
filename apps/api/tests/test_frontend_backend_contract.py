@@ -425,3 +425,87 @@ def test_the_ml_step_in_confidence_is_visible_not_a_contradiction():
 
     assert "conf.ml_blend" in page, "шаг ML не показан на карточке"
     assert "after_ml" in page, "итог после ML не показан рядом с шапкой"
+
+
+# ── разбор главной (07.09) ──────────────────────────────────────────────────
+
+def test_no_page_invents_a_telegram_sla_out_of_silence():
+    """(#sla-without-facts-2026-09-07) `sla_pct ?? 100` стоял в трёх местах:
+    мини-карточка главной, суточный отчёт и панель на /health. Во всех трёх
+    отсутствие доставок печаталось как 100%, а в суточном ещё и красилось
+    зелёным — при том, что бэкенд там честно отдаёт null.
+
+    Порог SLA объявлен в required_gates (99%), так что молчащий канал выглядел
+    не просто исправным, а проходящим гейт. Отсутствие замера не должно
+    выглядеть как измеренное значение.
+    """
+    offenders = []
+    for path in sorted((WEB / "app").rglob("page.tsx")):
+        page = _rendered(path.read_text(encoding="utf-8"))
+        if re.search(r"sla_pct[^\n]{0,40}\?\?\s*100", page):
+            offenders.append(path.relative_to(WEB).as_posix())
+
+    assert offenders == [], f"SLA додумывается до 100% без доставок: {offenders}"
+
+
+def test_readiness_card_does_not_collapse_paper_ready_into_ready():
+    """`ready` — это отсутствие ЖЁСТКИХ блокеров. Бэкенд отдаёт рядом `status`
+    с третьим значением `paper_ready` и отдельный список `warnings`; карточка
+    сводила всё к READY/BLOCKED и считала одни жёсткие.
+
+    В бумажном режиме это давало зелёное «READY · 0 blockers» при непустых
+    предупреждениях — а гейт positive_then_negative держится на 55% при пороге
+    25%. Экран сообщал готовность там, где её нет.
+    """
+    system = (API / "routers" / "system.py").read_text(encoding="utf-8")
+    page = _rendered((WEB / "app" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert '"paper_ready"' in system, "у readiness больше нет третьего состояния"
+    assert '"warnings": soft_warnings' in system, "мягкие предупреждения не отдаются"
+
+    assert "readiness?.status" in page, "главная снова читает только ready"
+    assert "readiness?.warnings" in page, "предупреждения не считаются на главной"
+    assert "warnings.length" in page, "счётчик предупреждений не выведен"
+
+
+def test_soft_warnings_are_rendered_somewhere():
+    """Списка `warnings` не было ни на одном экране: при пустых блокерах
+    /health говорил «блокеров нет», хотя предупреждения были непусты. В live
+    бэкенд переливает мягкие в жёсткие — то есть это ровно тот список, который
+    придётся закрыть перед боем, и не видеть его нельзя.
+    """
+    health = _rendered((WEB / "app" / "health" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert "warnings.map(" in health, "предупреждения не выводятся на /health"
+
+
+def test_the_blocker_list_is_enumerated_on_one_page_only():
+    """(#ui-audit-2026-09-07) Один и тот же readiness.blockers перечислялся и на
+    главной («Go-live blockers»), и на /health («Production blockers»). По
+    правилу от 28.07 техническое состояние живёт на /health, деньги в
+    /analytics; на главной остаётся счётчик со ссылкой.
+    """
+    overview = _rendered((WEB / "app" / "page.tsx").read_text(encoding="utf-8"))
+    health = _rendered((WEB / "app" / "health" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert "blockers.map(" in health, "список блокеров исчез со своей страницы"
+    assert "blockers.map(" not in overview, "перечисление блокеров вернулось на главную"
+    assert "blockers.length" in overview, "счётчик блокеров должен остаться"
+
+
+def test_free_margin_is_computed_and_shown():
+    """(#ui-audit-2026-09-07) `exposure` считался на каждый вызов
+    /analytics/summary и не показывался нигде: ни свободной маржи, ни потолка.
+    Это единственное число, отвечающее «может ли робот вообще открыть», — а на
+    главной вместо него стояли два дубля (Signals и Winrate уже есть в подписи
+    книги Trend).
+    """
+    router = (API / "routers" / "analytics.py").read_text(encoding="utf-8")
+    page = _rendered((WEB / "app" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert '"free_margin"' in router and '"max_allowed_margin"' in router
+    assert "exposure?.free_margin" in page, "свободная маржа снова не показана"
+
+    minicards = page[page.index("lg:grid-cols-5"):page.index("</section>", page.index("lg:grid-cols-5"))]
+    for duplicate in ('title="Signals"', 'title="Winrate"'):
+        assert duplicate not in minicards, f"дубль вернулся в ряд мини-карточек: {duplicate}"
