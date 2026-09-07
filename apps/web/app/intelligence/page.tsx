@@ -5,6 +5,7 @@ import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import ImpulseLatchLine from "../../components/ImpulseLatchLine";
+import { CLOSE_REASON_LABELS } from "../../lib/closeReasons";
 import { RefreshCw } from "lucide-react";
 
 const IMPORTANT_DECISIONS = [
@@ -104,6 +105,13 @@ const IMPORTANT_DECISIONS = [
 
   "blocked_by_ml",
   "entry_zone_support_too_far",
+
+  // Остаток жизненного цикла: эти коды пишет тот же реестр, а в списке их не
+  // было — то есть достижение TP1 и выход в безубыток лента не показывала.
+  "tp1_reached",
+  "breakeven_stop",
+  "signal_expired",
+  "position_already_open",
 ];
 
 export default function IntelligencePage() {
@@ -923,6 +931,10 @@ function decisionLabel(code: string | null | undefined) {
     // карте ярлыков — при том, что сейчас это самая частая причина отказа.
     tz_entry_conditions: "Условия ТЗ не пройдены",
     blocked_by_ml: "Заблокирован ML",
+    blocked_post_loss_cooldown: "Пауза после убытка",
+    position_opened: "Позиция открыта",
+    position_already_open: "Позиция уже открыта",
+    signal_expired: "Сигнал истёк",
     blocked_active_signal_per_symbol: "По символу уже есть активный сигнал",
 
     // (#loop-skip-visibility-2026-09-04) Простой самого цикла. До этого три
@@ -956,8 +968,12 @@ function decisionLabel(code: string | null | undefined) {
   // заведённые depth_*, у которых в комментарии прямо написано «могут иметь
   // :значение». Ярлыки были, а совпадение не наступало: тихий отказ, страница
   // просто показывала машинный идентификатор.
+  // (#close-reason-labels-2026-09-07) Исходы сделки подписаны в общем модуле —
+  // том же, что читает журнал сигналов. Без этого фолбэка `stop_loss`,
+  // `tp2_reached` и `position_opened` стояли в белом списке, но выводились
+  // машинным кодом: фолбэк здесь — сам код, а собственного ярлыка у них не было.
   const { base, detail } = normalizeDecision(code);
-  const label = map[code] || map[base] || base;
+  const label = map[code] || map[base] || CLOSE_REASON_LABELS[base] || base;
   return detail ? `${label} · ${detail}` : label;
 }
 
