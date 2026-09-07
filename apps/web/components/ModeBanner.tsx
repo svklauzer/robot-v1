@@ -21,10 +21,18 @@ type LiveState = {
 // переключаемой биржей это превратилось в ложь на самом ответственном месте
 // интерфейса — баннер называл бы не ту биржу, на которой уходят настоящие
 // деньги. Биржу берём из /live/state, а не из предположения.
-const STYLES: Record<string, { label: string; sub: (ex: string) => string; cls: string; dot: string }> = {
+//
+// (#exchange-default-2026-09-07) И по той же причине убран фолбэк `|| "htx"`
+// ниже. Он возвращал ровно ту ложь, от которой избавлялись 03.09: при
+// отсутствии поля баннер LIVE уверенно называл HTX, тогда как ордера уходят на
+// OKX. Неизвестная биржа обязана читаться как неизвестная — на элементе, где
+// речь о настоящих деньгах, догадка хуже прочерка.
+const STYLES: Record<string, { label: string; sub: (ex: string | null) => string; cls: string; dot: string }> = {
   live: {
     label: "LIVE",
-    sub: (ex) => `реальные ордера на ${ex} — настоящие деньги`,
+    sub: (ex) => ex
+      ? `реальные ордера на ${ex} — настоящие деньги`
+      : "реальные ордера — настоящие деньги, БИРЖА НЕ УКАЗАНА",
     cls: "border-red-500/70 bg-red-950/70 text-red-100",
     dot: "bg-red-400 animate-pulse",
   },
@@ -65,7 +73,7 @@ export default function ModeBanner() {
 
   const mode = String(state.effective_mode || "off").toLowerCase();
   const s = STYLES[mode] || STYLES.off;
-  const exchange = String(state.active_exchange || "htx").toUpperCase();
+  const exchange = state.active_exchange ? String(state.active_exchange).toUpperCase() : null;
 
   return (
     <div className={`sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2 text-sm font-semibold shadow-lg ${s.cls}`}>
@@ -77,7 +85,7 @@ export default function ModeBanner() {
       <div className="flex items-center gap-3 text-xs opacity-75">
         {/* Биржа — на каждой странице: переключение ACTIVE_EXCHANGE меняет то,
             куда уходят ордера, и это не должно быть видно только на Health. */}
-        <span className="rounded bg-black/30 px-1.5 py-0.5 font-bold">{exchange}</span>
+        <span className="rounded bg-black/30 px-1.5 py-0.5 font-bold">{exchange ?? "—"}</span>
         <span>robot: {state.robot_mode ?? "—"}</span>
         <span>trading: {state.trading_mode ?? "—"}</span>
         <span>market: {state.execution_market ?? "—"}</span>
