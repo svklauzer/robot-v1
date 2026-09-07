@@ -7,6 +7,7 @@ import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { RefreshCw } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { assertOk, reportActionError as reportError } from "../../lib/apiAction";
 import { closeReasonLabel } from "../../lib/closeReasons";
 
 type SignalItem = any;
@@ -43,25 +44,16 @@ export default function SignalsPage() {
     return window.confirm(`⚠️ ${message}\n\nПродолжить?`);
   }
 
-  // (#ux-errors-2026-07-09) Ошибки API больше не глотаются молча: 403 debug-гейта
-  // в production раньше выглядел как «кнопка не работает».
+  // Подсказка про debug-гейт остаётся здесь: она про кнопки ИМЕННО этой
+  // страницы (инъекция цены), а не про действия вообще. Сами обработчики —
+  // общие: страницы подписчиков и платежей своих не имели, и действия там
+  // падали молча.
   function reportActionError(e: any) {
-    const msg = String(e?.message || e);
-    if (msg.includes("debug_endpoints_disabled_in_production")) {
-      alert(
-        "Это debug-кнопка (инъекция тестовой цены) — в production она отключена.\n" +
-        "Для реального закрытия используй «Закрыть по рынку»."
-      );
-      return;
-    }
-    alert(`Действие не выполнено: ${msg}`);
-  }
-
-  function assertOk(resp: any) {
-    if (resp && resp.status === "error") {
-      throw new Error(String(resp.error || "unknown_error"));
-    }
-    return resp;
+    reportError(e, {
+      debug_endpoints_disabled_in_production:
+        "Это debug-кнопка (инъекция тестовой цены) — в production она отключена. " +
+        "Для реального закрытия используй «Закрыть по рынку».",
+    });
   }
 
   async function testLifecyclePrice(id: number, price?: number | null) {

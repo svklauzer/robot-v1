@@ -85,3 +85,44 @@ def test_the_api_itself_fails_closed_in_production():
     assert 'raise HTTPException(status_code=503, detail="owner_api_token_not_configured")' in sec
     assert 'raise HTTPException(status_code=401, detail="owner_auth_required")' in sec
     assert 'settings.APP_ENV != "production"' in sec, "послабление больше не привязано к среде"
+
+
+# ── вебхук Telegram ─────────────────────────────────────────────────────────
+
+def test_money_branches_refuse_an_unverified_update():
+    """`successful_payment` переводит платёж в paid и выдаёт VIP. Принять его
+    без доказательства подлинности — раздать бесплатные подписки любому, кто
+    знает адрес вебхука.
+    """
+    router = _read(API / "routers/telegram.py")
+
+    assert "telegram_webhook_secret_required" in router, "денежная ветка снова принимает всё"
+    body = router[router.index("async def telegram_webhook"):]
+    guard = body[:body.index("pre_checkout_query")]
+    assert "successful_payment" in guard and "not verified" in guard, (
+        "проверка подлинности ушла ниже денежной ветки"
+    )
+
+
+def test_a_missing_webhook_secret_blocks_readiness():
+    """(#webhook-secret-blocker-2026-09-07) Секрет — единственное, что отличает
+    апдейт от Telegram от чужого POST. Без него денежные ветки закрыты, но меню
+    бота отрабатывает команды от ЛЮБОГО chat_id.
+
+    Fail-open в самом вебхуке оставлен намеренно — иначе бот умрёт до настройки.
+    Тогда состояние обязано быть блокером готовности, иначе оно видно только
+    строчкой в логе, которую никто не читает.
+    """
+    from core.config import Settings
+
+    cfg = Settings(
+        APP_ENV="production", DB_AUTO_CREATE_SCHEMA=False,
+        OWNER_API_TOKEN="t", TELEGRAM_BOT_TOKEN="b", TELEGRAM_WEBHOOK_SECRET="",
+    )
+    assert any("TELEGRAM_WEBHOOK_SECRET" in b for b in cfg.production_blockers())
+
+    cfg_ok = Settings(
+        APP_ENV="production", DB_AUTO_CREATE_SCHEMA=False,
+        OWNER_API_TOKEN="t", TELEGRAM_BOT_TOKEN="b", TELEGRAM_WEBHOOK_SECRET="s",
+    )
+    assert not any("TELEGRAM_WEBHOOK_SECRET" in b for b in cfg_ok.production_blockers())

@@ -862,3 +862,48 @@ def test_the_funding_total_inherits_the_caveat_of_its_parts():
     assert "good={(summary?.measured_trades ?? 0) > 0" in block, (
         "итог снова может позеленеть на оценке"
     )
+
+
+# ── разбор денежных страниц (07.09) ─────────────────────────────────────────
+
+def test_money_actions_do_not_fail_in_silence():
+    """(#silent-actions-2026-09-07) `apiPost` бросает на любом не-2xx. Журнал
+    сигналов это ловил и объяснял с 09.07, а страницы подписчиков и платежей —
+    нет: там стоял голый `await`. Нажал «продлить на 30 дней», запрос упал —
+    экран просто не изменился, и это неотличимо от «продлил, но список не
+    обновился».
+
+    Именно на этих двух страницах молчание дороже всего: одна выдаёт платный
+    доступ, вторая подтверждает оплаты.
+    """
+    for page in ("app/clients/page.tsx", "app/payments/page.tsx"):
+        src = _rendered(_read(WEB / page))
+        assert "lib/apiAction" in src, f"{page} не подключает общий обработчик"
+
+        for call in re.findall(r"await apiPost\(", src):
+            pass
+        # Каждый apiPost обязан быть под assertOk — голых вызовов не остаётся.
+        bare = re.findall(r"(?<!assertOk\()await apiPost\(", src)
+        assert bare == [], f"{page}: {len(bare)} действий без проверки ответа"
+
+
+def test_a_failed_action_does_not_wipe_what_was_typed():
+    """Форма очищалась в любом случае: введённые данные пропадали вместе с
+    ошибкой, о которой никто не узнал. Ранний `return` в ветке отказа — то, что
+    отличает «повтори» от «набирай заново».
+    """
+    for page in ("app/clients/page.tsx", "app/payments/page.tsx"):
+        src = _rendered(_read(WEB / page))
+        block = src[src.index("catch (e)"):]
+        assert "return;" in block[:200], f"{page}: после ошибки выполнение продолжается"
+
+
+def test_the_action_handler_lives_in_one_place():
+    """Тот же довод, что у GradeBadge и ExchangeBadge: копия расходится молча.
+    Здесь копии не было вовсе — две страницы просто остались без обработки.
+    """
+    assert (WEB / "lib/apiAction.ts").exists(), "общий обработчик исчез"
+
+    signals = _read(WEB / "app/signals/page.tsx")
+    assert "function assertOk" not in signals, "журнал снова держит свою копию"
+    assert "lib/apiAction" in signals
