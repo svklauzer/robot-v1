@@ -60,6 +60,15 @@ export default function OrderbookPage() {
   const mlCount = ml?.count ?? 0;
   const mlTarget = ml?.target_for_training ?? 200;
 
+  // (#depth-venue-2026-09-07) Стакан читается с одной биржи, ордера уходят на
+  // другую. Это не наблюдение: OB_GATE_ENTRIES блокирует по нему входы, а
+  // entry_depth.* уходит в план сделки и в форензику как признак входа.
+  const feedExchange = ob?.feed_exchange ? String(ob.feed_exchange).toUpperCase() : null;
+  const activeExchange = ob?.active_exchange ? String(ob.active_exchange).toUpperCase() : null;
+  const venueMismatch = Boolean(
+    feedExchange && activeExchange && feedExchange !== activeExchange,
+  );
+
   return (
     <AppShell>
       <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -69,7 +78,8 @@ export default function OrderbookPage() {
             Order Book &amp; ML
           </h1>
           <p className="mt-2 text-emerald-100/60">
-            Живой стакан HTX (WS): спред, OBI, стенки, CVD — основа depth-гейта входов и CVD-выхода. Плюс рост ML-датасета.
+            Живой стакан{feedExchange ? ` ${feedExchange}` : ""} (WS): спред, OBI, стенки, CVD —
+            основа depth-гейта входов и CVD-выхода. Плюс рост ML-датасета.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -84,10 +94,28 @@ export default function OrderbookPage() {
         </div>
       </header>
 
+      {venueMismatch && (
+        <section className="rounded-2xl border border-amber-600/50 bg-amber-950/20 p-5">
+          <div className="text-sm font-bold text-amber-200">
+            Стакан {feedExchange}, ордера {activeExchange}
+          </div>
+          <p className="mt-2 text-sm text-amber-100/80">
+            WS-фид жёстко привязан к {feedExchange} — ветки для {activeExchange} в нём нет. При этом
+            depth-гейт входов {ob?.gate_entries ? "ВКЛЮЧЁН" : "выключен"}: решение «входить или нет»
+            принимается по книге одной биржи, а сделка исполняется на другой.
+          </p>
+          <p className="mt-2 text-xs text-amber-100/60">
+            Это же касается разбора: `entry_depth.obi` и `entry_depth.cvd_ratio` попадают в план
+            сделки и дальше в форензику стопов как признаки входа — то есть измеряется поток не той
+            площадки, на которой сделка жила.
+          </p>
+        </section>
+      )}
+
       <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Card title="Depth feed" value={ob?.enabled ? (feedAlive ? "LIVE" : "STALE") : "OFF"} sub={freshAge != null ? `age ${Number(freshAge).toFixed(2)}s` : "no data"} tone={ob?.enabled ? (feedAlive ? "good" : "bad") : "warn"} />
         <Card title="Books" value={ob?.stats?.books ?? 0} sub={`gate ${ob?.gate_entries ? "on" : "off"} · exit ${ob?.accelerate_exits ? "on" : "off"}`} />
-        <Card title="ML dataset" value={`${mlCount} / ${mlTarget}`} sub={`win ${ml?.winrate_pct ?? 0}%`} tone={mlCount >= mlTarget ? "good" : "warn"} icon={<Database size={16} />} />
+        <Card title="ML dataset" value={`${mlCount} / ${mlTarget}`} sub={`win ${ml?.winrate_pct ?? "—"}%`} tone={mlCount >= mlTarget ? "good" : "warn"} icon={<Database size={16} />} />
         <Card title="ML depth-фичи" value={ml?.with_entry_depth ?? 0} sub={`regime ${ml?.with_regime ?? 0} · last ${ml?.last_reason || "-"}`} tone={(ml?.with_entry_depth ?? 0) > 0 ? "good" : "warn"} />
       </section>
 
