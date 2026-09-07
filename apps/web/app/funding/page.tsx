@@ -263,12 +263,24 @@ export default function FundingArbPage() {
           warn={(summary?.measured_trades ?? 0) === 0}
           sub="carry по факту, а не по ставке входа"
         />
+        {/* (#funding-total-inherits-2026-09-07) Оговорка стояла на части и
+            терялась в целом. Total складывает ТОТ ЖЕ `realized_pnl`, который
+            соседняя карточка слева помечает как «оценка по ставке входа —
+            завышена» и красит янтарём при measured_trades = 0, — и красил его
+            зелёным. Два соседних числа с одним источником и противоположным
+            цветом: правая карточка отменяла предупреждение левой.
+
+            Пока измеренных сделок нет, зелёного здесь быть не может. */}
         <StatCard
           title="Total P&L est."
           value={`${fmt(totalPnl)} USDT`}
-          good={totalPnl > 0}
-          warn={totalPnl < 0}
-          sub={`unrealized ~${fmt(summary?.unrealized_pnl_estimate)} USDT`}
+          good={(summary?.measured_trades ?? 0) > 0 && totalPnl > 0}
+          warn={(summary?.measured_trades ?? 0) === 0 || totalPnl < 0}
+          sub={
+            (summary?.measured_trades ?? 0) === 0
+              ? `включает завышенную оценку · unrealized ~${fmt(summary?.unrealized_pnl_estimate)} USDT`
+              : `unrealized ~${fmt(summary?.unrealized_pnl_estimate)} USDT`
+          }
         />
       </section>
 

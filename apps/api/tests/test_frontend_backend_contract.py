@@ -824,3 +824,23 @@ def test_the_venue_table_colours_by_the_gates_it_prints():
     assert "gates.min_ann_pct" in page, "порог входа снова зашит в таблицу"
     assert "gates.min_stability_pct" in page, "порог устойчивости снова зашит"
     assert ">= 12" not in page and ">= 80" not in page, "константы порогов вернулись"
+
+
+def test_the_funding_total_inherits_the_caveat_of_its_parts():
+    """(#funding-total-inherits-2026-09-07) `realized_pnl` завышен, пока carry
+    считается по ставке ВХОДА, а не пер-периодно (0.25–0.60 на сделку). Карточка
+    «Realized P&L» это говорит и красит янтарём при measured_trades = 0.
+
+    Соседняя «Total P&L est.» складывает ТО ЖЕ число — и красила зелёным. Две
+    карточки из одного источника с противоположным цветом: правая отменяла
+    предупреждение левой.
+    """
+    page = _rendered(_read(WEB / "app/funding/page.tsx"))
+
+    block = page[page.index('title="Total P&L est."'):]
+    block = block[:block.index("/>")]
+
+    assert "measured_trades" in block, "итог снова не смотрит на наличие измеренных сделок"
+    assert "good={(summary?.measured_trades ?? 0) > 0" in block, (
+        "итог снова может позеленеть на оценке"
+    )
