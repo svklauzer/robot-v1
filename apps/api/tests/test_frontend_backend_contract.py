@@ -721,3 +721,71 @@ def test_a_missing_result_is_not_drawn_as_zero():
 
     assert "rowPnl(p) ?? 0" not in page, "отсутствие результата снова рисуется нулём"
     assert "нет записи" in page, "не видно, что результата в записи нет"
+
+
+# ── разбор ML-страницы (07.09) ──────────────────────────────────────────────
+
+def _ml_blend_source() -> str:
+    """Кусок цикла, где MLScorer подмешивается в уверенность."""
+    loop = _read(API / "workers/robot_loop.py")
+    start = loop.index("Blend: 70% calibrated")
+    return loop[start : loop.index("return calibrated", start)]
+
+
+def test_the_ml_page_does_not_promise_a_contract_the_loop_breaks():
+    """(#ml-blend-contract-2026-09-06) Экран обещал «shadow считает и логирует,
+    на сделки НЕ влияет» — в подсказке режима, в заголовке панели и в хвостовой
+    приписке. Смешивание MLScorer в уверенность идёт с весом 0.3 БЕЗ проверки
+    режима, а уверенность гейтит вход и задаёт грейд.
+
+    Насколько это существенно: у #479 уверенность после этого шага составила
+    60.02 при пороге 60.0 — вход состоялся с запасом в две сотых.
+
+    Тест парный намеренно: починить можно с любой стороны. Либо цикл начинает
+    смотреть на режим, либо экран перестаёт обещать, что он смотрит. Чего нельзя
+    — держать обещание без поведения.
+    """
+    blend = _ml_blend_source()
+    gated = bool(re.search(r"if[^\n]*ML_MODE", blend)) or "ml_controller" in blend
+
+    page = _rendered(_read(WEB / "app/ml/page.tsx"))
+    promises = [claim for claim in ("НЕ влияет на сделки", "не влияет на сделки",
+                                    "без влияния")
+                if claim in page]
+
+    assert not (promises and not gated), (
+        f"экран обещает {promises}, а смешивание идёт без проверки режима"
+    )
+
+
+def test_the_ml_step_is_named_where_the_mode_is_chosen():
+    """Пока расхождение существует, оно обязано стоять на самой ML-странице, а
+    не только в комментарии цикла и мелким шрифтом на карточке сигнала: слово
+    «shadow» само по себе читается как «безопасно наблюдаем».
+    """
+    page = _rendered(_read(WEB / "app/ml/page.tsx"))
+
+    assert "независимо от ML_MODE" in page, "расхождение не названо на странице режима"
+    assert "#479" in page, "нет замера, показывающего цену вопроса"
+
+
+def test_the_depth_feed_names_its_own_venue():
+    """(#depth-venue-2026-09-07) Стакан читается с HTX — `run_htx_orderbook_feed`,
+    адреса huobi/hbdm, ветки OKX в фиде нет вовсе, — а ордера с 02.09 уходят на
+    OKX. Стакан при этом не наблюдательный: `OB_GATE_ENTRIES` блокирует по нему
+    входы, а `entry_depth.*` уходит в план сделки и дальше в форензику стопов
+    как признак входа.
+
+    Пока обе биржи не названы в ответе рядом, расхождение не видно ни на экране,
+    ни в разборе, и подзаголовок «Живой стакан HTX» читается как деталь
+    оформления, а не как несовпадение площадок.
+    """
+    feed = _read(API / "services/orderbook_feed.py")
+    assert "huobi" in feed or "hbdm" in feed, "фид больше не привязан к HTX — проверить текст"
+
+    main = _read(API / "main.py")
+    assert '"feed_exchange"' in main, "ответ не говорит, чей это стакан"
+    assert '"active_exchange"' in main, "ответ не говорит, где исполняются ордера"
+
+    page = _rendered(_read(WEB / "app/orderbook/page.tsx"))
+    assert "venueMismatch" in page, "экран не сравнивает биржу стакана с биржей ордеров"

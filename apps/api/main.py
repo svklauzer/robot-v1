@@ -1052,6 +1052,16 @@ def orderbook_state():
         "enabled": bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)),
         "gate_entries": bool(getattr(settings, "OB_GATE_ENTRIES", True)),
         "accelerate_exits": bool(getattr(settings, "OB_ACCELERATE_EXITS", True)),
+        # (#depth-venue-2026-09-07) Чей это стакан. Фид жёстко HTX —
+        # `run_htx_orderbook_feed`, адреса huobi/hbdm, ветки OKX нет вовсе, — а
+        # ордера уходят на ACTIVE_EXCHANGE, с 02.09 это OKX.
+        #
+        # Записывается потому, что стакан не наблюдательный: OB_GATE_ENTRIES
+        # блокирует входы по нему (сегодня ETH отбит шесть раз), а entry_depth.*
+        # уходит в план сделки и дальше в форензику как признак входа. Пока обе
+        # биржи не названы рядом, расхождение не видно ни на экране, ни в разборе.
+        "feed_exchange": "htx",
+        "active_exchange": str(getattr(settings, "ACTIVE_EXCHANGE", "htx")).lower(),
         "thresholds": {
             "max_spread_pct": getattr(settings, "OB_MAX_SPREAD_PCT", 0.08),
             "obi_confirm": getattr(settings, "OB_OBI_CONFIRM", 0.15),
