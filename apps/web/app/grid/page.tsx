@@ -120,6 +120,45 @@ export default function GridPage() {
         <Card title="Закрыто циклов" value={state?.closed_cycles ?? 0} />
       </section>
 
+      {/* (#grid-envelope-sizing-2026-09-07) Расчёт размера уровня по символам.
+          Отказ по минимуму площадки виден только здесь: раньше он попадал лишь
+          в лог Render и был неотличим от «движок не работает». */}
+      {state?.sizing && Object.keys(state.sizing).length > 0 && (
+        <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-100/50">
+              Расчёт размера уровня
+            </h2>
+            <span className="text-xs text-emerald-100/40">
+              рынок {state?.market_type || "—"} · лестница{" "}
+              {state?.ladder_shape === "long_only" ? "только покупки (спот)" : "в обе стороны"}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {Object.entries(state.sizing).map(([symbol, raw]: [string, any]) => (
+              <div key={symbol} className="rounded-xl border border-emerald-950 bg-black/20 p-3 text-xs">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-sm font-semibold text-emerald-200">{symbol}</span>
+                  <span className="text-emerald-100/60">
+                    бюджет {fmt(raw?.budget_usdt)} USDT · уровней {raw?.levels ?? "—"}
+                  </span>
+                </div>
+                <div className="mt-1 text-emerald-100/60">
+                  уровень от {fmt(raw?.smallest_level_usdt)} до {fmt(raw?.largest_level_usdt)} USDT
+                </div>
+                {raw?.blocked ? (
+                  <div className="mt-2 rounded-lg border border-amber-900/60 bg-amber-950/20 px-2 py-1 text-amber-100">
+                    цикл не открыт: {raw.blocked}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-emerald-100/40">лестница проходит минимумы площадки</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Конфиг */}
       <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-emerald-100/50">Параметры (env)</h2>
@@ -127,7 +166,10 @@ export default function GridPage() {
           <Chip>пары: {(cfg.symbols || []).join(", ") || "—"}</Chip>
           <Chip>ТФ {cfg.timeframe}</Chip>
           <Chip>линий {cfg.lines}</Chip>
-          <Chip>база {cfg.base_order_usdt} USDT</Chip>
+          {/* (#grid-envelope-sizing-2026-09-07) Базового ордера-константы
+              больше нет: размер уровня выводится из конверта на каждом
+              открытии. Фактические числа — в блоке «Расчёт размера» ниже. */}
+          <Chip>мин. уровень {cfg.min_level_usdt} USDT</Chip>
           <Chip>m_vol {cfg.vol_multiplier}</Chip>
           <Chip>m_step {cfg.step_multiplier}</Chip>
           <Chip>k_vol {cfg.vol_coeff_k}</Chip>

@@ -17,7 +17,10 @@ def _config() -> dict:
         "symbols": settings.grid_symbols,
         "timeframe": settings.GRID_TIMEFRAME,
         "lines": settings.GRID_LINES,
-        "base_order_usdt": settings.GRID_BASE_ORDER_USDT,
+        # (#grid-envelope-sizing-2026-09-07) Базовый ордер больше не задаётся
+        # числом: он выводится из конверта на каждом открытии. Фактический
+        # размер и причина отказа — в /grid/state, поле `sizing`.
+        "min_level_usdt": settings.GRID_MIN_LEVEL_USDT,
         "vol_multiplier": settings.GRID_VOL_MULTIPLIER,
         "step_multiplier": settings.GRID_STEP_MULTIPLIER,
         "vol_coeff_k": settings.GRID_VOL_COEFF,
