@@ -12,15 +12,16 @@ const MODE_COLOR: Record<string, string> = {
   full_auto: "bg-emerald-500 text-black",
 };
 
-// (#ml-blend-contract-2026-09-06) Формулировка «shadow не влияет на сделки»
-// была неверной. MLScorer подмешивается в итоговую уверенность с весом 0.3
-// БЕЗ проверки режима (robot_loop._intelligence_effective_confidence), а
-// уверенность гейтит вход и задаёт грейд. Экран обещал контракт, которого нет.
+// (#ml-blend-contract-2026-09-07) Контракт режимов приведён в исполнение.
+// 06.09 здесь стояла оговорка, что «не влияет» неверно: MLScorer подмешивался
+// в уверенность с весом 0.3 при ЛЮБОМ режиме, включая off, а уверенность гейтит
+// вход и задаёт грейд. 07.09 смешивание поставлено под эффективный режим и
+// работает только в full_auto — подписи ниже снова описывают то, что есть.
 const MODE_HINT: Record<string, string> = {
-  off: "ML выключен — гейт и сайзинг по правилам. Смешивание в уверенность при этом продолжается: см. предупреждение ниже.",
-  shadow: "ML считает ml_score и логирует; гейт и сайзинг от него не зависят. Но на уверенность он влияет в любом режиме — см. предупреждение ниже.",
-  advisory: "ML рекомендует (take/skip), решение остаётся за правилами/человеком.",
-  full_auto: "ML гейтит и масштабирует сделки в пределах guardrails.",
+  off: "ML не участвует в решениях: ни гейта, ни сайзинга, ни вклада в уверенность.",
+  shadow: "ML считает ml_score, пишет его рядом с сигналом и в план — но ни на одно решение не влияет. Наблюдаем прогноз против факта.",
+  advisory: "ML рекомендует (take/skip) и это видно на карточке; решение остаётся за правилами. В уверенность он не вмешивается.",
+  full_auto: "ML гейтит вход, масштабирует размер в пределах guardrails и подмешивается в уверенность весом 0.3. Единственный режим, где он трогает сделки.",
 };
 
 const SHADOW_VERDICT: Record<string, { label: string; cls: string }> = {
@@ -209,27 +210,52 @@ export default function MLPage() {
         </div>
       </div>
 
-      {/* (#ml-blend-contract-2026-09-06) Расхождение контракта и поведения
-          стоит отдельным блоком, а не примечанием: пока оно на экране не
-          названо, «shadow» читается как «безопасно наблюдаем». */}
-      <div className="mt-4 rounded-3xl border border-amber-600/50 bg-amber-950/20 p-5">
-        <div className="text-sm font-bold text-amber-200">
-          Режим не отменяет влияния ML на вход
+      {/* (#ml-blend-contract-2026-09-07) Что именно даёт каждый режим — рядом с
+          самим переключателем. Слово «shadow» само по себе читается как
+          «безопасно наблюдаем», и один раз это уже было неправдой. */}
+      <div className="mt-4 rounded-3xl border border-emerald-900/60 bg-slate-950/60 p-5">
+        <div className="text-xs uppercase tracking-wide text-emerald-100/50">
+          Что режим разрешает ML
         </div>
-        <p className="mt-2 text-sm text-amber-100/80">
-          MLScorer подмешивается в итоговую уверенность с весом <b>0.3 независимо от ML_MODE</b>.
-          Уверенность гейтит вход (порог 60) и задаёт грейд — значит «считаем и логируем, на
-          сделки не влияем» неверно для любого режима, включая off.
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[520px] text-left text-sm">
+            <thead className="text-xs uppercase text-emerald-100/40">
+              <tr>
+                <th className="py-1 pr-3">Режим</th>
+                <th className="pr-3">Считает</th>
+                <th className="pr-3">Виден</th>
+                <th className="pr-3">Гейт входа</th>
+                <th className="pr-3">Размер</th>
+                <th>Вклад в уверенность</th>
+              </tr>
+            </thead>
+            <tbody className="text-emerald-100/80">
+              {[
+                ["off", "—", "—", "—", "—", "—"],
+                ["shadow", "да", "да", "—", "—", "—"],
+                ["advisory", "да", "да, с рекомендацией", "—", "—", "—"],
+                ["full_auto", "да", "да", "да", "да", "вес 0.3"],
+              ].map((row) => (
+                <tr key={row[0]} className={"border-t border-emerald-950 " + (row[0] === mode ? "bg-emerald-950/40" : "")}>
+                  <td className="py-1 pr-3 font-semibold text-emerald-200">{row[0]}</td>
+                  {row.slice(1).map((cell, i) => (
+                    <td key={i} className={"pr-3 " + (cell === "—" ? "text-emerald-100/30" : "")}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-3 text-xs text-emerald-100/50">
+          До 07.09 последний столбец действовал во всех строках: MLScorer подмешивался в
+          уверенность независимо от режима, а уверенность гейтит вход и задаёт грейд. У сигнала
+          #479 она после этого шага составила 60.02 при пороге 60.0 — шаг решал, быть сделке или
+          нет. Сейчас смешивание считается всегда и записывается в план полем{" "}
+          <code>ml_blend.applied</code>, но применяется только в full_auto.
         </p>
-        <p className="mt-2 text-sm text-amber-100/80">
-          Насколько это существенно: у сигнала <b>#479</b> уверенность после этого шага составила
-          60.02 при пороге 60.0 — вход состоялся с запасом в две сотых. У <b>#476</b> тот же шаг
-          опустил 75.8 до 63.5 и сменил грейд с A на B.
-        </p>
-        <p className="mt-3 text-xs text-amber-100/55">
-          Шаг виден на карточке сигнала строкой «после ML». Поведение оставлено как есть
-          намеренно: 06.09 запущен замер гейта достижимости в shadow, и вторая одновременная
-          правка входа сделала бы его нечитаемым.
+        <p className="mt-2 text-xs text-emerald-100/40">
+          Режим берётся эффективный: при слабом или протухшем AUC контроллер сам понижает
+          full_auto и advisory до shadow, и смешивание вместе с ними.
         </p>
       </div>
 
@@ -245,7 +271,7 @@ export default function MLPage() {
       {/* Shadow: прогноз vs факт */}
       <div className="mt-4 rounded-3xl border border-cyan-900/60 bg-slate-950/60 p-5">
         <div className="flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide text-cyan-100/60">Shadow — прогноз vs факт (гейт и сайзинг не трогает)</div>
+          <div className="text-xs uppercase tracking-wide text-cyan-100/60">Shadow — прогноз vs факт (на сделки не влияет)</div>
           {shadow?.status === "ok" && (
             <span className={`rounded-lg px-2 py-1 text-xs font-bold ${SHADOW_VERDICT[shadow.verdict]?.cls || "bg-slate-700 text-white"}`}>
               {SHADOW_VERDICT[shadow.verdict]?.label || shadow.verdict}

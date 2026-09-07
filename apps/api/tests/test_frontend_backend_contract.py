@@ -759,14 +759,27 @@ def test_the_ml_page_does_not_promise_a_contract_the_loop_breaks():
 
 
 def test_the_ml_step_is_named_where_the_mode_is_chosen():
-    """Пока расхождение существует, оно обязано стоять на самой ML-странице, а
-    не только в комментарии цикла и мелким шрифтом на карточке сигнала: слово
-    «shadow» само по себе читается как «безопасно наблюдаем».
+    """(#ml-blend-contract-2026-09-07) Расхождение закрыто в коде, но полномочия
+    режима обязаны быть видны там, где режим и выбирают: слово «shadow» само по
+    себе читается как «безопасно наблюдаем», и один раз это уже было неправдой.
     """
     page = _rendered(_read(WEB / "app/ml/page.tsx"))
 
-    assert "независимо от ML_MODE" in page, "расхождение не названо на странице режима"
+    assert "full_auto" in page and "ml_blend.applied" in page, (
+        "не видно, в каком режиме ML трогает сделки и чем это записано"
+    )
     assert "#479" in page, "нет замера, показывающего цену вопроса"
+
+
+def test_the_blend_asks_the_effective_mode_not_the_setting():
+    """Контроллер понижает full_auto и advisory до shadow при слабом или
+    протухшем AUC. Спросить `settings.ML_MODE` напрямую значило бы обойти это
+    понижение и вернуть ту же дыру под видом полномочий.
+    """
+    blend = _ml_blend_source()
+
+    assert "effective_mode()" in blend, "режим берётся мимо контроллера"
+    assert 'getattr(settings, "ML_MODE"' not in blend, "снова читается настройка напрямую"
 
 
 def test_the_depth_feed_names_its_own_venue():
