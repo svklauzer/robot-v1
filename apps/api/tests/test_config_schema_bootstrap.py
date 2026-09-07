@@ -186,6 +186,17 @@ def test_render_blueprint_enforces_capital_leak_entry_gates():
     # (0.6 / 1.5 = 0.4%: пара с медианой ниже блокировалась навсегда).
     assert "TP_REACH_MAX_RATIO" not in env
     assert env["TP_REACH_EV_MARGIN"] == "1.0"
+    # (#grid-market-type-2026-09-07) Тип рынка OKX задаёт ФОРМУ сетки: на споте
+    # лестница лонговая (продать можно только купленное), на деривативе — в обе
+    # стороны. До 07.09 ключа не было ни в блюпринте, ни в дашборде, и решение
+    # принимал питоновский дефолт, невидимый на всех трёх экранах конфигурации.
+    # Соседи по вопросу — HTX_MARKET_TYPE и OB_MARKET_TYPE — закреплены давно.
+    #
+    # Смена на swap означает двустороннюю корзину и обязана идти вместе с
+    # проверкой, что короткая нога исполнима: иначе половина линий мертва, а в
+    # бою остаётся одна купленная сторона — ровно та случайная направленная
+    # позиция, от которой сетку и берегут.
+    assert env["OKX_MARKET_TYPE"] == "spot"
     assert env["REGIME_EXP_SIZING_ENABLED"] == "false"
     assert env["DYNAMIC_MARGIN_FAIR_SHARE"] == "false"
     assert env["DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE"] == "1.0"
