@@ -12,9 +12,13 @@ const MODE_COLOR: Record<string, string> = {
   full_auto: "bg-emerald-500 text-black",
 };
 
+// (#ml-blend-contract-2026-09-06) Формулировка «shadow не влияет на сделки»
+// была неверной. MLScorer подмешивается в итоговую уверенность с весом 0.3
+// БЕЗ проверки режима (robot_loop._intelligence_effective_confidence), а
+// уверенность гейтит вход и задаёт грейд. Экран обещал контракт, которого нет.
 const MODE_HINT: Record<string, string> = {
-  off: "ML выключен — система работает по правилам (default). Запуск в live не затронут.",
-  shadow: "ML считает ml_score и логирует, но НЕ влияет на сделки. Наблюдаем прогноз vs реальность.",
+  off: "ML выключен — гейт и сайзинг по правилам. Смешивание в уверенность при этом продолжается: см. предупреждение ниже.",
+  shadow: "ML считает ml_score и логирует; гейт и сайзинг от него не зависят. Но на уверенность он влияет в любом режиме — см. предупреждение ниже.",
   advisory: "ML рекомендует (take/skip), решение остаётся за правилами/человеком.",
   full_auto: "ML гейтит и масштабирует сделки в пределах guardrails.",
 };
@@ -105,8 +109,8 @@ export default function MLPage() {
           </div>
           <p className="mt-3 text-sm text-emerald-100/70">{MODE_HINT[mode] || ""}</p>
           <p className="mt-3 text-xs text-emerald-100/40">
-            Смена режима — через env <code>ML_MODE</code> (off / shadow / advisory / full_auto). Дефолт{" "}
-            <b>off</b> не влияет на торговлю и live.
+            Смена режима — через env <code>ML_MODE</code> (off / shadow / advisory / full_auto).
+            {" "}В этой сборке дефолт — <b>shadow</b>, а не off.
           </p>
         </div>
 
@@ -205,6 +209,30 @@ export default function MLPage() {
         </div>
       </div>
 
+      {/* (#ml-blend-contract-2026-09-06) Расхождение контракта и поведения
+          стоит отдельным блоком, а не примечанием: пока оно на экране не
+          названо, «shadow» читается как «безопасно наблюдаем». */}
+      <div className="mt-4 rounded-3xl border border-amber-600/50 bg-amber-950/20 p-5">
+        <div className="text-sm font-bold text-amber-200">
+          Режим не отменяет влияния ML на вход
+        </div>
+        <p className="mt-2 text-sm text-amber-100/80">
+          MLScorer подмешивается в итоговую уверенность с весом <b>0.3 независимо от ML_MODE</b>.
+          Уверенность гейтит вход (порог 60) и задаёт грейд — значит «считаем и логируем, на
+          сделки не влияем» неверно для любого режима, включая off.
+        </p>
+        <p className="mt-2 text-sm text-amber-100/80">
+          Насколько это существенно: у сигнала <b>#479</b> уверенность после этого шага составила
+          60.02 при пороге 60.0 — вход состоялся с запасом в две сотых. У <b>#476</b> тот же шаг
+          опустил 75.8 до 63.5 и сменил грейд с A на B.
+        </p>
+        <p className="mt-3 text-xs text-amber-100/55">
+          Шаг виден на карточке сигнала строкой «после ML». Поведение оставлено как есть
+          намеренно: 06.09 запущен замер гейта достижимости в shadow, и вторая одновременная
+          правка входа сделала бы его нечитаемым.
+        </p>
+      </div>
+
       {/* Guardrails / параметры */}
       <div className="mt-4 rounded-3xl border border-emerald-900/60 bg-slate-950/60 p-5">
         <div className="text-xs uppercase tracking-wide text-emerald-100/50">Guardrails (full_auto)</div>
@@ -217,7 +245,7 @@ export default function MLPage() {
       {/* Shadow: прогноз vs факт */}
       <div className="mt-4 rounded-3xl border border-cyan-900/60 bg-slate-950/60 p-5">
         <div className="flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide text-cyan-100/60">Shadow — прогноз vs факт (на сделки НЕ влияет)</div>
+          <div className="text-xs uppercase tracking-wide text-cyan-100/60">Shadow — прогноз vs факт (гейт и сайзинг не трогает)</div>
           {shadow?.status === "ok" && (
             <span className={`rounded-lg px-2 py-1 text-xs font-bold ${SHADOW_VERDICT[shadow.verdict]?.cls || "bg-slate-700 text-white"}`}>
               {SHADOW_VERDICT[shadow.verdict]?.label || shadow.verdict}
@@ -293,8 +321,9 @@ export default function MLPage() {
       )}
 
       <p className="mt-6 text-xs text-emerald-100/40">
-        Путь включения: копится датасет → при ≥ минимума «Обучить» → <code>ML_MODE=shadow</code> (видно ml_score рядом с
-        сигналами, без влияния) → обгоняет правила → <code>advisory</code> → <code>full_auto</code>. Авто-retrain — раз в сутки.
+        Путь включения: копится датасет → при ≥ минимума «Обучить» → <code>ML_MODE=shadow</code> (ml_score виден
+        рядом с сигналами, гейт и сайзинг не трогает) → обгоняет правила → <code>advisory</code> →{" "}
+        <code>full_auto</code>. Авто-retrain — раз в сутки.
       </p>
     </AppShell>
   );
