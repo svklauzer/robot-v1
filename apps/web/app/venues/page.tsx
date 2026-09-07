@@ -8,6 +8,32 @@ import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
 import { ArrowLeftRight, RefreshCw } from "lucide-react";
 
+// (#cross-arb-reasons-2026-09-07) Причины выхода писались на экран машинным
+// кодом: `spread_compressed:2.10<3.0`, а в полосе подтверждения — ещё и с
+// хвостом `|held_until_carry_covers_fees`. Тот же дефект уже сняли с журнала
+// сигналов, ленты решений и отчётов; здесь он оставался последним и был хуже
+// прочих, потому что коды параметризованные — словарём их не покрыть.
+function exitReasonLabel(code?: string | null): string {
+  if (!code) return "—";
+
+  // Хвост после «|» — не причина, а объяснение, почему выход отложен: движок
+  // держит позицию, пока накопленный carry не покроет комиссии круга.
+  const [reason, ...rest] = String(code).split("|");
+  const held = rest.includes("held_until_carry_covers_fees")
+    ? " · держим, пока carry не покроет комиссии"
+    : "";
+
+  if (reason === "max_hold_reached") return "предельный срок удержания" + held;
+  if (reason === "spread_flipped") return "спред развернулся" + held;
+
+  const compressed = reason.match(/^spread_compressed:([\d.-]+)<([\d.-]+)$/);
+  if (compressed) {
+    return `carry сжался: ${compressed[1]}% < ${compressed[2]}% годовых${held}`;
+  }
+
+  return reason + held;
+}
+
 const WINDOWS = [
   { label: "24ч", days: 1 },
   { label: "3д", days: 3 },
@@ -57,6 +83,13 @@ export default function VenuesPage() {
   const open = arb?.open || [];
   const closed = arb?.closed_recent || [];
   const bySymbol = history?.by_symbol || [];
+
+  // Таблица красила по зашитым 12 и 80. Сегодня они совпадают с дефолтами
+  // движка, но это вторая копия настроек, которые здесь же и показаны чипами:
+  // подкрутка гейта разошлась бы с подсветкой молча. undefined оставляет
+  // нейтральный цвет — неизвестный порог не повод красить.
+  const minAnnPct = num(gates.min_ann_pct);
+  const minStabilityPct = num(gates.min_stability_pct);
 
   return (
     <AppShell>
@@ -122,7 +155,7 @@ export default function VenuesPage() {
                   <span className="text-emerald-100/50 text-xs">с {fmtDt(p.opened_at)}</span>
                   {p.exit_streak > 0 && (
                     <span className="rounded bg-yellow-900/60 px-2 py-0.5 text-xs text-yellow-200">
-                      выход {p.exit_streak}/3: {p.exit_streak_reason}
+                      выход {p.exit_streak}/3: {exitReasonLabel(p.exit_streak_reason)}
                     </span>
                   )}
                 </div>
@@ -157,7 +190,7 @@ export default function VenuesPage() {
                     <td className="px-2 py-1 font-semibold text-emerald-200">{p.symbol}</td>
                     <td className="px-2 py-1 text-emerald-100/60">{fmtDt(p.opened_at)}</td>
                     <td className="px-2 py-1">{fmtPct(p.entry_spread_ann_pct)}</td>
-                    <td className="px-2 py-1 text-emerald-100/70">{p.close_reason}</td>
+                    <td className="px-2 py-1 text-emerald-100/70">{exitReasonLabel(p.close_reason)}</td>
                     <td className="px-2 py-1">{fmtUsd(p.funding_accrued_usdt)}</td>
                     <td className={"px-2 py-1 font-semibold " + (num(p.realized_usdt) < 0 ? "text-red-300" : "text-emerald-300")}>{fmtUsd(p.realized_usdt)}</td>
                   </tr>
@@ -207,13 +240,13 @@ export default function VenuesPage() {
               {bySymbol.map((r: any) => (
                 <tr key={r.symbol} className="border-t border-emerald-950">
                   <td className="px-2 py-2 font-semibold text-emerald-200">{r.symbol}</td>
-                  <td className={"px-2 py-2 font-semibold " + (num(r.avg_spread_ann_pct) >= 12 ? "text-emerald-300" : "text-emerald-100/70")}>
+                  <td className={"px-2 py-2 font-semibold " + (minAnnPct > 0 && num(r.avg_spread_ann_pct) >= minAnnPct ? "text-emerald-300" : "text-emerald-100/70")}>
                     {fmtPct(r.avg_spread_ann_pct)}
                   </td>
                   <td className="px-2 py-2 text-emerald-100/60">
                     {fmtPct(r.min_spread_ann_pct)} / {fmtPct(r.max_spread_ann_pct)}
                   </td>
-                  <td className={"px-2 py-2 " + (num(r.direction_stability_pct) >= 80 ? "text-emerald-300" : "text-yellow-300")}>
+                  <td className={"px-2 py-2 " + (minStabilityPct <= 0 ? "text-emerald-100/70" : num(r.direction_stability_pct) >= minStabilityPct ? "text-emerald-300" : "text-yellow-300")}>
                     {fmtPct(r.direction_stability_pct)}
                   </td>
                   <td className={"px-2 py-2 " + (num(r.last_spread_ann_pct) < 0 ? "text-red-300" : "")}>{fmtPct(r.last_spread_ann_pct)}</td>

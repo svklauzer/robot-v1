@@ -789,3 +789,58 @@ def test_the_depth_feed_names_its_own_venue():
 
     page = _rendered(_read(WEB / "app/orderbook/page.tsx"))
     assert "venueMismatch" in page, "экран не сравнивает биржу стакана с биржей ордеров"
+
+
+# ── разбор Venues (07.09) ───────────────────────────────────────────────────
+
+def test_cross_arb_exit_reasons_reach_the_screen_as_words():
+    """(#cross-arb-reasons-2026-09-07) Причины выхода печатались машинным кодом:
+    `spread_compressed:2.10<3.0`, а в полосе подтверждения ещё и с хвостом
+    `|held_until_carry_covers_fees`. Тот же дефект уже сняли с журнала сигналов,
+    ленты решений и отчётов — здесь он оставался последним.
+
+    Коды параметризованные, поэтому словарём их не покрыть: тест сверяет, что
+    каждая ветка `exit_reason` разобрана на экране.
+    """
+    engine = _read(API / "services/cross_funding_arb.py")
+    page = _rendered(_read(WEB / "app/venues/page.tsx"))
+
+    emitted = set(re.findall(r'return "([a-z_]+)"', engine[engine.index("def exit_reason"):]))
+    emitted.add("spread_compressed")  # f-строка с порогами, литералом не ловится
+    assert emitted >= {"max_hold_reached", "spread_flipped"}, "ветки выхода изменились"
+
+    for code in emitted:
+        assert code in page, f"причина выхода не разобрана на экране: {code}"
+    assert "held_until_carry_covers_fees" in page, "хвост отложенного выхода не разобран"
+
+
+def test_the_venue_table_colours_by_the_gates_it_prints():
+    """Таблица красила по зашитым 12 и 80 — второй копии настроек, которые она
+    же показывает чипами выше. Сегодня копия совпадает с дефолтами движка, и
+    именно поэтому дефект незаметен: разойдутся они молча, при первой подкрутке.
+    """
+    page = _rendered(_read(WEB / "app/venues/page.tsx"))
+
+    assert "gates.min_ann_pct" in page, "порог входа снова зашит в таблицу"
+    assert "gates.min_stability_pct" in page, "порог устойчивости снова зашит"
+    assert ">= 12" not in page and ">= 80" not in page, "константы порогов вернулись"
+
+
+def test_the_funding_total_inherits_the_caveat_of_its_parts():
+    """(#funding-total-inherits-2026-09-07) `realized_pnl` завышен, пока carry
+    считается по ставке ВХОДА, а не пер-периодно (0.25–0.60 на сделку). Карточка
+    «Realized P&L» это говорит и красит янтарём при measured_trades = 0.
+
+    Соседняя «Total P&L est.» складывает ТО ЖЕ число — и красила зелёным. Две
+    карточки из одного источника с противоположным цветом: правая отменяла
+    предупреждение левой.
+    """
+    page = _rendered(_read(WEB / "app/funding/page.tsx"))
+
+    block = page[page.index('title="Total P&L est."'):]
+    block = block[:block.index("/>")]
+
+    assert "measured_trades" in block, "итог снова не смотрит на наличие измеренных сделок"
+    assert "good={(summary?.measured_trades ?? 0) > 0" in block, (
+        "итог снова может позеленеть на оценке"
+    )
