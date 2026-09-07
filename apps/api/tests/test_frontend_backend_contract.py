@@ -759,14 +759,27 @@ def test_the_ml_page_does_not_promise_a_contract_the_loop_breaks():
 
 
 def test_the_ml_step_is_named_where_the_mode_is_chosen():
-    """Пока расхождение существует, оно обязано стоять на самой ML-странице, а
-    не только в комментарии цикла и мелким шрифтом на карточке сигнала: слово
-    «shadow» само по себе читается как «безопасно наблюдаем».
+    """(#ml-blend-contract-2026-09-07) Расхождение закрыто в коде, но полномочия
+    режима обязаны быть видны там, где режим и выбирают: слово «shadow» само по
+    себе читается как «безопасно наблюдаем», и один раз это уже было неправдой.
     """
     page = _rendered(_read(WEB / "app/ml/page.tsx"))
 
-    assert "независимо от ML_MODE" in page, "расхождение не названо на странице режима"
+    assert "full_auto" in page and "ml_blend.applied" in page, (
+        "не видно, в каком режиме ML трогает сделки и чем это записано"
+    )
     assert "#479" in page, "нет замера, показывающего цену вопроса"
+
+
+def test_the_blend_asks_the_effective_mode_not_the_setting():
+    """Контроллер понижает full_auto и advisory до shadow при слабом или
+    протухшем AUC. Спросить `settings.ML_MODE` напрямую значило бы обойти это
+    понижение и вернуть ту же дыру под видом полномочий.
+    """
+    blend = _ml_blend_source()
+
+    assert "effective_mode()" in blend, "режим берётся мимо контроллера"
+    assert 'getattr(settings, "ML_MODE"' not in blend, "снова читается настройка напрямую"
 
 
 def test_the_depth_feed_names_its_own_venue():
@@ -781,9 +794,14 @@ def test_the_depth_feed_names_its_own_venue():
     оформления, а не как несовпадение площадок.
     """
     feed = _read(API / "services/orderbook_feed.py")
-    assert "huobi" in feed or "hbdm" in feed, "фид больше не привязан к HTX — проверить текст"
+    # 07.09 фид переведён на ACTIVE_EXCHANGE: ветка OKX появилась, но обе
+    # площадки остались, и вопрос «чья это книга» стал переменной, а не
+    # константой — тем более требующей ответа в телеметрии.
+    assert "def feed_exchange" in feed, "фид снова не выбирает биржу"
+    assert "run_okx_orderbook_feed" in feed and "run_htx_orderbook_feed" in feed
 
     main = _read(API / "main.py")
+    assert "run_orderbook_feed" in main, "стартует не диспетчер, а одна из веток"
     assert '"feed_exchange"' in main, "ответ не говорит, чей это стакан"
     assert '"active_exchange"' in main, "ответ не говорит, где исполняются ордера"
 

@@ -111,6 +111,18 @@ class MLController:
             return None
         return None
 
+    def effective_mode(self) -> str:
+        """Режим ПОСЛЕ проверки полномочий — публичный вход для тех, кто решает,
+        вмешиваться ли.
+
+        (#ml-blend-contract-2026-09-07) Нужен потому, что смешивание ML в
+        уверенность жило в robot_loop мимо контроллера и мимо режима вообще.
+        Спрашивать `settings.ML_MODE` напрямую нельзя: `_mode()` понижает
+        advisory/full_auto до shadow при слабом или протухшем AUC, и обход этого
+        понижения вернул бы ровно ту дыру, ради которой оно заведено.
+        """
+        return self._mode()
+
     def health(self) -> dict:
         """Состояние ML-контура для /ml/status и отчётов."""
         configured = str(getattr(settings, "ML_MODE", "off")).lower().strip()

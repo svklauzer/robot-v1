@@ -31,7 +31,7 @@ from services.production_entry_gate import ProductionEntryGate
 from services.reentry_cooldown import ReEntryCooldownGuard
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
 from services.orderbook_analyzer import OrderBookAnalyzer
-from services.orderbook_feed import ORDERBOOK_STORE
+from services.orderbook_feed import ORDERBOOK_STORE, feed_exchange as ob_feed_exchange
 from services.ml_trade_logger import MLTradeLogger
 from services.ml_controller import MLController
 from services.decision_event_service import DecisionEventService
@@ -1407,11 +1407,20 @@ class RobotLoop:
                     # Контекст для ML-датасета (фичи на момент входа).
                     "regime": str(result.regime or ""),
                     "radar_state": str(getattr(result, "radar_state", "") or ""),
+                    # (#depth-venue-2026-09-07) Биржа книги пишется рядом с
+                    # самими показаниями. Признаки входа сравнимы только внутри
+                    # одной площадки: у HTX step0 полная глубина, у OKX books5
+                    # пять уровней, и obi/wall_share считаются по разной. Без
+                    # метки форензика смешала бы две эпохи молча — она уже берёт
+                    # entry_depth.obi и entry_depth.cvd_ratio как признаки входа.
                     "entry_depth": (
-                        OrderBookAnalyzer.analyze(
-                            ORDERBOOK_STORE.snapshot(symbol),
-                            levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
-                        ).as_dict()
+                        {
+                            **OrderBookAnalyzer.analyze(
+                                ORDERBOOK_STORE.snapshot(symbol),
+                                levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                            ).as_dict(),
+                            "exchange": ob_feed_exchange(),
+                        }
                         if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False))
                         else None
                     ),
@@ -1819,23 +1828,37 @@ class RobotLoop:
                 # их было нечем: 71.7 это ДО смешивания, 60.67 после
                 # (71.7×0.7 + 35×0.3).
                 #
-                # Режима здесь нет вовсе: смешивание идёт и при ML_MODE=shadow,
-                # хотя контракт в ml_controller гласит «на сделки НЕ влияет».
-                # Уверенность задаёт грейд и гейтит вход: у #476 она опустила
-                # 75.8 до 63.54 и сменила грейд с A на B. Поведение НЕ меняется
-                # здесь намеренно — 06.09 запущен эксперимент с
-                # TP_REACH_MODE=shadow, и вторая одновременная правка входа
-                # сделала бы его нечитаемым.
+                # (#ml-blend-contract-2026-09-07) Раньше режима здесь не было
+                # вовсе: смешивание шло при любом ML_MODE, включая off. А
+                # уверенность гейтит вход и задаёт грейд — то есть контракт
+                # «shadow считает и логирует, на сделки НЕ влияет» нарушался
+                # молча. Цена вопроса измерена: у #479 уверенность после этого
+                # шага составила 60.02 при пороге 60.0, то есть шаг решал, быть
+                # сделке или нет; у #476 он опустил 75.8 до 63.5 и сменил грейд
+                # с A на B.
+                #
+                # Теперь вмешательство только в full_auto — там, где по
+                # контроллеру ML и так гейтит и масштабирует. Считаем и
+                # записываем при этом ВСЕГДА: это и есть shadow, и без записи
+                # нельзя будет сравнить, что смешивание сделало бы.
+                #
+                # Режим спрашиваем ЭФФЕКТИВНЫЙ: контроллер понижает full_auto до
+                # shadow при слабом или протухшем AUC, и обойти это понижение
+                # значило бы вернуть дыру с другой стороны.
+                ml_mode = self.ml_controller.effective_mode()
+                applied = ml_mode == "full_auto"
                 before_ml = calibrated
-                blended = calibrated * 0.70 + ml_confidence * 0.30
-                calibrated = round(min(blended, 92.0), 2)
+                blended = round(min(calibrated * 0.70 + ml_confidence * 0.30, 92.0), 2)
+                if applied:
+                    calibrated = blended
                 if details is not None:
                     details["ml_blend"] = {
                         "before_ml": round(before_ml, 2),
                         "ml_confidence": round(float(ml_confidence), 2),
                         "weight": 0.30,
-                        "after_ml": calibrated,
-                        "ml_mode": str(getattr(settings, "ML_MODE", "off")),
+                        "after_ml": blended,
+                        "applied": applied,
+                        "ml_mode": ml_mode,
                     }
         except Exception:
             pass  # MLScorer errors must never block signal generation

@@ -60,9 +60,10 @@ export default function OrderbookPage() {
   const mlCount = ml?.count ?? 0;
   const mlTarget = ml?.target_for_training ?? 200;
 
-  // (#depth-venue-2026-09-07) Стакан читается с одной биржи, ордера уходят на
-  // другую. Это не наблюдение: OB_GATE_ENTRIES блокирует по нему входы, а
-  // entry_depth.* уходит в план сделки и в форензику как признак входа.
+  // (#depth-venue-2026-09-07) Фид следует за биржей ордеров, но `OB_EXCHANGE`
+  // может удержать его на месте. Расхождение остаётся видимым: гейт входа
+  // блокирует по этой книге, а entry_depth.* уходит в план сделки и в форензику
+  // как признак входа.
   const feedExchange = ob?.feed_exchange ? String(ob.feed_exchange).toUpperCase() : null;
   const activeExchange = ob?.active_exchange ? String(ob.active_exchange).toUpperCase() : null;
   const venueMismatch = Boolean(
@@ -100,14 +101,17 @@ export default function OrderbookPage() {
             Стакан {feedExchange}, ордера {activeExchange}
           </div>
           <p className="mt-2 text-sm text-amber-100/80">
-            WS-фид жёстко привязан к {feedExchange} — ветки для {activeExchange} в нём нет. При этом
-            depth-гейт входов {ob?.gate_entries ? "ВКЛЮЧЁН" : "выключен"}: решение «входить или нет»
-            принимается по книге одной биржи, а сделка исполняется на другой.
+            {ob?.feed_pinned
+              ? `Фид закреплён за ${feedExchange} настройкой OB_EXCHANGE и за биржей ордеров не идёт.`
+              : `Фид должен следовать за биржей ордеров, но сейчас читает ${feedExchange}.`}{" "}
+            При этом depth-гейт входов {ob?.gate_entries ? "ВКЛЮЧЁН" : "выключен"}: решение «входить
+            или нет» принимается по книге одной биржи, а сделка исполняется на другой.
           </p>
           <p className="mt-2 text-xs text-amber-100/60">
             Это же касается разбора: `entry_depth.obi` и `entry_depth.cvd_ratio` попадают в план
             сделки и дальше в форензику стопов как признаки входа — то есть измеряется поток не той
-            площадки, на которой сделка жила.
+            площадки, на которой сделка жила. Биржа книги пишется рядом с показаниями
+            (`entry_depth.exchange`), так что эпохи в разборе различимы.
           </p>
         </section>
       )}

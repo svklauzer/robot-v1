@@ -1304,6 +1304,13 @@ class Settings(BaseSettings):
     # перенос входа в entry_zone описывают чужой инструмент.
     # Пустой OB_WS_URL → эндпоинт берётся по OB_MARKET_TYPE (см. orderbook_feed).
     OB_MARKET_TYPE: str = "spot"
+    # (#depth-venue-2026-09-07) Чью книгу слушать. Пусто → биржа, на которой
+    # идут ордера (ACTIVE_EXCHANGE). Явное значение оставляет фид на месте при
+    # переключении торговли: переезд меняет смысл entry_depth.* (у OKX books5
+    # пять уровней против полной глубины HTX), и возможность не двигать его
+    # нужна, чтобы разбор входов не смешал две эпохи молча.
+    OB_EXCHANGE: str = ""
+    OB_OKX_WS_URL: str = ""
     OB_WS_URL: str = ""
     OB_DEPTH_LEVELS: int = 10
     OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)

@@ -702,7 +702,7 @@ async def lifespan(app: FastAPI):
     orderbook_feed_enabled = True
     if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)):
         try:
-            from services.orderbook_feed import run_htx_orderbook_feed
+            from services.orderbook_feed import run_orderbook_feed
             ob_db = SessionLocal()
             try:
                 ob_bot = ob_db.query(Bot).filter(Bot.name == "Main Robot").first()
@@ -712,7 +712,7 @@ async def lifespan(app: FastAPI):
             if not ob_symbols:
                 ob_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "DOT/USDT"]
             orderbook_feed_task = asyncio.create_task(
-                run_htx_orderbook_feed(ob_symbols, lambda: orderbook_feed_enabled)
+                run_orderbook_feed(ob_symbols, lambda: orderbook_feed_enabled)
             )
         except Exception as e:
             log_event(logger, logging.ERROR, "orderbook_feed_start_error", error_type=type(e).__name__, error=str(e))
@@ -1031,7 +1031,7 @@ def stop_bot():
 def orderbook_state():
     """Живой снимок стакана по символам: spread / OBI / стенки / CVD / возраст
     данных. Для контроля, что WS-фид жив, и подбора порогов depth-движка."""
-    from services.orderbook_feed import ORDERBOOK_STORE
+    from services.orderbook_feed import ORDERBOOK_STORE, feed_exchange as ob_feed_exchange
     from services.orderbook_analyzer import OrderBookAnalyzer
 
     levels = int(getattr(settings, "OB_DEPTH_LEVELS", 10))
@@ -1052,15 +1052,13 @@ def orderbook_state():
         "enabled": bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False)),
         "gate_entries": bool(getattr(settings, "OB_GATE_ENTRIES", True)),
         "accelerate_exits": bool(getattr(settings, "OB_ACCELERATE_EXITS", True)),
-        # (#depth-venue-2026-09-07) Чей это стакан. Фид жёстко HTX —
-        # `run_htx_orderbook_feed`, адреса huobi/hbdm, ветки OKX нет вовсе, — а
-        # ордера уходят на ACTIVE_EXCHANGE, с 02.09 это OKX.
-        #
-        # Записывается потому, что стакан не наблюдательный: OB_GATE_ENTRIES
-        # блокирует входы по нему (сегодня ETH отбит шесть раз), а entry_depth.*
-        # уходит в план сделки и дальше в форензику как признак входа. Пока обе
-        # биржи не названы рядом, расхождение не видно ни на экране, ни в разборе.
-        "feed_exchange": "htx",
+        # (#depth-venue-2026-09-07) Чей это стакан. С 07.09 фид следует за
+        # ACTIVE_EXCHANGE, но `OB_EXCHANGE` может его удержать на месте, поэтому
+        # биржа по-прежнему сообщается явно: стакан не наблюдательный —
+        # OB_GATE_ENTRIES блокирует по нему входы, а entry_depth.* уходит в план
+        # сделки и дальше в форензику как признак входа.
+        "feed_exchange": ob_feed_exchange(),
+        "feed_pinned": bool(str(getattr(settings, "OB_EXCHANGE", "") or "").strip()),
         "active_exchange": str(getattr(settings, "ACTIVE_EXCHANGE", "htx")).lower(),
         "thresholds": {
             "max_spread_pct": getattr(settings, "OB_MAX_SPREAD_PCT", 0.08),
