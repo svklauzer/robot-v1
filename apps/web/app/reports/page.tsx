@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import GradeBadge from "../../components/GradeBadge";
+import { closeReasonLabel } from "../../lib/closeReasons";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
-import { Send, RefreshCw, Trophy, Flame, Clock, BarChart3 } from "lucide-react";
+import { Send, RefreshCw, Trophy, Flame, Clock } from "lucide-react";
 
 export default function ReportsPage() {
   const [period, setPeriod] = useState(24);
@@ -162,7 +163,6 @@ export default function ReportsPage() {
           />
 
           <StatCard title="Costs" value={formatUsdt(stats.costs)} />
-          <StatCard title="Период" value={`${stats.hours}ч`} />
         </section>
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -231,23 +231,9 @@ export default function ReportsPage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <BarChart3 size={18} className="text-emerald-300" />
-            <h2 className="text-xl font-semibold text-emerald-200">
-              Сводка отчёта
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <InfoBox label="Всего сигналов" value={stats.total} />
-            <InfoBox label="Закрытых сделок" value={stats.closed} />
-            <InfoBox label="Winrate" value={`${stats.winrate}%`} />
-            <InfoBox label="Победы / Убытки" value={`${stats.wins} / ${stats.losses}`} />
-            <InfoBox label="Итоговый результат" value={`${stats.resultPct}%`} />
-            <InfoBox label="Период отчёта" value={`${stats.hours}ч`} />
-          </div>
-        </section>
+        {/* Секция «Сводка отчёта» убрана: все шесть её чисел — всего сигналов,
+            закрытых, winrate, победы/убытки, итог %, период — стоят в ряду
+            карточек выше. Ни одного нового значения она не давала. */}
     </AppShell>
   );
 }
@@ -360,7 +346,7 @@ function SignalPreview({
           </div>
 
           <div className="mt-1 text-xs text-emerald-100/50">
-            {signal.rationale || signal.closed_reason || "report_signal"}
+            {signal.rationale || closeReasonLabel(signal.closed_reason) || "report_signal"}
           </div>
         </div>
 
@@ -401,7 +387,9 @@ function SignalPreview({
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         <InfoBox label="Exit" value={signal.closed_exit_price ?? "-"} />
         <InfoBox label="Costs" value={formatUsdt(costs)} />
-        <InfoBox label="Close reason" value={signal.closed_reason || "-"} />
+        {/* Тот же общий модуль, что читают журнал сигналов и лента решений:
+            здесь причина выводилась машинным кодом. */}
+        <InfoBox label="Close reason" value={closeReasonLabel(signal.closed_reason)} />
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-950 pt-3 text-xs text-emerald-100/50">
