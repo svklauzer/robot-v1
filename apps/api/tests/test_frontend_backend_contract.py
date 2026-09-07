@@ -668,3 +668,56 @@ def test_silence_events_show_how_long_the_silence_has_held():
 
     assert '"held_sec"' in reporter, "бэкенд больше не пишет длительность"
     assert "payload.held_sec" in page, "лента снова не показывает длительность молчания"
+
+
+# ── разбор позиций (07.09) ──────────────────────────────────────────────────
+
+def test_no_screen_guesses_which_exchange_a_trade_belongs_to():
+    """(#exchange-default-2026-09-07) Значок биржи подставлял «htx», когда поле
+    пустое. Торгует OKX, то есть умолчание давало прямо неверный ответ на
+    вопрос, ради которого значок и стоит, — и выглядело замером, хотя означало
+    «поля нет». Копий было две, и обе несли одно и то же умолчание.
+    """
+    offenders = []
+    for path in sorted((WEB / "app").rglob("page.tsx")) + sorted((WEB / "components").glob("*.tsx")):
+        page = _rendered(path.read_text(encoding="utf-8"))
+        if re.search(r'\|\|\s*"htx"', page):
+            offenders.append(path.relative_to(WEB).as_posix())
+
+    assert offenders == [], f"биржа додумывается вместо «неизвестно»: {offenders}"
+
+
+def test_the_exchange_badge_is_not_reimplemented_per_page():
+    """Тот же довод, что у GradeBadge: копия расходится молча, и правка в одной
+    оставляет остальные врать. Здесь это уже случилось — обе копии несли
+    неверное умолчание.
+    """
+    assert (WEB / "components/ExchangeBadge.tsx").exists(), "общий значок исчез"
+
+    for page in ("app/signals/page.tsx", "app/positions/page.tsx"):
+        src = _read(WEB / page)
+        assert "components/ExchangeBadge" in src, f"{page} не читает общий значок"
+        assert "function ExchangeBadge" not in src, f"{page} снова держит свою копию"
+
+
+def test_the_empty_positions_state_states_a_fact_not_a_cause():
+    """(#frozen-prose-2026-09-07) Пустой список объяснялся фразой, вписанной
+    однажды: «робот запущен в paper, но за окно наблюдения новые сделки не дошли
+    до open». Она срабатывала при ЛЮБОМ пустом фильтре и утверждала причину,
+    которой эта страница не измеряет. 07.09 две сделки открылись и закрылись, а
+    текст всё равно сказал бы, что до open ничего не дошло.
+    """
+    page = _rendered(_read(WEB / "app/positions/page.tsx"))
+
+    for invented in ("за окно наблюдения", "соответствует последнему отчет"):
+        assert invented not in page, f"страница снова объясняет причину: {invented}"
+
+
+def test_a_missing_result_is_not_drawn_as_zero():
+    """У закрытой позиции без записанного результата `rowPnl` даёт null, а
+    рисовался `?? 0` — зелёный ноль, неотличимый от измеренного безубытка.
+    """
+    page = _rendered(_read(WEB / "app/positions/page.tsx"))
+
+    assert "rowPnl(p) ?? 0" not in page, "отсутствие результата снова рисуется нулём"
+    assert "нет записи" in page, "не видно, что результата в записи нет"

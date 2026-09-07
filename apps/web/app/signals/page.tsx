@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import ExchangeBadge from "../../components/ExchangeBadge";
 import GradeBadge from "../../components/GradeBadge";
 import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { RefreshCw } from "lucide-react";
@@ -771,19 +772,6 @@ function TradeDiagnostics({ plan }: { plan: any }) {
     </div>
   );
 }
-
-function ExchangeBadge({ exchange }: { exchange?: string | null }) {
-  // (#okx-satellite-exchange-routing-2026-09-02) Метка, на какой бирже сигнал
-  // реально открыт — не путать с текущей ACTIVE_EXCHANGE, которая может отличаться.
-  const ex = (exchange || "htx").toLowerCase();
-  const cls = ex === "okx" ? "bg-sky-700 text-white" : "bg-slate-700 text-white";
-  return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase ${cls}`}>
-      {ex}
-    </span>
-  );
-}
-
 
 function statusClass(status?: string | null) {
   if (status === "opened") return "bg-blue-700 text-white";
