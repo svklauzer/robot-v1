@@ -125,13 +125,24 @@ export default function SignalsPage() {
     }
   }
 
-  async function closeSignal(id: number, result: number) {
-    if (!confirmDanger(`Сигнал #${id} будет вручную закрыт с результатом ${result}%.`)) return;
+  // (#manual-result-2026-09-07) Здесь стояло закрытие с ЗАДАННЫМ процентом, а
+  // в разметке — две кнопки с зашитыми «+2.1%» и «−1.0%». Бэкенд выводит из
+  // процента цену выхода и проводит сделку полным lifecycle: позиция, PnL,
+  // Telegram, метка в trade_outcomes.jsonl. То есть выдуманный исход попадал в
+  // журнал наравне с измеренными — в разбор по причинам, в форензику стопов, в
+  // обучающую выборку ML. Гейта production у ручки нет, в отличие от кнопок
+  // инъекции цены.
+  //
+  // Честное закрытие делает «Закрыть по рынку» (живая цена). Для неоткрытого
+  // сигнала остаётся отмена: бэкенд переводит published → expired и результата
+  // не считает вовсе.
+  async function cancelSignal(id: number) {
+    if (!confirmDanger(`Сигнал #${id} будет отменён (published → expired).`)) return;
 
     try {
       assertOk(await apiPost(`/signals/${id}/close`, {
-        result_pct: result,
-        reason: result > 0 ? "manual_profit_close" : "manual_loss_close",
+        result_pct: 0,
+        reason: "manual_cancel",
       }));
       await loadSignals();
     } catch (e) {
@@ -177,22 +188,27 @@ export default function SignalsPage() {
 
     const totalPct = closed.reduce((sum, s) => sum + Number(s.result_pct || 0), 0);
     const totalNet = closed.reduce((sum, s) => sum + Number(s.closed_net_pnl || 0), 0);
-    const totalCosts = closed.reduce((sum, s) => sum + Number(s.closed_total_cost || 0), 0);
 
+    // wins/losses/totalCosts тут считались и не выводились ни одной карточкой.
     return {
       total: signals.length,
       closed: closed.length,
       active: signals.filter((s) => ["published", "opened", "tp1", "breakeven"].includes(s.status)).length,
       expired: signals.filter((s) => s.status === "expired").length,
       rejected: signals.filter((s) => s.status === "rejected").length,
-      wins: wins.length,
-      losses: losses.length,
       winrate: closed.length ? ((wins.length / closed.length) * 100).toFixed(2) : "0.00",
       totalPct: totalPct.toFixed(4),
       totalNet: totalNet.toFixed(2),
-      totalCosts: totalCosts.toFixed(2),
     };
   }, [signals]);
+
+  // (#phantom-fill-2026-07-25) Честный PnL — тот же, что на главной и в
+  // аналитике. Здесь оставался сырой: ветка tp2_reached книжит полную цену TP2,
+  // закрываясь на 92% пути, и завышение попадает ТОЛЬКО в выигрышные сделки.
+  // Два экрана давали два разных числа за один и тот же период — ровно то, что
+  // чинили на главной 25.07 и не довели до журнала.
+  const honestWinrate = summaryData?.winrate_honest ?? summaryData?.winrate;
+  const honestNet = summaryData?.total_net_pnl_honest_usdt ?? summaryData?.total_net_pnl_usdt;
 
   return (
     <AppShell>
@@ -225,9 +241,9 @@ export default function SignalsPage() {
           <Card title="Закрыто" value={summaryData?.closed_signals ?? stats.closed} />
           <Card title="Expired" value={summaryData?.expired_signals ?? stats.expired} />
           <Card title="Rejected" value={summaryData?.rejected_signals ?? stats.rejected} />
-          <Card title="Winrate" value={`${summaryData?.winrate ?? stats.winrate}%`} />
+          <Card title="Winrate" value={`${honestWinrate ?? stats.winrate}%`} />
           <Card title="Итог %" value={`${summaryData?.total_result_pct ?? stats.totalPct}%`} valueClass={numClass(summaryData?.total_result_pct ?? stats.totalPct)} />
-          <Card title="Net PnL" value={`${summaryData?.total_net_pnl_usdt != null ? Number(summaryData.total_net_pnl_usdt).toFixed(2) : stats.totalNet} USDT`} valueClass={numClass(summaryData?.total_net_pnl_usdt ?? stats.totalNet)} />
+          <Card title="Net PnL" value={`${honestNet != null ? Number(honestNet).toFixed(2) : stats.totalNet} USDT`} valueClass={numClass(honestNet ?? stats.totalNet)} />
         </section>
 
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
@@ -290,7 +306,7 @@ export default function SignalsPage() {
                 key={s.id}
                 signal={s}
                 onTestPrice={testLifecyclePrice}
-                onCloseSignal={closeSignal}
+                onCancelSignal={cancelSignal}
                 onCloseMarket={closeSignalMarket}
               />
             ))}
@@ -309,12 +325,12 @@ export default function SignalsPage() {
 function SignalCard({
   signal: s,
   onTestPrice,
-  onCloseSignal,
+  onCancelSignal,
   onCloseMarket,
 }: {
   signal: SignalItem;
   onTestPrice: (id: number, price?: number | null) => void;
-  onCloseSignal: (id: number, result: number) => void;
+  onCancelSignal: (id: number) => void;
   onCloseMarket: (id: number) => void;
 }) {
   const isActive = ["published", "opened", "tp1", "breakeven"].includes(s.status);
@@ -530,19 +546,17 @@ function SignalCard({
                 </button>
               )}
 
-              <button
-                onClick={() => onCloseSignal(s.id, 2.1)}
-                className="rounded-lg bg-emerald-700 px-3 py-1 text-xs font-semibold hover:bg-emerald-600"
-              >
-                +2.1%
-              </button>
-
-              <button
-                onClick={() => onCloseSignal(s.id, -1.0)}
-                className="rounded-lg bg-red-700 px-3 py-1 text-xs font-semibold hover:bg-red-600"
-              >
-                -1.0%
-              </button>
+              {/* Кнопки «+2.1%» и «−1.0%» вписывали в журнал выдуманный
+                  результат — см. cancelSignal выше. Для открытой сделки честное
+                  закрытие делает «Закрыть по рынку», для неоткрытой — отмена. */}
+              {s.status === "published" && (
+                <button
+                  onClick={() => onCancelSignal(s.id)}
+                  className="rounded-lg bg-yellow-700 px-3 py-1 text-xs font-bold text-slate-950 hover:bg-yellow-600"
+                >
+                  Отменить
+                </button>
+              )}
             </>
           ) : (
             <span className="text-xs text-emerald-100/40">{s.status}</span>
@@ -619,15 +633,26 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function MlBadge({ ml }: { ml?: any }) {
-  // ml = { mode, ml_score, action }. Показываем только когда ML что-то посчитал.
+  // (#ml-badge-2026-09-07) Цвет — утверждение о результате. Значок красил
+  // ≥0.6 зелёным, ≥0.45 жёлтым, ниже красным, хотя разделение этой оси на
+  // закрытых сделках не измерялось ни разу.
+  //
+  // Тот же разбор этажом ниже уже снял палитру с GradeBadge — там замер
+  // показал, что она была ПЕРЕВЁРНУТА. Рисовать вердикт на непроверенной оси в
+  // том же файле, где соседняя ось на этом попалась, оснований нет. Тем более
+  // что MLScorer подмешивается в уверенность с весом 0.3 независимо от
+  // ML_MODE: на вход он влияет, а как именно — не замерено.
   if (!ml || ml.ml_score == null) return null;
   const score = Number(ml.ml_score);
-  const cls =
-    score >= 0.6 ? "bg-emerald-600 text-white" : score >= 0.45 ? "bg-yellow-600 text-black" : "bg-red-700 text-white";
   return (
     <span
-      className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}
-      title={`ML ${ml.mode}: P(win)=${score.toFixed(3)}${ml.action ? " · " + ml.action : ""}`}
+      className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-xs font-semibold text-slate-100"
+      title={
+        `P(win) по MLScorer = ${score.toFixed(3)}` +
+        (ml.mode ? ` · режим ${ml.mode}` : "") +
+        (ml.action ? ` · ${ml.action}` : "") +
+        ". Разделение этой оси на закрытых сделках не измерено — цвет не ставится."
+      }
     >
       ML {score.toFixed(2)}
     </span>
@@ -766,12 +791,44 @@ function TradeDiagnostics({ plan }: { plan: any }) {
           </div>
         )}
 
+        {/* (#shadow-verdict-2026-09-06) В shadow `allowed` всегда true — гейт
+            считает, но не блокирует. Карточка красила по нему, поэтому зелёным
+            выходили и сделки, где частота вдвое ниже требуемой: у #482 стояло
+            17.4% против нужных 29.8% и при этом зелёный «пропущено».
+            Собственный вердикт гейта лежит рядом, в `would_block`. */}
         {reach && (
           <div>
             <span className="text-emerald-100/50">Достижимость TP2: </span>
-            <span className={reach.allowed ? "text-emerald-300" : "text-yellow-300"}>
+            <span
+              className={
+                reach.would_block == null
+                  ? "text-emerald-200"
+                  : reach.would_block
+                  ? "text-yellow-300"
+                  : "text-emerald-300"
+              }
+            >
               {fmt((reach.tp2_hit_rate ?? 0) * 100, 1)}% / нужно {fmt((reach.required_hit_rate ?? 0) * 100, 1)}%
             </span>
+            {reach.tp2_hit_rate_uncensored != null && (
+              <div
+                className="mt-1 text-[11px] text-emerald-100/50"
+                title="Та же частота без наших собственных ранних выходов. Разрыв с сырой — цена, которую вход платит за решения контура выхода."
+              >
+                без цензуры {fmt(reach.tp2_hit_rate_uncensored * 100, 1)}%
+                {reach.uncensored_sample != null && ` на ${reach.uncensored_sample} набл.`}
+              </div>
+            )}
+            {/* У сделок старше 06.09 вердикта в плане нет. Отсутствие замера не
+                должно выглядеть как «гейт пропустил бы». */}
+            {reach.would_block != null && (
+              <div className={`mt-1 text-[11px] ${reach.would_block ? "text-yellow-200/70" : "text-emerald-100/50"}`}>
+                {reach.would_block ? "гейт остановил бы" : "гейт пропустил бы"}
+                {reach.reason === "mode_shadow" && (
+                  <span className="text-emerald-100/40"> · режим наблюдения</span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
