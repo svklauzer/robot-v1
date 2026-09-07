@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import AppShell from "../components/AppShell";
 import { apiGet, apiPost } from "../lib/api";
-import { Activity, BarChart3, Bot, CreditCard, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
+import { BarChart3, Bot, CreditCard, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 
 export default function DashboardPage() {
   const [botState, setBotState] = useState<any>(null);
@@ -57,6 +57,26 @@ export default function DashboardPage() {
 
   const bot = botState?.bot;
   const blockers = readiness?.blockers || [];
+
+  // (#readiness-status-2026-09-07) `ready` — это отсутствие ЖЁСТКИХ блокеров и
+  // только. Бэкенд рядом отдаёт `status` с третьим значением `paper_ready` и
+  // отдельный список `warnings` (провалы гейтов валидации, сбои Telegram,
+  // протухший ML-лог, связность рынка). Карточка сводила всё к READY/BLOCKED и
+  // считала одни жёсткие — то есть в бумажном режиме с непустыми
+  // предупреждениями показывала зелёное «READY · 0 blockers».
+  //
+  // Это ровно наш случай: гейт positive_then_negative держится на 55% при
+  // пороге 25%, и увидеть это на главной было нельзя.
+  const warnings = readiness?.warnings || [];
+  const readinessStatus = String(
+    readiness?.status || (readiness?.ready ? "ready" : "blocked"),
+  );
+
+  // (#sla-without-facts-2026-09-07) Пустое окно доставки — не 100%.
+  // `TelegramDeliveryLog.summary` отдаёт sla_pct=100.0, когда доставок не было
+  // вовсе, поэтому знаменатель приходится восстанавливать здесь.
+  const tgSent = Number(readiness?.telegram_delivery?.sent ?? 0);
+  const tgDelivered = tgSent + Number(readiness?.telegram_delivery?.failed ?? 0);
 
   // Три книги — realized PnL по движкам (раздельные карманы, статистики не смешиваем)
   // (#phantom-fill-2026-07-25) Честный PnL: сырой total_net_pnl_usdt завышен
@@ -141,34 +161,47 @@ export default function DashboardPage() {
           good={trendPnl > 0}
           danger={trendPnl < 0}
         />
-        <StatCard title="Readiness" value={readiness?.ready ? "READY" : "BLOCKED"} subtitle={`${blockers.length} blockers`} icon={<ShieldCheck size={18} />} good={readiness?.ready} danger={!readiness?.ready} />
-        <StatCard title="Payments" value={readiness?.payments?.cash_collected ?? 0} subtitle={`paid ${readiness?.payments?.paid ?? 0}, pending ${readiness?.payments?.pending ?? 0}`} icon={<CreditCard size={18} />} good />
+        <StatCard
+          title="Readiness"
+          value={readinessStatus.toUpperCase()}
+          subtitle={`${blockers.length} blockers · ${warnings.length} warnings`}
+          icon={<ShieldCheck size={18} />}
+          good={readinessStatus === "ready"}
+          warn={readinessStatus === "paper_ready"}
+          danger={!readiness?.ready}
+        />
+        {/* Цвет здесь несёт смысл «хорошо/плохо». `good` стояло константой,
+            то есть карточка была зелёной при любой сумме, включая ноль. */}
+        <StatCard title="Payments" value={readiness?.payments?.cash_collected ?? 0} subtitle={`paid ${readiness?.payments?.paid ?? 0}, pending ${readiness?.payments?.pending ?? 0}`} icon={<CreditCard size={18} />} />
       </section>
 
-      <section className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-        <MiniCard title="Signals" value={analytics?.total_signals ?? 0} link="/signals" />
-        <MiniCard title="Winrate" value={`${analytics?.winrate_honest ?? analytics?.winrate ?? 0}%`} link="/analytics" />
+      {/* Signals и Winrate отсюда убраны: те же два числа стоят двумя рядами
+          выше, в подписи книги Trend. Свободная маржа, наоборот, считается на
+          каждый вызов /analytics/summary и не показывалась нигде — а это
+          единственное число, отвечающее «может ли робот вообще открыть». */}
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
         <MiniCard title="Active" value={analytics?.active_signals ?? 0} link="/positions" />
-        <MiniCard title="Telegram SLA" value={`${readiness?.telegram_delivery?.sla_pct ?? 100}%`} link="/health" />
+        <MiniCard
+          title="Свободная маржа"
+          value={`${fmt(analytics?.exposure?.free_margin, 0)} USDT`}
+          sub={`из ${fmt(analytics?.exposure?.max_allowed_margin, 0)}`}
+          link="/positions"
+        />
+        <MiniCard
+          title="Telegram SLA"
+          value={tgDelivered ? `${readiness?.telegram_delivery?.sla_pct ?? "—"}%` : "—"}
+          sub={tgDelivered ? `${tgSent} из ${tgDelivered} за 24ч` : "доставок за 24ч не было"}
+          link="/health"
+        />
         <MiniCard title="Depth feed" value={orderbook?.enabled ? (orderbook?.stats?.freshest_age_sec != null ? `LIVE ${Number(orderbook.stats.freshest_age_sec).toFixed(1)}s` : "—") : "OFF"} link="/orderbook" />
         <MiniCard title="ML data" value={`${mlStats?.count ?? 0}/${mlStats?.target_for_training ?? 200}`} link="/orderbook" />
       </section>
 
-      {blockers.length > 0 && (
-        <section className="rounded-2xl border border-red-900/70 bg-red-950/20 p-5">
-          <h2 className="mb-3 flex items-center gap-2 text-xl font-semibold text-red-200">
-            <Activity size={18} />
-            Go-live blockers
-          </h2>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            {blockers.map((blocker: string, idx: number) => (
-              <div key={idx} className="rounded-xl border border-red-900/70 bg-black/20 p-3 text-sm text-red-100">
-                {blocker}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Перечисление блокеров жило здесь и на /health одновременно — один и
+          тот же список из readiness.blockers на двух экранах. По правилу от
+          28.07 техническое состояние живёт на /health, деньги в /analytics;
+          на главной остаётся счётчик со ссылкой. Предупреждения, которые не
+          показывались нигде, добавлены туда же, к блокерам. */}
 
       {dailyQuality && (
         <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
@@ -214,7 +247,17 @@ export default function DashboardPage() {
               muted={dailyQuality.sample_sufficient === false}
               danger={dailyQuality.sample_sufficient !== false && (dailyQuality.trading?.failed_setup_share_pct ?? 0) > 35}
             />
-            <DailyCard label="TG SLA" value={`${dailyQuality.telegram_sla?.sla_pct ?? 100}%`} good={(dailyQuality.telegram_sla?.sla_pct ?? 100) >= 99} danger={(dailyQuality.telegram_sla?.sla_pct ?? 100) < 99} />
+            {/* (#sla-without-facts-2026-09-07) Бэкенд здесь честен: при пустом
+                окне он отдаёт sla_pct=null. `?? 100` затирал это отсутствие
+                замера выдуманной сотней и красил её зелёным — то есть молчащий
+                канал выглядел безупречно доставляющим. */}
+            <DailyCard
+              label="TG SLA"
+              value={dailyQuality.telegram_sla?.sla_pct == null ? "—" : `${dailyQuality.telegram_sla.sla_pct}%`}
+              muted={dailyQuality.telegram_sla?.sla_pct == null}
+              good={(dailyQuality.telegram_sla?.sla_pct ?? -1) >= 99}
+              danger={dailyQuality.telegram_sla?.sla_pct != null && dailyQuality.telegram_sla.sla_pct < 99}
+            />
             <DailyCard label="Active" value={dailyQuality.active_signals?.total_active ?? 0} />
           </div>
           {(dailyQuality.issues?.length ?? 0) > 0 && (
@@ -230,7 +273,9 @@ export default function DashboardPage() {
       )}
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <QuickLink href="/analytics" title="Profit analytics" text="PnL, quality, readiness gates и reason breakdown." />
+        {/* Панель readiness убрана из /analytics 05.09 — по тому же правилу
+            «техническое на /health». Подпись обещала её ещё сутки. */}
+        <QuickLink href="/analytics" title="Profit analytics" text="PnL, качество сигналов и разбор по причинам выхода." />
         <QuickLink href="/payments" title="Payments" text="Создание checkout и подтверждение оплат VIP." />
         <QuickLink href="/health" title="System health" text="API, loops, market, Telegram delivery и production blockers." />
       </section>
@@ -275,11 +320,12 @@ function BookCard({ title, href, pnl, sub, total, off }: { title: string; href?:
   );
 }
 
-function MiniCard({ title, value, link }: { title: string; value: any; link: string }) {
+function MiniCard({ title, value, sub, link }: { title: string; value: any; sub?: string; link: string }) {
   return (
     <Link href={link} className="rounded-2xl border border-emerald-900 bg-black/30 p-5 transition hover:border-emerald-500 hover:bg-emerald-950/30">
       <div className="text-sm text-emerald-100/60">{title}</div>
       <div className="mt-2 text-2xl font-bold text-emerald-200">{value}</div>
+      {sub && <div className="mt-1 text-xs text-emerald-100/45">{sub}</div>}
     </Link>
   );
 }

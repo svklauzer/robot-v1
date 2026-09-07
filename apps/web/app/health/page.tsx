@@ -108,6 +108,19 @@ export default function HealthPage() {
   const mlOutcomes = readiness?.ml_outcomes || health?.ml_outcomes || {};
   const fundingArb = readiness?.funding_arb || health?.funding_arb || {};
   const blockers = readiness?.blockers || health?.production_readiness?.blockers || [];
+  // (#readiness-status-2026-09-07) /system/readiness возвращает ДВА списка:
+  // жёсткие `blockers` и мягкие `warnings` (провалы гейтов валидации, сбои
+  // Telegram, протухший ML-лог, связность рынка). Показывались только первые,
+  // и вторые не выводились нигде во всём интерфейсе — при пустых блокерах
+  // экран говорил «блокеров нет», хотя предупреждения были непусты.
+  //
+  // В live-режиме бэкенд сам переливает мягкие в жёсткие; отдельный список
+  // существует ровно потому, что мы в бумажном.
+  const warnings = readiness?.warnings || [];
+
+  // (#sla-without-facts-2026-09-07) Пустое окно доставки — не 100%.
+  const tgDelivered = Number(delivery?.sent ?? 0) + Number(delivery?.failed ?? 0);
+  const tgVipDelivered = Number(delivery?.vip_sent ?? 0) + Number(delivery?.vip_failed ?? 0);
 
   return (
     <AppShell>
@@ -214,8 +227,11 @@ export default function HealthPage() {
         </Panel>
 
         <Panel title="Telegram delivery 24h">
-          <InfoRow label="SLA" value={`${delivery?.sla_pct ?? 100}%`} />
-          <InfoRow label="VIP SLA" value={`${delivery?.vip_sla_pct ?? 100}%`} danger={(delivery?.vip_failed ?? 0) > 0} />
+          {/* `TelegramDeliveryLog.summary` отдаёт sla_pct=100.0, когда доставок
+              не было вовсе: знаменателя нет, а сотня печатается. Пока канал
+              молчит, это читается как безупречная доставка. */}
+          <InfoRow label="SLA" value={tgDelivered ? `${delivery?.sla_pct ?? "-"}%` : "— (доставок не было)"} />
+          <InfoRow label="VIP SLA" value={tgVipDelivered ? `${delivery?.vip_sla_pct ?? "-"}%` : "— (доставок не было)"} danger={(delivery?.vip_failed ?? 0) > 0} />
           <InfoRow label="Sent" value={delivery?.sent ?? 0} />
           <InfoRow label="VIP sent" value={delivery?.vip_sent ?? 0} />
           <InfoRow label="Queued" value={delivery?.queued ?? 0} danger={(delivery?.queued ?? 0) > 0} />
@@ -561,7 +577,25 @@ export default function HealthPage() {
             ))}
           </div>
         ) : (
-          <Empty text="Блокеров нет" />
+          <Empty text="Жёстких блокеров нет" />
+        )}
+
+        {warnings.length > 0 && (
+          <div className="mt-4">
+            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-yellow-200/70">
+              Предупреждения · {warnings.length}
+            </h3>
+            {/* Мягкие: в бумажном режиме не держат go-live, но в live бэкенд
+                переливает их в жёсткие. То есть это ровно тот список, который
+                придётся закрыть перед боем. */}
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              {warnings.map((warning: string, idx: number) => (
+                <div key={idx} className="rounded-xl border border-yellow-900/60 bg-yellow-950/20 p-3 text-sm text-yellow-100">
+                  {warning}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </section>
     </AppShell>
