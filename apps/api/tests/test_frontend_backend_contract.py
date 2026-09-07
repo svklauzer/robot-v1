@@ -468,6 +468,12 @@ def test_readiness_card_does_not_collapse_paper_ready_into_ready():
     assert "readiness?.warnings" in page, "предупреждения не считаются на главной"
     assert "warnings.length" in page, "счётчик предупреждений не выведен"
 
+    # /health — страница, которой это состояние принадлежит; там та же карточка
+    # схлопывала статус ещё дольше.
+    health = _rendered(_read(WEB / "app/health/page.tsx"))
+    assert "readiness?.status" in health, "/health снова читает только ready"
+    assert "warnings.length" in health, "/health не считает предупреждения"
+
 
 def test_soft_warnings_are_rendered_somewhere():
     """Списка `warnings` не было ни на одном экране: при пустых блокерах

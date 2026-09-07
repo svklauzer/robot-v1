@@ -117,6 +117,12 @@ export default function HealthPage() {
   // В live-режиме бэкенд сам переливает мягкие в жёсткие; отдельный список
   // существует ровно потому, что мы в бумажном.
   const warnings = readiness?.warnings || [];
+  // Третье состояние: в бумажном режиме отсутствие жёстких блокеров ещё не
+  // «ready». Страница, которая именно за это и отвечает, показывала зелёное
+  // «ready · 0 blockers» при непустом списке предупреждений.
+  const readinessStatus = String(
+    readiness?.status || (production?.ready ? "ready" : "blocked"),
+  );
 
   // (#sla-without-facts-2026-09-07) Пустое окно доставки — не 100%.
   const tgDelivered = Number(delivery?.sent ?? 0) + Number(delivery?.failed ?? 0);
@@ -128,7 +134,8 @@ export default function HealthPage() {
         <div>
           <h1 className="text-3xl font-bold text-emerald-300">System Health</h1>
           <p className="mt-2 text-sm text-emerald-100/70">
-            Технический мониторинг API, фоновых циклов, рынка, Telegram delivery и production blockers.
+            Технический мониторинг: API и фоновые циклы, связность рынка и биржи,
+            предохранители live-safety, конверты капитала, исходящая сеть и блокеры go-live.
           </p>
         </div>
 
@@ -170,11 +177,14 @@ export default function HealthPage() {
         <HealthCard icon={<Bot size={18} />} title="Bot" value={bot?.status || "-"} status={bot?.status === "running" ? "good" : "warn"} subtitle={bot?.mode || "-"} />
         <HealthCard icon={<Wifi size={18} />} title="Market" value={market?.ok ? "online" : "offline"} status={market?.ok ? "good" : "bad"} subtitle={`${market?.source || "-"} / ${formatNumber(market?.last)}`} />
         {/* (#okx-satellite-2026-09-02) Какая биржа торгует сейчас + не осталось
-            ли чего-то открытого на другой (см. exchange_switch_guard). */}
+            ли чего-то открытого на другой (см. exchange_switch_guard).
+            Подстановка «htx» при отсутствии поля убрана: торгует OKX, то есть
+            умолчание давало прямо неверный ответ на вопрос, ради которого
+            карточка и стоит. */}
         <HealthCard
           icon={<Radio size={18} />}
           title="Exchange"
-          value={(health?.active_exchange || "htx").toUpperCase()}
+          value={health?.active_exchange ? String(health.active_exchange).toUpperCase() : "—"}
           status={health?.exchange_switch?.safe === false ? "bad" : "good"}
           subtitle={
             health?.exchange_switch?.safe === false
@@ -182,7 +192,13 @@ export default function HealthPage() {
               : "переключение только вручную"
           }
         />
-        <HealthCard icon={<ShieldCheck size={18} />} title="Readiness" value={production?.ready ? "ready" : "blocked"} status={production?.ready ? "good" : "bad"} subtitle={`${blockers.length} blockers`} />
+        <HealthCard
+          icon={<ShieldCheck size={18} />}
+          title="Readiness"
+          value={readinessStatus}
+          status={readinessStatus === "ready" ? "good" : production?.ready ? "warn" : "bad"}
+          subtitle={`${blockers.length} blockers · ${warnings.length} warnings`}
+        />
         <HealthCard icon={<ShieldAlert size={18} />} title="Live safety" value={liveSafety?.blocked ? "blocked" : "clear"} status={liveSafety?.blocked ? "bad" : "good"} subtitle={`day loss ${liveSafety?.daily_loss_pct ?? 0}% / max ${liveSafety?.max_daily_loss_pct ?? "-"}%`} />
       </section>
 
