@@ -24,7 +24,9 @@ from core.db import Base
 from models.bot import Bot
 from models.signal import Signal
 from models.user import User
-from services.stop_loss_forensics import _CATEGORICAL, _NUMERIC, _auc, build
+from services.stop_loss_forensics import (
+    _CATEGORICAL, _NUMERIC, _auc, _tp_reach_margin, build,
+)
 
 
 @pytest.fixture
@@ -330,3 +332,93 @@ def test_latched_entries_form_their_own_cohort(db):
     assert levels["adx_rising_latched"]["n"] == 3
     assert levels["adx_rising_latched"]["stop_rate"] == pytest.approx(1.0)
     assert levels["enabled_conditions_passed"]["stop_rate"] == pytest.approx(0.0)
+
+
+# ── запас гейта достижимости ────────────────────────────────────────────────
+
+def _reach(db, *, reason: str, net: float, hit: float, required: float,
+           uncensored: float | None = None):
+    """Сделка с записанным решением гейта достижимости — как его пишет
+    боевой путь: `plan_json["tp_reach"] = TPReach.as_dict()`."""
+    s = _sig(db, reason=reason, net=net)
+    s.plan_json = {**s.plan_json, "tp_reach": {
+        "tp1_dist_pct": 1.0, "tp2_dist_pct": 3.0,
+        "tp2_hit_rate": hit, "required_hit_rate": required,
+        "tp2_hit_rate_uncensored": uncensored,
+        "would_block": not (hit >= required
+                            or (uncensored is not None and uncensored >= required)),
+    }}
+    db.flush()
+    return s
+
+
+def test_margin_reproduces_the_gates_own_verdict():
+    """Знак запаса обязан совпадать с `would_block`, иначе рядом в одном отчёте
+    окажутся два несогласных ответа на один вопрос. Числа — с ленты 07.09.
+    """
+    # #472 AVAX: гейт пропустил (reward_reached_often_enough).
+    allowed = {"tp2_hit_rate": 0.1562, "required_hit_rate": 0.0828}
+    # #475 ETH: гейт остановил бы — не спасла и нецензурированная частота.
+    blocked = {"tp2_hit_rate": 0.0952, "required_hit_rate": 0.3547,
+               "tp2_hit_rate_uncensored": 0.1176}
+
+    assert _tp_reach_margin(None, {"tp_reach": allowed}) > 0
+    assert _tp_reach_margin(None, {"tp_reach": blocked}) < 0
+
+
+def test_margin_counts_the_rescue_by_uncensored_rate():
+    """Гейт считает вход допустимым, если порог берёт ЛИБО сырая частота, ЛИБО
+    нецензурированная. Без этого сделки, впущенные именно спасением, выглядели
+    бы в разборе остановленными — признак спорил бы с вердиктом рядом."""
+    rescued = {"tp2_hit_rate": 0.10, "required_hit_rate": 0.20,
+               "tp2_hit_rate_uncensored": 0.25}
+
+    assert _tp_reach_margin(None, {"tp_reach": rescued}) == pytest.approx(0.05)
+
+
+def test_margin_is_missing_not_zero_when_the_gate_left_no_numbers():
+    """Ноль — «ровно на пороге», и это осмысленное значение. Сделка без замера
+    обязана выпасть из выборки, а не встать в неё серединой."""
+    assert _tp_reach_margin(None, {}) is None
+    assert _tp_reach_margin(None, {"tp_reach": {"tp2_hit_rate": 0.2}}) is None
+    assert _tp_reach_margin(None, {"tp_reach": {"required_hit_rate": 0.2}}) is None
+
+
+def test_margin_separates_where_the_verdict_cannot(db):
+    """Ради этого признак и заведён. У всех пяти сделок вердикт одинаков
+    (`would_block=true`), и разрез по нему вырожден — ровно то, что показал
+    замер 07.09: восемь осуждённых из восьми. Запас при этом различает."""
+    for i in range(3):
+        _reach(db, reason="stop_loss", net=-1.0,
+               hit=0.02 + i * 0.01, required=0.30)
+    for i in range(3):
+        _reach(db, reason="tp2_reached", net=2.0,
+               hit=0.20 + i * 0.01, required=0.30)
+
+    out = build(db, min_group=3)
+    verdicts = next(c for c in out["categorical"]
+                    if c["feature"] == "tp_reach.would_block")["levels"]
+    margin = _rows(out, "tp_reach.margin")
+
+    assert list(verdicts) == ["True"], "ветви для сравнения не должно быть"
+    assert margin["auc"] == 0.0, "у стопнутых запас ниже — признак это видит"
+
+
+def test_margin_reads_fields_the_gate_actually_writes():
+    """(#tp-reach-margin-2026-09-07) План — это `asdict(TPReach)`, поэтому
+    переименование поля в гейте не сломает ничего громко: признак просто станет
+    возвращать None, и ось молча исчезнет из отчёта. Тест читает имена прямо из
+    кода признака и сверяет их с самим датаклассом.
+    """
+    import inspect
+    import re
+    from dataclasses import fields
+
+    from services.tp_reachability import TPReach
+
+    used = set(re.findall(r'reach\.get\("([^"]+)"\)',
+                          inspect.getsource(_tp_reach_margin)))
+    known = {f.name for f in fields(TPReach)}
+
+    assert used, "признак перестал читать план — тест потерял смысл"
+    assert used <= known, f"признак читает несуществующие поля гейта: {used - known}"
