@@ -28,8 +28,15 @@ from core.config import Settings, settings
 # Значения этих полей наружу не отдаются никогда — только факт «задано/нет».
 # Список по ПАТТЕРНУ, а не перечислением: новый ключ с секретом появится
 # раньше, чем кто-то вспомнит дополнить перечень.
+#
+# (#passphrase-leak-2026-09-07) `PASSWORD|PASSWD` не покрывало PASSPHRASE, и
+# OKX_API_PASSPHRASE — третий из трёх ключей, которыми подписывается торговый
+# запрос, — отдавался страницей конфигурации ОТКРЫТЫМ ТЕКСТОМ. Шаблон и был
+# выбран вместо перечня ради таких случаев, но сам оказался у́же, чем нужно.
+# `PASS` покрывает PASSWORD, PASSWD, PASSPHRASE и PASSCODE разом; среди полей
+# Settings он ловит ровно три парольных имени и ни одного лишнего.
 _SECRET_PATTERN = re.compile(
-    r"(SECRET|TOKEN|PASSWORD|PASSWD|_KEY|APIKEY|API_KEY|PRIVATE|CREDENTIAL|DSN|WEBHOOK)",
+    r"(SECRET|TOKEN|PASS|_KEY|APIKEY|API_KEY|PRIVATE|CREDENTIAL|DSN|WEBHOOK)",
     re.IGNORECASE,
 )
 # URL подключений содержат логин/пароль в теле строки.
