@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
+import ExchangeBadge from "../../components/ExchangeBadge";
 import { RefreshCw, WalletCards } from "lucide-react";
 
 function rowPnl(p: any): number | null {
@@ -102,7 +103,10 @@ export default function PositionsPage() {
       </header>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-5">
-        <SummaryCard title="Позиции (показано)" value={summary.total} />
+        {/* Слово «показано» уже занято счётчиком в панели фильтров, где оно
+            означает отфильтрованные строки. Здесь число другое — сколько
+            вообще загружено (эндпоинт отдаёт последние 500). */}
+        <SummaryCard title="Загружено строк" value={summary.total} />
         <SummaryCard title="Active/Open" value={summary.active} tone={summary.active > 0 ? "good" : "warn"} />
         <SummaryCard title="Open unrealized" value={`${summary.openUnrealized.toFixed(2)} USDT`} tone={summary.openUnrealized < 0 ? "bad" : "good"} />
         <SummaryCard title="Net PnL (реализ., вся история)" value={summary.hasSummary ? `${summary.realizedNet.toFixed(2)} USDT` : "—"} tone={summary.realizedNet < 0 ? "bad" : "good"} />
@@ -145,8 +149,17 @@ export default function PositionsPage() {
       {statusFilter === "active" && summary.active === 0 && (
         <section className="rounded-2xl border border-amber-800/70 bg-amber-950/20 p-5 text-amber-100">
           <h2 className="text-lg font-semibold">Активных/open позиций сейчас нет</h2>
+          {/* (#frozen-prose-2026-09-07) Здесь стоял рассказ о ПРИЧИНЕ: «робот
+              запущен в paper, но за окно наблюдения новые сделки не дошли до
+              open». Он был вписан однажды и с тех пор утверждался при каждом
+              пустом фильтре — независимо от того, что происходило на самом
+              деле. Сегодня, например, открылись и закрылись две сделки.
+              Причина не измеряется на этой странице, поэтому здесь только факт
+              и указание, где причина записана. */}
           <p className="mt-2 text-sm text-amber-100/70">
-            Это соответствует последнему отчету: робот запущен в paper, но за окно наблюдения новые сделки не дошли до open. Для аудита истории переключите фильтр на closed/all.
+            Почему их нет — в ленте решений: там пишутся и отказы по каждому символу,
+            и молчание цикла целиком, с длительностью. Историю закрытых смотрите
+            фильтром closed/all.
           </p>
         </section>
       )}
@@ -169,7 +182,12 @@ export default function PositionsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredPositions.map((p) => (
+              {filteredPositions.map((p) => {
+                // (#pnl-null-2026-09-07) У закрытой позиции без записанного
+                // результата rowPnl даёт null, а рисовался `?? 0` — зелёный
+                // ноль, неотличимый от измеренного безубытка.
+                const pnl = rowPnl(p);
+                return (
                 <tr key={p.id} className="border-b border-emerald-950 last:border-b-0 hover:bg-emerald-950/20">
                   <td className="px-4 py-3 text-emerald-100/60">#{p.id}</td>
                   <td className="px-4 py-3 font-semibold text-emerald-200">{p.symbol}</td>
@@ -180,8 +198,8 @@ export default function PositionsPage() {
                   {/* закрытая позиция: реализованный результат сделки; открытая: живой unrealized.
                       (#tp1-partial-margin-2026-07-19) tp1_partial_pnl — уже зафиксированный на TP1
                       net открытой позиции: иначе он невидим на этой странице до финального закрытия */}
-                  <td className={(rowPnl(p) ?? 0) < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>
-                    {rowPnl(p) ?? 0}
+                  <td className={pnl == null ? "px-4 py-3 text-emerald-100/40" : pnl < 0 ? "px-4 py-3 text-red-300" : "px-4 py-3 text-emerald-300"}>
+                    {pnl == null ? "нет записи" : pnl}
                     {p.tp1_partial_pnl != null && (
                       <span className="ml-2 rounded bg-emerald-900/60 px-1.5 py-0.5 text-xs text-emerald-300">
                         TP1 зафикс. {Number(p.tp1_partial_pnl) >= 0 ? "+" : ""}{Number(p.tp1_partial_pnl).toFixed(2)}
@@ -194,7 +212,8 @@ export default function PositionsPage() {
                     <ExchangeBadge exchange={p.exchange} />
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -206,18 +225,6 @@ export default function PositionsPage() {
         )}
       </section>
     </AppShell>
-  );
-}
-
-function ExchangeBadge({ exchange }: { exchange?: string | null }) {
-  // (#okx-satellite-exchange-routing-2026-09-02) Биржа, на которой позиция реально
-  // открыта — не текущая ACTIVE_EXCHANGE, которая может уже быть переключена.
-  const ex = (exchange || "htx").toLowerCase();
-  const cls = ex === "okx" ? "bg-sky-700 text-white" : "bg-slate-700 text-white";
-  return (
-    <span className={`rounded-lg px-2 py-1 text-xs font-semibold uppercase ${cls}`}>
-      {ex}
-    </span>
   );
 }
 
