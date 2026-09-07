@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { assertOk, reportActionError } from "../../lib/apiAction";
 import { CreditCard, RefreshCw, CheckCircle2 } from "lucide-react";
 
 export default function PaymentsPage() {
@@ -42,17 +43,22 @@ export default function PaymentsPage() {
       return;
     }
 
-    const res = await apiPost("/payments/checkout", {
-      telegram_user_id: form.telegram_user_id.trim(),
-      username: form.username.trim() || undefined,
-      full_name: form.full_name.trim() || undefined,
-      plan_code: form.plan_code,
-      provider: "manual",
-      notes: "owner_ui_checkout",
-    });
-
-    if (res?.status !== "ok") {
-      alert(`Ошибка создания checkout: ${res?.error || "unknown"}`);
+    // (#silent-actions-2026-09-07) Мягкую ошибку (200 с status=error) страница
+    // показывала, а брошенную — нет: 401, 503 и таймаут проходили мимо alert
+    // как необработанное отклонение. И форма очищалась в ЛЮБОМ случае, унося
+    // введённые данные вместе с несостоявшимся счётом.
+    try {
+      assertOk(await apiPost("/payments/checkout", {
+        telegram_user_id: form.telegram_user_id.trim(),
+        username: form.username.trim() || undefined,
+        full_name: form.full_name.trim() || undefined,
+        plan_code: form.plan_code,
+        provider: "manual",
+        notes: "owner_ui_checkout",
+      }));
+    } catch (e) {
+      reportActionError(e);
+      return;
     }
 
     setForm({ telegram_user_id: "", username: "", full_name: "", plan_code: "vip_30" });
@@ -61,9 +67,14 @@ export default function PaymentsPage() {
 
   async function confirmPayment(id: number) {
     if (!window.confirm(`Подтвердить оплату #${id} и активировать подписку?`)) return;
-    const res = await apiPost(`/payments/${id}/manual-confirm`, { provider_event_id: `owner-confirm-${Date.now()}` });
-    if (res?.status !== "ok") {
-      alert(`Ошибка подтверждения: ${res?.error || "unknown"}`);
+    // Подтверждение оплаты активирует подписку. Отказ, о котором не сказали,
+    // означает, что владелец считает клиента оплаченным, а доступа у того нет.
+    try {
+      assertOk(await apiPost(`/payments/${id}/manual-confirm`,
+                             { provider_event_id: `owner-confirm-${Date.now()}` }));
+    } catch (e) {
+      reportActionError(e);
+      return;
     }
     await loadAll();
   }

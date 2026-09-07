@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../../lib/api";
+import { assertOk, reportActionError } from "../../lib/apiAction";
 import AppShell from "../../components/AppShell";
 import { RefreshCw, UserPlus, ShieldCheck, Ban, Clock, CheckCircle2 } from "lucide-react";
 
@@ -42,15 +43,24 @@ export default function ClientsPage() {
       return;
     }
 
-    await apiPost("/subscribers", {
-      telegram_user_id: form.telegram_user_id.trim(),
-      username: form.username.trim() || null,
-      full_name: form.full_name.trim() || null,
-      plan: form.plan.trim() || "vip",
-      days: Number(form.days),
-      is_trial: form.is_trial,
-      notes: form.notes.trim() || null,
-    });
+    // (#silent-actions-2026-09-07) Здесь стоял голый await: упавший запрос
+    // не менял экран, и это неотличимо от «создал, но список не обновился».
+    // Форма при этом очищалась в любом случае — введённые данные пропадали
+    // вместе с ошибкой, о которой никто не узнал.
+    try {
+      assertOk(await apiPost("/subscribers", {
+        telegram_user_id: form.telegram_user_id.trim(),
+        username: form.username.trim() || null,
+        full_name: form.full_name.trim() || null,
+        plan: form.plan.trim() || "vip",
+        days: Number(form.days),
+        is_trial: form.is_trial,
+        notes: form.notes.trim() || null,
+      }));
+    } catch (e) {
+      reportActionError(e);
+      return;
+    }
 
     setForm({
       telegram_user_id: "",
@@ -66,7 +76,14 @@ export default function ClientsPage() {
   }
 
   async function extendSubscriber(id: number, days: number) {
-    await apiPost(`/subscribers/${id}/extend`, { days });
+    // Продление платного доступа: молчаливый отказ означает, что владелец
+    // считает подписку продлённой, а клиент её теряет.
+    try {
+      assertOk(await apiPost(`/subscribers/${id}/extend`, { days }));
+    } catch (e) {
+      reportActionError(e);
+      return;
+    }
     await loadSubscribers();
   }
 
@@ -75,7 +92,12 @@ export default function ClientsPage() {
       if (!window.confirm(`⚠️ Подписчик #${id} будет заблокирован.\n\nПродолжить?`)) return;
     }
 
-    await apiPost(`/subscribers/${id}/status`, { status });
+    try {
+      assertOk(await apiPost(`/subscribers/${id}/status`, { status }));
+    } catch (e) {
+      reportActionError(e);
+      return;
+    }
     await loadSubscribers();
   }
 

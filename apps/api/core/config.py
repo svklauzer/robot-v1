@@ -2370,6 +2370,20 @@ class Settings(BaseSettings):
                 blockers.append("OWNER_API_TOKEN is not configured")
             if not self.TELEGRAM_BOT_TOKEN:
                 blockers.append("TELEGRAM_BOT_TOKEN is not configured")
+            # (#webhook-secret-blocker-2026-09-07) Секрет вебхука — единственное,
+            # что отличает апдейт от Telegram от чужого POST на тот же адрес.
+            # Задан → несовпадение отвергается 401. Не задан → `verify` честно
+            # возвращает False и денежные ветки апдейт не принимают, но меню
+            # бота отрабатывает: любой желающий может слать команды от любого
+            # chat_id.
+            #
+            # Fail-open в самом вебхуке оставлен намеренно (иначе бот умрёт до
+            # настройки), но тогда состояние обязано быть блокером готовности —
+            # иначе оно видно только строчкой в логе, которую никто не читает.
+            if not str(getattr(self, "TELEGRAM_WEBHOOK_SECRET", "") or ""):
+                blockers.append(
+                    "TELEGRAM_WEBHOOK_SECRET is not configured: bot menu accepts unverified updates"
+                )
             # (#okx-satellite-2026-09-02) Только активная биржа обязана иметь
             # креденшлы — раньше HTX требовался безусловно, теперь ACTIVE_EXCHANGE
             # решает, чьи ключи проверяются. Не обе сразу: неактивная биржа не
