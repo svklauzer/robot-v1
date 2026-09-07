@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
+import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { RefreshCw } from "lucide-react";
 
 const IMPORTANT_DECISIONS = [
@@ -81,6 +82,28 @@ const IMPORTANT_DECISIONS = [
   "symbol_policy_rr_tp1_too_low",
   "symbol_policy_rr_tp2_too_low",
   "symbol_policy_publish_blocked",
+
+  // (#decision-allowlist-2026-09-07) Список — белый, и это уже второй раз, когда
+  // он отстаёт от бэкенда (см. пометку 27.08 выше). Отсутствующий код не
+  // «показывается без ярлыка» — событие отфильтровывается ЦЕЛИКОМ, до всякой
+  // отрисовки. Ярлыки для молчания при этом были написаны ещё 04–05.09: работа
+  // сделана с обеих сторон, а список посередине её съедал.
+  //
+  // Обе оси молчания. Ради них лента и заводилась: 04.09 система молчала семь
+  // часов, и с экрана это было неотличимо от остановки робота.
+  "loop_skip_validation_gates",
+  "loop_skip_exchange_switch",
+  "loop_skip_live_safety",
+  "loop_resumed",
+  "scan_no_candidate",
+  "scan_candidates_resumed",
+
+  // Доминирующая причина отказа на сегодня — и единственная, где видно защёлку
+  // импульса и вооружённое семейство условий.
+  "tz_entry_conditions",
+
+  "blocked_by_ml",
+  "entry_zone_support_too_far",
 ];
 
 export default function IntelligencePage() {
@@ -166,12 +189,6 @@ export default function IntelligencePage() {
         .filter((v: number) => Number.isFinite(v))
     );
 
-    const avgSetup = avg(
-      results
-        .map((r: any) => Number(r.setup_quality?.final_score))
-        .filter((v: number) => Number.isFinite(v))
-    );
-
     const exposureBlocked = importantEvents.filter(
       (e: any) =>
         e.decision === "active_signal_already_exists" ||
@@ -193,9 +210,8 @@ export default function IntelligencePage() {
       activeSignals: analytics?.active_signals ?? 0,
 
       blocked: results.filter((r: any) => r.status === "blocked").length,
-      rejected: results.filter((r: any) => r.status === "rejected").length,
+      // rejected и avgSetup считались и не выводились ни одной карточкой.
       avgConfidence,
-      avgSetup,
       exposureBlocked,
     };
   }, [results, importantEvents]);
@@ -570,6 +586,42 @@ function EventCard({ event }: { event: any }) {
         <Metric label="Age" value={payload.watch_age_minutes ? `${payload.watch_age_minutes}m` : "-"} />
       </div>
 
+      {/* (#scan-visibility-2026-09-05) У молчания вся суть в длительности:
+          «нет кандидатов» минуту и семь часов — разные новости, а карточка
+          показывала одну строку без числа. held_sec пишется бэкендом с 06.09. */}
+      {payload.held_sec != null && (
+        <div className="mt-4 rounded-xl border border-emerald-950 bg-black/20 p-3 text-xs">
+          <span className="text-emerald-100/50">Держится: </span>
+          <span className="text-emerald-200">{formatHeld(payload.held_sec)}</span>
+          {payload.repeat === false && (
+            <span className="ml-2 text-yellow-300">начало простоя</span>
+          )}
+          {payload.symbols != null && (
+            <span className="ml-2 text-emerald-100/50">
+              одобрено {payload.approved ?? 0} из {payload.symbols}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* (#entry-impulse-2026-09-04) Важно не «не прошло N условий», а какое
+          семейство блокирует: вооружены kama, di, obv и adx_rising, остальное
+          пишется как наблюдение. Отсюда же видно, сняла ли отказ защёлка. */}
+      {payload.enforce_reason && (
+        <div className="mt-4 rounded-xl border border-emerald-950 bg-black/20 p-3 text-xs">
+          <span className="text-emerald-100/50">Условия ТЗ: </span>
+          <span className={payload.enforce_reason.startsWith("blocked_by") ? "text-yellow-300" : "text-emerald-300"}>
+            {payload.enforce_reason}
+          </span>
+          {payload.adx_delta != null && (
+            <span className="ml-2 text-emerald-100/50">
+              ADX Δ {Number(payload.adx_delta).toFixed(2)}
+            </span>
+          )}
+          <ImpulseLatchLine latch={payload.impulse_latch} />
+        </div>
+      )}
+
       {plan && (
         <div className="mt-4 rounded-xl border border-emerald-950 bg-black/20 p-3">
           <div className="mb-2 text-xs font-semibold text-emerald-300">
@@ -867,6 +919,10 @@ function decisionLabel(code: string | null | undefined) {
 
     // стакан и дедуп
     blocked_depth_gate: "Заблокирован стаканом",
+    // (#decision-allowlist-2026-09-07) Кода не было ни в списке важных, ни в
+    // карте ярлыков — при том, что сейчас это самая частая причина отказа.
+    tz_entry_conditions: "Условия ТЗ не пройдены",
+    blocked_by_ml: "Заблокирован ML",
     blocked_active_signal_per_symbol: "По символу уже есть активный сигнал",
 
     // (#loop-skip-visibility-2026-09-04) Простой самого цикла. До этого три
@@ -970,6 +1026,17 @@ function DecisionBadge({ decision: rawDecision }: { decision: string }) {
     </span>
   );
 }
+
+function formatHeld(seconds: any) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "только началось";
+  if (value < 60) return `${Math.round(value)} с`;
+  if (value < 3600) return `${Math.round(value / 60)} мин`;
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.round((value % 3600) / 60);
+  return minutes ? `${hours} ч ${minutes} мин` : `${hours} ч`;
+}
+
 
 function formatTime(value: string | null | undefined) {
   if (!value) return "-";
