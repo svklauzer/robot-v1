@@ -6,9 +6,18 @@ import { assertOk, reportActionError } from "../../lib/apiAction";
 import AppShell from "../../components/AppShell";
 import { RefreshCw, UserPlus, ShieldCheck, Ban, Clock, CheckCircle2 } from "lucide-react";
 
+const PAGE_SIZE = 100;
+
 export default function ClientsPage() {
   const [subscribers, setSubscribers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // (#subscribers-paging-2026-09-07) Сводка и общее число приходят с сервера.
+  // Считать их на клиенте по загруженному куску значило бы показывать размер
+  // страницы вместо размера базы — и заметить это было бы нечем.
+  const [overview, setOverview] = useState<any>(null);
+  const [matched, setMatched] = useState(0);
+  const [offset, setOffset] = useState(0);
 
   const [filters, setFilters] = useState({
     status: "all",
@@ -27,11 +36,25 @@ export default function ClientsPage() {
     notes: "",
   });
 
-  async function loadSubscribers() {
+  async function loadSubscribers(nextOffset = offset) {
     setLoading(true);
     try {
-      const data = await apiGet("/subscribers");
-      setSubscribers(Array.isArray(data) ? data : []);
+      // Фильтры отбирают по ВСЕЙ базе, а не внутри загруженной страницы:
+      // клиентский фильтр после пагинации молча сузился бы до неё.
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(nextOffset),
+        status: filters.status,
+        plan: filters.plan,
+        trial: filters.trial,
+      });
+      if (filters.search.trim()) params.set("q", filters.search.trim());
+
+      const data = await apiGet(`/subscribers?${params.toString()}`);
+      setSubscribers(Array.isArray(data?.items) ? data.items : []);
+      setOverview(data?.overview ?? null);
+      setMatched(Number(data?.total ?? 0));
+      setOffset(nextOffset);
     } finally {
       setLoading(false);
     }
@@ -101,63 +124,28 @@ export default function ClientsPage() {
     await loadSubscribers();
   }
 
+  // Смена фильтра — это новый запрос и возврат к первой странице: остаться на
+  // пятой странице прежней выборки значило бы показать пустоту как «ничего не
+  // найдено».
   useEffect(() => {
-    loadSubscribers();
-  }, []);
+    loadSubscribers(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
 
-  const stats = useMemo(() => {
-    const total = subscribers.length;
-    const active = subscribers.filter((s) => s.status === "active").length;
-    const expired = subscribers.filter((s) => s.status === "expired").length;
-    const blocked = subscribers.filter((s) => s.status === "blocked").length;
-    const trial = subscribers.filter((s) => s.is_trial).length;
-    const vip = subscribers.filter((s) => s.plan === "vip").length;
+  // Сводка — из ответа сервера, по всей базе. Раньше складывалась здесь из
+  // полного списка; с постраничной выдачей тот же код показывал бы «Всего 100».
+  const stats = {
+    total: overview?.total ?? 0,
+    active: overview?.active ?? 0,
+    expired: overview?.expired ?? 0,
+    blocked: overview?.blocked ?? 0,
+    trial: overview?.trial ?? 0,
+    vip: overview?.vip ?? 0,
+    expiringSoon: overview?.expiring_soon ?? 0,
+  };
 
-    const expiringSoon = subscribers.filter((s) => {
-      const days = Number(s.days_left ?? 0);
-      return s.status === "active" && days >= 0 && days <= 3;
-    }).length;
-
-    return {
-      total,
-      active,
-      expired,
-      blocked,
-      trial,
-      vip,
-      expiringSoon,
-    };
-  }, [subscribers]);
-
-  const filteredSubscribers = useMemo(() => {
-    const q = filters.search.trim().toLowerCase();
-
-    return subscribers.filter((s) => {
-      if (filters.status !== "all" && s.status !== filters.status) return false;
-      if (filters.plan !== "all" && s.plan !== filters.plan) return false;
-
-      if (filters.trial === "trial" && !s.is_trial) return false;
-      if (filters.trial === "paid" && s.is_trial) return false;
-
-      if (q) {
-        const haystack = [
-          s.telegram_user_id,
-          s.username,
-          s.full_name,
-          s.plan,
-          s.status,
-          s.notes,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        if (!haystack.includes(q)) return false;
-      }
-
-      return true;
-    });
-  }, [subscribers, filters]);
+  // Фильтрация переехала в запрос — здесь остаётся то, что пришло.
+  const filteredSubscribers = subscribers;
 
   return (
     <AppShell>
@@ -173,7 +161,7 @@ export default function ClientsPage() {
           </div>
 
           <button
-            onClick={loadSubscribers}
+            onClick={() => loadSubscribers()}
             className="flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2 font-semibold hover:bg-emerald-700"
           >
             <RefreshCw size={16} />
@@ -318,7 +306,28 @@ export default function ClientsPage() {
               Подписчики
             </h2>
             <span className="text-sm text-emerald-100/50">
-              показано: {filteredSubscribers.length} / {subscribers.length}
+              показано: {filteredSubscribers.length} из {matched}
+              {matched > PAGE_SIZE && (
+                <span className="ml-3 inline-flex items-center gap-2">
+                  <button
+                    onClick={() => loadSubscribers(Math.max(0, offset - PAGE_SIZE))}
+                    disabled={offset === 0 || loading}
+                    className="rounded-lg border border-emerald-800 px-2 py-0.5 hover:bg-emerald-900/40 disabled:opacity-40"
+                  >
+                    ←
+                  </button>
+                  <span>
+                    страница {Math.floor(offset / PAGE_SIZE) + 1} из {Math.ceil(matched / PAGE_SIZE)}
+                  </span>
+                  <button
+                    onClick={() => loadSubscribers(offset + PAGE_SIZE)}
+                    disabled={offset + PAGE_SIZE >= matched || loading}
+                    className="rounded-lg border border-emerald-800 px-2 py-0.5 hover:bg-emerald-900/40 disabled:opacity-40"
+                  >
+                    →
+                  </button>
+                </span>
+              )}
             </span>
           </div>
 
@@ -353,7 +362,9 @@ function SubscriberCard({
   onStatus: (id: number, status: string) => void;
 }) {
   const s = subscriber;
-  const daysLeft = Number(s.days_left ?? 0);
+  // `expires_at` на бэкенде NOT NULL, то есть срок есть всегда. Разбор null —
+  // страховка на случай смены схемы, а не описание существующего состояния.
+  const daysLeft = s.days_left == null ? null : Number(s.days_left);
 
   return (
     <article className="rounded-2xl border border-emerald-900 bg-black/30 p-4">
@@ -374,8 +385,8 @@ function SubscriberCard({
         </div>
 
         <div className="text-left md:text-right">
-          <div className={daysLeft <= 3 && s.status === "active" ? "text-lg font-bold text-yellow-300" : "text-lg font-bold text-emerald-200"}>
-            {daysLeft} дней
+          <div className={daysLeft != null && daysLeft <= 3 && s.status === "active" ? "text-lg font-bold text-yellow-300" : "text-lg font-bold text-emerald-200"}>
+            {daysLeft == null ? "—" : `${daysLeft} дней`}
           </div>
           <div className="text-xs text-emerald-100/50">до окончания</div>
         </div>

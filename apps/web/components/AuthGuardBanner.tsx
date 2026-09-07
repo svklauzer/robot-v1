@@ -30,11 +30,11 @@ export default function AuthGuardBanner() {
   if (!open) return null;
 
   return (
-    <div className="rounded-2xl border border-red-500/70 bg-red-950/70 px-4 py-2 text-sm font-semibold text-red-100 shadow-lg">
-      <span className="mr-2 text-base font-extrabold">ДАШБОРД ОТКРЫТ</span>
-      BASIC_AUTH_USER и BASIC_AUTH_PASS не заданы — заслон пропускает всех, а прокси
-      подставляет owner-токен. Любой, кто знает адрес, может остановить робота, закрыть
-      позиции и увидеть подписчиков. Задать обе переменные на сервисе robot-web.
+    <div className="rounded-2xl border border-amber-500/70 bg-amber-950/60 px-4 py-2 text-sm font-semibold text-amber-100 shadow-lg">
+      <span className="mr-2 text-base font-extrabold">ЗАСЛОН НЕ НАСТРОЕН</span>
+      BASIC_AUTH_USER и BASIC_AUTH_PASS не заданы. Здесь это пропускается, потому что
+      сборка не production; в production такой же конфиг вернёт 503 и внутрь не пустит.
+      Перед деплоем задать обе переменные на сервисе robot-web.
     </div>
   );
 }

@@ -6,9 +6,18 @@ import { NextRequest, NextResponse } from "next/server";
 // закрытие сигналов, платежи, подписчики, Telegram). Этот middleware требует
 // HTTP Basic Auth ПЕРЕД тем, как запрос дойдёт до страниц и до прокси.
 //
-// Включается, КОГДА заданы env BASIC_AUTH_USER и BASIC_AUTH_PASS на robot-web.
-// Пока они не заданы — пропускает (чтобы не залочить себя до настройки), НО это
-// небезопасно: задай обе переменные сразу после деплоя.
+// (#fail-closed-2026-09-07) Раньше при незаданных BASIC_AUTH_USER/PASS заслон
+// пропускал ВСЕХ — чтобы владелец не заперся до настройки. Компромисс держался
+// на том, что про него помнят; проверка 07.09 показала, что переменные заданы,
+// и его больше нечем оправдывать: цена ошибки — публичный URL с правами
+// владельца.
+//
+// Теперь в production без пары — 503 и никакого доступа. Ответ намеренно НЕ 401:
+// пароля, который подойдёт, не существует, и предлагать его ввести значило бы
+// отправить владельца подбирать несуществующее вместо того, чтобы задать env.
+//
+// В разработке (NODE_ENV !== production) пропускаем: там заслон не нужен, а
+// поднять локальный фронт без двух переменных должно оставаться возможным.
 
 export const config = {
   // Защищаем всё, кроме статики Next и favicon (не чувствительно).
@@ -27,8 +36,13 @@ export function middleware(req: NextRequest) {
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
 
-  // Защита не настроена → пропускаем (НЕБЕЗОПАСНО: задай env, чтобы закрыть).
-  if (!user || !pass) return NextResponse.next();
+  if (!user || !pass) {
+    if (process.env.NODE_ENV !== "production") return NextResponse.next();
+    return new NextResponse(
+      "Owner dashboard is not configured: set BASIC_AUTH_USER and BASIC_AUTH_PASS on robot-web.",
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
 
   const header = req.headers.get("authorization") || "";
   if (header.startsWith("Basic ")) {
