@@ -47,7 +47,10 @@ def test_htx_affiliate_callback_shows_link_and_claim_button():
         assert response.command == "/htx"
         assert "https://example.com/htx-affiliate" in response.text
         assert response.reply_markup["inline_keyboard"][0][0]["url"] == "https://example.com/htx-affiliate"
-        assert response.reply_markup["inline_keyboard"][1][0]["callback_data"] == "affiliate_registered"
+        # (#okx-affiliate-2026-09-08) Площадка теперь едет в callback_data: без
+        # неё кнопка на экране OKX выдала бы триал за HTX и записала бы в notes
+        # неверную причину.
+        assert response.reply_markup["inline_keyboard"][1][0]["callback_data"] == "affiliate_registered:htx"
     finally:
         settings.HTX_AFFILIATE_LINK = old_link
         db.close()

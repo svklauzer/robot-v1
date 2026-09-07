@@ -197,6 +197,12 @@ def test_render_blueprint_enforces_capital_leak_entry_gates():
     # бою остаётся одна купленная сторона — ровно та случайная направленная
     # позиция, от которой сетку и берегут.
     assert env["OKX_MARKET_TYPE"] == "spot"
+    # (#okx-affiliate-2026-09-08) Сколько бесплатных месяцев раздаётся. True —
+    # один льготный период на человека по всем площадкам; False — по одному на
+    # каждую. Автопроверки регистрации у OKX нет, «я зарегистрировался» это
+    # просто нажатие кнопки, поэтому второй вариант раздаёт второй месяц даром.
+    # Значение закреплено, чтобы смена дефолта в config.py не удвоила раздачу.
+    assert env["AFFILIATE_TRIAL_ONE_PER_USER"] == "true"
     assert env["REGIME_EXP_SIZING_ENABLED"] == "false"
     assert env["DYNAMIC_MARGIN_FAIR_SHARE"] == "false"
     assert env["DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE"] == "1.0"
