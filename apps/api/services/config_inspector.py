@@ -74,6 +74,11 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
                             "GRADE_", "CONFIDENCE_", "ENTRY_IMPULSE_")),
     ("Стакан / ликвидность", ("OB_", "ORDERBOOK", "LIQUIDITY", "DEPTH_", "SLIPPAGE")),
     # OKX_ и ACTIVE_EXCHANGE — там же, где HTX_: это маршрут исполнения.
+    # (#okx-affiliate-2026-09-08) Партнёрка отдельной группой и ДО «Комиссий»:
+    # префикс HTX_ уводил HTX_AFFILIATE_* в маршрутизацию, где партнёрская
+    # ссылка выглядит биржевой настройкой. Первое совпадение выигрывает, поэтому
+    # порядок здесь — не оформление.
+    ("Подписки и партнёрка", ("AFFILIATE_", "HTX_AFFILIATE", "OKX_AFFILIATE", "VIP_")),
     ("Комиссии и маршрут", ("SPOT_", "FUTURES_", "EXECUTION_", "MARKET_", "HTX_",
                             "OKX_", "ACTIVE_EXCHANGE", "KRAKEN_")),
     ("Арбитраж", ("FUNDING_ARB", "CROSS_FARB", "FUNDING_", "ARB_")),
@@ -98,6 +103,10 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
     # Реальные деньги: значение по умолчанию не должно решать за нас
     "ENABLE_LIVE_ORDERS", "ROBOT_MODE", "TRADING_MODE", "ENABLE_FUTURES",
+    # (#okx-affiliate-2026-09-08) Сколько бесплатных месяцев раздаётся: один на
+    # человека или по одному на площадку. Совпадение с дефолтом сегодня не
+    # делает запись лишней — сменится дефолт, и раздача удвоится молча.
+    "AFFILIATE_TRIAL_ONE_PER_USER",
     "LIVE_MAX_ORDER_NOTIONAL_USDT",
     # Аварийные выключатели
     "GRID_ENABLED", "GRID_KILL_SWITCH_ENABLED", "CROSS_FARB_ENABLED",

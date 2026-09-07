@@ -7,7 +7,9 @@ from models.payment import Payment
 from models.subscriber import Subscriber
 from models.telegram_profile import TelegramProfile
 from services.billing_service import BillingService
-from services.affiliate_trial import AffiliateTrialService
+from services.affiliate_trial import (
+    VENUES as AFFILIATE_VENUES, AffiliateTrialService, configured_venues, venue_link,
+)
 from core.config import settings
 
 
@@ -141,13 +143,24 @@ class TelegramBotMenuService:
                     self._plans_keyboard(db),
                 )
 
-        if command == "/htx":
-            profile.funnel_stage = "htx_affiliate_clicked"
-            return self._response(chat_id, telegram_user_id, command, self._htx_affiliate_text(), self._htx_affiliate_keyboard())
+        if command in ("/htx", "/okx"):
+            venue = command.lstrip("/")
+            profile.funnel_stage = f"{venue}_affiliate_clicked"
+            return self._response(chat_id, telegram_user_id, command,
+                                  self._affiliate_text(venue),
+                                  self._affiliate_keyboard(venue))
 
         if command == "/affiliate-registered":
-            # Если включена авто-верификация — просим HTX UID, активируем после проверки.
-            if settings.HTX_AFFILIATE_VERIFY_ENABLED:
+            # (#okx-affiliate-2026-09-08) Площадка приходит аргументом. Пустой
+            # аргумент — htx: так выглядят кнопки в уже отправленных сообщениях,
+            # и они обязаны продолжать работать.
+            venue = (args[0].lower() if args else "htx")
+            if venue not in AFFILIATE_VENUES:
+                venue = "htx"
+
+            # Проверка регистрации есть только у HTX. У OKX её нет, и молча
+            # притворяться, что есть, нельзя — см. OKX_AFFILIATE_VERIFY_ENABLED.
+            if venue == "htx" and settings.HTX_AFFILIATE_VERIFY_ENABLED:
                 profile.funnel_stage = "awaiting_htx_uid"
                 return self._response(
                     chat_id, telegram_user_id, command,
@@ -156,8 +169,9 @@ class TelegramBotMenuService:
                     "сделана по нашей партнёрской ссылке.",
                     None,
                 )
-            subscriber, activated, reason = self.affiliate.activate_htx_trial(
+            subscriber, activated, reason = self.affiliate.activate_trial(
                 db=db,
+                venue=venue,
                 telegram_user_id=telegram_user_id or "",
                 username=user.get("username"),
                 full_name=self._full_name(user),
@@ -167,7 +181,7 @@ class TelegramBotMenuService:
                 chat_id,
                 telegram_user_id,
                 command,
-                self._affiliate_trial_text(subscriber, activated, reason),
+                self._affiliate_trial_text(subscriber, activated, reason, venue),
                 self._main_keyboard(),
             )
             resp.vip_invite_request = bool(activated)
@@ -230,12 +244,15 @@ class TelegramBotMenuService:
             "faq_risks": "/help",
             "contact_support": "/support",
             "htx_affiliate": "/htx",
+            "okx_affiliate": "/okx",
             "affiliate_registered": "/affiliate-registered",
         }
         if text in callback_map:
             text = callback_map[text]
         elif text.startswith("pay:"):
             text = f"/pay {text.split(':', 1)[1]}"
+        elif text.startswith("affiliate_registered:"):
+            text = f"/affiliate-registered {text.split(':', 1)[1]}"
 
         parts = text.split()
         command = parts[0].lower() if parts else "/menu"
@@ -308,22 +325,35 @@ class TelegramBotMenuService:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
-    def _htx_affiliate_text(self) -> str:
+    def _affiliate_text(self, venue: str) -> str:
+        meta = AFFILIATE_VENUES[venue]
+        label = meta["label"]
         days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)
-        link = settings.HTX_AFFILIATE_LINK or "HTX_AFFILIATE_LINK не настроен"
+        link = venue_link(venue) or f"{meta['link_setting']} не настроен"
+        code = str(getattr(settings, f"{venue.upper()}_AFFILIATE_CODE", "") or "")
+        code_line = f"Реферальный код: {code}\n" if code else ""
+        one_per_user = bool(getattr(settings, "AFFILIATE_TRIAL_ONE_PER_USER", True))
+        limit_line = (
+            "Льготный период даётся один раз — по любой из площадок.\n\n"
+            if one_per_user else ""
+        )
         return (
-            "🎁 Бесплатный VIP через HTX\n\n"
-            f"1) Зарегистрируйтесь в HTX по партнёрской ссылке:\n{link}\n\n"
+            f"🎁 Бесплатный VIP через {label}\n\n"
+            f"1) Зарегистрируйтесь в {label} по партнёрской ссылке:\n{link}\n"
+            f"{code_line}\n"
             f"2) После регистрации нажмите «Я зарегистрировался» — бот активирует VIP на {days} дней.\n\n"
+            f"{limit_line}"
             "Важно: доступ выдаётся как trial, без гарантии прибыли и с обязательным риск-менеджментом."
         )
 
-    def _affiliate_trial_text(self, subscriber: Subscriber | None, activated: bool, reason: str) -> str:
+    def _affiliate_trial_text(self, subscriber: Subscriber | None, activated: bool,
+                              reason: str, venue: str = "htx") -> str:
         invite = settings.VIP_INVITE_LINK or "VIP invite будет выдан owner/admin."
         if activated and subscriber:
             # Сама invite-ссылка дописывается роутером (одноразовая, см. vip_invite_request).
             return (
-                "✅ HTX affiliate VIP активирован\n\n"
+                f"✅ {AFFILIATE_VENUES.get(venue, {}).get('label', venue.upper())}"
+                " affiliate VIP активирован\n\n"
                 f"Период: {settings.AFFILIATE_FREE_VIP_DAYS} дней\n"
                 f"Доступ до: {subscriber.expires_at}\n\n"
                 "Проверить статус можно через /status."
@@ -350,21 +380,43 @@ class TelegramBotMenuService:
             f"{telegram_user_id or 'не определен'}."
         )
 
+    def _affiliate_menu_rows(self) -> list[list[dict]]:
+        """Кнопки площадок + «Статус». Площадка без ссылки не показывается:
+        предложение «зарегистрируйтесь по ссылке» без ссылки — тупик."""
+        days = max(int(settings.AFFILIATE_FREE_VIP_DAYS or 30), 1)
+        buttons = [
+            {"text": f"🎁 {AFFILIATE_VENUES[v]['label']} {days}d VIP",
+             "callback_data": f"{v}_affiliate"}
+            for v in configured_venues()
+        ]
+        status = {"text": "📌 Статус", "callback_data": "status"}
+        if not buttons:
+            return [[status]]
+        # По две кнопки в ряд: третьей в ряду «Статус» становится нечитаемым.
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([status])
+        return rows
+
     def _main_keyboard(self) -> dict:
         return {
             "inline_keyboard": [
                 [{"text": "💎 Тарифы", "callback_data": "plans"}, {"text": "💳 Оплатить", "callback_data": "pay"}],
-                [{"text": "🎁 HTX 30d VIP", "callback_data": "htx_affiliate"}, {"text": "📌 Статус", "callback_data": "status"}],
+                *self._affiliate_menu_rows(),
                 [{"text": "ℹ️ Риски", "callback_data": "faq_risks"}],
                 [{"text": "🛟 Поддержка", "callback_data": "contact_support"}],
             ]
         }
 
-    def _htx_affiliate_keyboard(self) -> dict:
+    def _affiliate_keyboard(self, venue: str) -> dict:
+        meta = AFFILIATE_VENUES[venue]
         rows = []
-        if settings.HTX_AFFILIATE_LINK:
-            rows.append([{"text": "🔗 Открыть HTX", "url": settings.HTX_AFFILIATE_LINK}])
-        rows.append([{"text": "✅ Я зарегистрировался", "callback_data": "affiliate_registered"}])
+        link = venue_link(venue)
+        if link:
+            rows.append([{"text": f"🔗 Открыть {meta['label']}", "url": link}])
+        # Площадка едет в callback_data: без неё кнопка на экране OKX выдала бы
+        # триал за HTX, и в notes осталась бы неверная причина.
+        rows.append([{"text": "✅ Я зарегистрировался",
+                      "callback_data": f"affiliate_registered:{venue}"}])
         rows.append([{"text": "⬅️ Меню", "callback_data": "menu"}, {"text": "🛟 Поддержка", "callback_data": "support"}])
         return {"inline_keyboard": rows}
 

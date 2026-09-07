@@ -422,6 +422,18 @@ services:
         sync: false
       - key: HTX_AFFILIATE_LINK
         sync: false
+      # (#okx-affiliate-2026-09-08) Ссылка и код — не секрет, но живут в
+      # дашборде, как у HTX: партнёрскую ссылку меняют без деплоя.
+      - key: OKX_AFFILIATE_LINK
+        sync: false
+      - key: OKX_AFFILIATE_CODE
+        sync: false
+      # А это не ссылка, а политика денег: один льготный период на человека или
+      # по одному на каждую площадку. Без автопроверки регистрации второй
+      # вариант раздаёт второй месяц за нажатие кнопки, поэтому значение
+      # закреплено здесь, а не отдано дефолту.
+      - key: AFFILIATE_TRIAL_ONE_PER_USER
+        value: "true"
 
       # ── Risk management ───────────────────────────────────────────────────
       - key: RISK_EQUITY_USDT
