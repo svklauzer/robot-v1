@@ -68,7 +68,7 @@ def _rendered(page: str) -> str:
 
 def test_every_close_reason_has_a_ui_label():
     backend = _backend_close_reasons()
-    frontend = _frontend_labels("app/signals/page.tsx", "CLOSE_REASON_LABELS")
+    frontend = _frontend_labels("lib/closeReasons.ts", "CLOSE_REASON_LABELS")
 
     missing = sorted(backend - frontend)
     assert not missing, (
@@ -263,7 +263,8 @@ def test_every_impulse_kind_has_a_ui_label():
     from services import entry_impulse_latch as latch
 
     kinds = {latch.IMPULSE_ADX_TURN, latch.IMPULSE_STOCH_CROSS}
-    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+    # Строка защёлки общая для журнала и ленты решений — подписи живут в ней.
+    page = _read(WEB / "components/ImpulseLatchLine.tsx")
 
     missing = sorted(k for k in kinds if f"{k}:" not in page)
     assert missing == [], f"виды импульса без подписи в UI: {missing}"
@@ -273,8 +274,8 @@ def test_shadow_mode_is_visible_to_the_owner():
     """Пока режим shadow, защёлка ничего не решает. Показывать её без этой
     пометки значило бы дать владельцу думать, что механизм уже работает.
     """
-    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
-    assert 'impulse_latch.mode === "shadow"' in page
+    page = _read(WEB / "components/ImpulseLatchLine.tsx")
+    assert 'latch.mode === "shadow"' in page
 
 
 def test_scan_silence_codes_are_labelled_in_the_feed():
@@ -525,16 +526,13 @@ def test_the_journal_cannot_book_an_invented_result():
     """
     page = _rendered((WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8"))
 
-    # Ярлыки этих причин обязаны остаться: сделки, закрытые так раньше, лежат в
-    # журнале, и test_every_close_reason_has_a_ui_label требует для них подписи.
-    # Запрещено ОТПРАВЛЯТЬ их, а не показывать.
-    labels = page[page.index("CLOSE_REASON_LABELS"):]
-    actions = page[:page.index("CLOSE_REASON_LABELS")] + labels[labels.index("};"):]
-
+    # Ярлыки этих причин живут в общем модуле и обязаны остаться: сделки,
+    # закрытые так раньше, лежат в журнале. Запрещено ОТПРАВЛЯТЬ их, а не
+    # показывать.
     for invented in ("manual_profit_close", "manual_loss_close"):
-        assert invented not in actions, f"журнал снова умеет вписывать исход: {invented}"
-    assert "close-market" in actions, "честное закрытие по рынку исчезло"
-    assert "manual_cancel" in actions, "отмена неоткрытого сигнала не должна была уйти"
+        assert invented not in page, f"журнал снова умеет вписывать исход: {invented}"
+    assert "close-market" in page, "честное закрытие по рынку исчезло"
+    assert "manual_cancel" in page, "отмена неоткрытого сигнала не должна была уйти"
 
 
 def test_the_journal_shows_the_same_honest_pnl_as_the_dashboard():
@@ -582,3 +580,85 @@ def test_ml_badge_does_not_paint_a_verdict():
     verdict_colours = [c for c in ("emerald-600", "yellow-600", "red-700") if c in badge]
     assert verdict_colours == [], f"значок ML снова красит вердикт: {verdict_colours}"
     assert "title=" in badge, "измерение обязано быть в подсказке"
+
+
+# ── разбор ленты решений (07.09) ────────────────────────────────────────────
+
+def _backend_decisions() -> set[str]:
+    """Коды решений, которые боевой контур реально пишет в ленту."""
+    codes: set[str] = set()
+    for name in ("core/decision_codes.py", "services/loop_skip_reporter.py"):
+        codes |= set(re.findall(r'^DECISION_[A-Z_0-9]+ = "([a-z0-9_]+)"',
+                                _read(API / name), re.M))
+    loop = _read(API / "workers/robot_loop.py")
+    codes |= set(re.findall(r'decision="([a-z0-9_]+)"', loop))
+    codes |= set(re.findall(r'"decision":\s*"([a-z0-9_]+)"', loop))
+    # Пропуски цикла: причина уходит в поле decision как есть.
+    codes |= set(re.findall(r'reason="(loop_skip_[a-z0-9_]+)"', _read(API / "main.py")))
+    return codes
+
+
+def _intelligence_allowlist() -> set[str]:
+    src = _read(WEB / "app/intelligence/page.tsx")
+    start = src.index("const IMPORTANT_DECISIONS")
+    return set(re.findall(r'"([a-z0-9_]+)"', src[start : src.index("];", start)]))
+
+
+def test_the_decisions_feed_shows_every_code_the_loop_writes():
+    """(#decision-allowlist-2026-09-07) IMPORTANT_DECISIONS — белый список, и
+    отсутствующий код не «показывается без ярлыка»: событие отфильтровывается
+    ЦЕЛИКОМ, до всякой отрисовки.
+
+    Список отставал уже дважды. Пометка 27.08 в самом файле фиксирует первый
+    раз; во второй в него не попали обе оси молчания — при том, что ярлыки для
+    них написали ещё 04–05.09, и они лежали мёртвыми, пока список их съедал.
+    Ради этих событий лента и заводилась: 04.09 система молчала семь часов, и с
+    экрана это было неотличимо от остановки робота.
+
+    Поэтому словарь берётся из бэкенда, а не поддерживается руками.
+    """
+    missing = sorted(_backend_decisions() - _intelligence_allowlist())
+
+    assert missing == [], f"лента не покажет эти решения вовсе: {missing}"
+
+
+def test_every_decision_code_reads_as_words_not_as_an_identifier():
+    """Фолбэк `decisionLabel` — сам код, поэтому непокрытое решение выводится
+    машинным идентификатором. `stop_loss`, `tp2_reached` и `position_opened`
+    стояли в белом списке без ярлыка и печатались как есть — на соседней
+    странице те же исходы были подписаны по-русски.
+    """
+    src = _read(WEB / "app/intelligence/page.tsx")
+    start = src.index("function decisionLabel")
+    own = set(re.findall(r"^\s{2,}([a-z0-9_]+):", src[start : src.index("};", start)], re.M))
+    shared = _frontend_labels("lib/closeReasons.ts", "CLOSE_REASON_LABELS")
+
+    unlabelled = sorted(_backend_decisions() - own - shared)
+
+    assert unlabelled == [], f"решения выводятся машинным кодом: {unlabelled}"
+
+
+def test_the_close_reason_map_is_not_kept_in_two_copies():
+    """Карта причин правится каждым раундом работы над выходами. Пока копий две,
+    расхождение неизбежно и молчаливо — ровно как у GradeBadge, жившего в трёх
+    экземплярах.
+    """
+    shared = WEB / "lib/closeReasons.ts"
+    assert shared.exists(), "общий модуль ярлыков исчез"
+
+    for page in ("app/signals/page.tsx", "app/intelligence/page.tsx"):
+        src = _read(WEB / page)
+        assert "closeReasons" in src, f"{page} не читает общий модуль"
+        assert "const CLOSE_REASON_LABELS" not in src, f"{page} снова держит свою копию"
+
+
+def test_silence_events_show_how_long_the_silence_has_held():
+    """У молчания вся суть в длительности: «нет кандидатов» минуту и семь часов
+    — разные новости. `held_sec` пишется с 06.09, и до этого разбора карточка
+    события его не показывала.
+    """
+    reporter = _read(API / "services/loop_skip_reporter.py")
+    page = _rendered(_read(WEB / "app/intelligence/page.tsx"))
+
+    assert '"held_sec"' in reporter, "бэкенд больше не пишет длительность"
+    assert "payload.held_sec" in page, "лента снова не показывает длительность молчания"

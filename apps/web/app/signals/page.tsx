@@ -2,56 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import GradeBadge from "../../components/GradeBadge";
+import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { RefreshCw } from "lucide-react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { closeReasonLabel } from "../../lib/closeReasons";
 
 type SignalItem = any;
-
-// Человекочитаемые ярлыки причин закрытия (синхронизация с правками бэка).
-const CLOSE_REASON_LABELS: Record<string, string> = {
-  tp2_reached: "TP2 достигнут",
-  tp1_reached: "TP1 достигнут",
-  stop_loss: "Стоп",
-  breakeven_stop: "Безубыток-стоп (после TP1)",
-  scalp_time_stop: "Скальп: тайм-стоп",
-  low_grade_capital_release: "Слабый грейд: высвобождение капитала",
-  manual_close: "Закрыто вручную (по рынку)",
-  manual_cancel: "Отменено вручную",
-  manual_profit_close: "Закрыто вручную (+)",
-  manual_loss_close: "Закрыто вручную (−)",
-  failed_setup_exit: "Сетап не подтвердился",
-  breakeven_lock: "Безубыток-замок",
-  scalp_breakeven_lock: "Скальп: безубыток-замок",
-  scalp_flow_exit: "Скальп: выход по потоку",
-  trend_ride_trailing_stop: "Трейл по тренду",
-  adaptive_post_tp1_stop: "Трейл после TP1",
-  trend_trailing_stop: "Трейл по тренду",
-  adaptive_trailing_stop: "Адаптивный трейл",
-  protective_trailing_stop: "Защитный трейл",
-  protective_breakeven_profit_guard: "Защита безубытка",
-  adaptive_mfe_capture: "Фиксация MFE",
-  wide_stop_tp2_guard: "Защита TP2 (широкий стоп)",
-  // (#trend-capture-band-2026-07-25) Ярус 2: фиксация в модальной полосе MFE.
-  // До правки сделки с MFE 0.35–0.8% в тренде не имели механизма фиксации.
-  trend_capture_band: "Трендовая фиксация (полоса MFE)",
-  // (#tz-mfe-giveback-backstop-2026-09-02) ТЗ-выход смотрит только на слом
-  // структуры (KAMA/ADX/OBV), не на отданную прибыль — бэкстоп фиксирует по
-  // текущей цене сделку, которая отдала бОльшую часть значимого MFE.
-  tz_mfe_giveback_backstop: "ТЗ: фиксация отданной прибыли",
-  // (#progressive-tp2-2026-09-03) TP2 стал этапом, а не потолком: на нём
-  // фиксируется доля остатка, хвост едет под трейлом.
-  tp2_partial: "TP2: частичная фиксация",
-  tp2_trail_stop: "Трейл после TP2",
-  tp2_trail_giveback: "TP2: хвост отдал прибыль",
-  // (#post-tp1-dead-zone-2026-09-03) Защита прибыли между TP1 и TP2.
-  post_tp1_giveback_trail: "Фиксация отдачи после TP1",
-};
-
-function closeReasonLabel(code: string | null | undefined): string {
-  if (!code) return "-";
-  return CLOSE_REASON_LABELS[code] || code;
-}
 
 export default function SignalsPage() {
   const [signals, setSignals] = useState<SignalItem[]>([]);
@@ -659,13 +616,6 @@ function MlBadge({ ml }: { ml?: any }) {
   );
 }
 
-// Виды импульса на человеческом языке: разница между ними — это разница между
-// «сила тренда развернулась вверх» и «осциллятор пересёк сигнальную».
-const IMPULSE_KIND: Record<string, string> = {
-  adx_turned_up: "ADX развернулся вверх",
-  stoch_crossed: "Stoch пересёк сигнальную",
-};
-
 function TradeDiagnostics({ plan }: { plan: any }) {
   const tz = plan?.tz_shadow;
   const dyn = plan?.tp2_dynamic || plan?.setup_quality?.tp2_dynamic;
@@ -693,31 +643,8 @@ function TradeDiagnostics({ plan }: { plan: any }) {
                 не пройдено {(tz.failed || []).length}
               </span>
             )}
-            {/* (#entry-impulse-2026-09-04) Кандидат — состояние, живущее сутками;
-                условия ТЗ — события длиной в бар. Требовать их одновременно
-                значит почти всегда опаздывать: 68 отказов из 71 по adx_not_rising.
-                Защёлка помнит импульс, пока состояние подтверждается, и её
-                возраст объясняет, ПОЧЕМУ вход прошёл при падающем ADX. */}
-            {tz.impulse_latch && (
-              <div
-                className="mt-1 text-[11px]"
-                title="Импульс на младшем ТФ случается раньше, чем тренд проступит на 4h и 1h. Защёлка держит событие, пока состояние подтверждается; ни одно условие при этом не ослаблено."
-              >
-                <span className="text-emerald-100/50">Импульс: </span>
-                {tz.impulse_latch.live ? (
-                  <span className="text-emerald-300">
-                    {IMPULSE_KIND[tz.impulse_latch.impulse?.kind] || tz.impulse_latch.impulse?.kind}
-                    {tz.impulse_latch.impulse?.age_sec != null &&
-                      ` ${Math.round(tz.impulse_latch.impulse.age_sec / 60)} мин назад`}
-                  </span>
-                ) : (
-                  <span className="text-emerald-100/40">не было в окне</span>
-                )}
-                {tz.impulse_latch.mode === "shadow" && (
-                  <span className="text-emerald-100/30"> · наблюдение</span>
-                )}
-              </div>
-            )}
+            {/* Строка защёлки общая с лентой решений — см. ImpulseLatchLine. */}
+            <ImpulseLatchLine latch={tz.impulse_latch} />
 
             {!tz.would_pass && (tz.failed || []).length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
