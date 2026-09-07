@@ -177,13 +177,13 @@ export default function HealthPage() {
         <HealthCard icon={<Bot size={18} />} title="Bot" value={bot?.status || "-"} status={bot?.status === "running" ? "good" : "warn"} subtitle={bot?.mode || "-"} />
         <HealthCard icon={<Wifi size={18} />} title="Market" value={market?.ok ? "online" : "offline"} status={market?.ok ? "good" : "bad"} subtitle={`${market?.source || "-"} / ${formatNumber(market?.last)}`} />
         {/* (#okx-satellite-2026-09-02) Какая биржа торгует сейчас + не осталось
-            ли чего-то открытого на другой (см. exchange_switch_guard). */}
+            ли чего-то открытого на другой (см. exchange_switch_guard).
+            Подстановка «htx» при отсутствии поля убрана: торгует OKX, то есть
+            умолчание давало прямо неверный ответ на вопрос, ради которого
+            карточка и стоит. */}
         <HealthCard
           icon={<Radio size={18} />}
           title="Exchange"
-          {/* Раньше при отсутствии поля печаталось HTX. Сейчас торгует OKX,
-              то есть подстановка по умолчанию давала бы прямо неверный ответ на
-              вопрос, ради которого карточка и стоит. */}
           value={health?.active_exchange ? String(health.active_exchange).toUpperCase() : "—"}
           status={health?.exchange_switch?.safe === false ? "bad" : "good"}
           subtitle={
