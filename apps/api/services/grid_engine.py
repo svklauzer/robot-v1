@@ -103,6 +103,42 @@ class GridEngine:
         except Exception:  # noqa: BLE001 — сетка не должна падать из-за учёта
             return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
 
+    def _spot_market(self) -> bool:
+        """Сетка торгует спотом? (#grid-spot-long-2026-09-07)
+
+        Тип рынка у клиента общий (`OKX_MARKET_TYPE` / `HTX_MARKET_TYPE`), и
+        сетка ходит в него обычным символом `BTC/USDT` — в отличие от
+        направленного движка, который routing'ом явно уводит сделки на дериватив
+        (`ETH/USDT:USDT`, reason `long_on_derivative_by_config`).
+        """
+        try:
+            from services.exchange_factory import resolve_exchange_name
+
+            key = "OKX_MARKET_TYPE" if resolve_exchange_name() == "okx" else "HTX_MARKET_TYPE"
+        except Exception:  # noqa: BLE001
+            key = "MARKET_TYPE"
+        return str(getattr(settings, key, "spot")).strip().lower() == "spot"
+
+    def _ladder_sides(self, levels: list[dict]) -> list[dict]:
+        """Форма лестницы по рынку (#grid-spot-long-2026-09-07).
+
+        `compute_grid` для NEUTRAL строит половину линий вниз (buy) и половину
+        вверх (sell), где sell — это ОТКРЫТИЕ короткой ноги. На споте короткой
+        ноги не существует: продать можно только то, что уже куплено. Движок
+        при этом ходит на спот-клиент, то есть половина корзины была
+        неисполнима, и в бою осталась бы одна купленная сторона — та самая
+        случайная направленная позиция, от которой сетку и берегут.
+
+        Ровно так это разделено и у OKX: спотовая сетка — лонговая, фьючерсная —
+        в обе стороны. Здесь то же самое: на споте остаётся лестница покупок,
+        выход по-прежнему делает корзинный тейк (безубыток + GRID_TP_PCT), то
+        есть «купил дешевле — продал всю корзину дороже». На деривативе
+        раскладка не трогается.
+        """
+        if not self._spot_market():
+            return levels
+        return [lv for lv in levels if str(lv.get("side")) == "buy"]
+
     def _grid_symbols(self) -> list[str]:
         raw = str(getattr(settings, "GRID_SYMBOLS", "") or "")
         return [s.strip() for s in raw.split(",") if s.strip()]
@@ -540,7 +576,7 @@ class GridEngine:
             m_step=float(getattr(settings, "GRID_STEP_MULTIPLIER", 1.1)),
             m_vol=float(getattr(settings, "GRID_VOL_MULTIPLIER", 1.2)),
         )
-        unit_levels = gc.compute_grid(v_base=1.0, **geometry)
+        unit_levels = self._ladder_sides(gc.compute_grid(v_base=1.0, **geometry))
         if not unit_levels:
             return
 
@@ -555,7 +591,7 @@ class GridEngine:
         if plan.budget_usdt / lev > free:
             return
 
-        levels = gc.compute_grid(v_base=plan.v_base_qty, **geometry)
+        levels = self._ladder_sides(gc.compute_grid(v_base=plan.v_base_qty, **geometry))
         if not levels:
             return
 

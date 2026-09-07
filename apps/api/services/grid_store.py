@@ -30,6 +30,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _grid_market_type() -> str:
+    """Спот или дериватив — тем же путём, что резолвит движок."""
+    try:
+        from services.exchange_factory import resolve_exchange_name
+
+        key = "OKX_MARKET_TYPE" if resolve_exchange_name() == "okx" else "HTX_MARKET_TYPE"
+    except Exception:  # noqa: BLE001
+        key = "MARKET_TYPE"
+    return str(getattr(settings, key, "spot")).strip().lower()
+
+
 class GridStore:
     """Синглтон-стор состояния сетки."""
 
@@ -194,4 +205,9 @@ class GridStore:
                 # Без этого отказ по минимуму площадки виден только в логах
                 # Render и неотличим от «движок не работает».
                 "sizing": dict(self.sizing),
+                # (#grid-spot-long-2026-09-07) Форма корзины зависит от рынка:
+                # на споте короткой ноги нет, лестница только на покупку. Без
+                # этого поля «почему корзина односторонняя» выводится из кода.
+                "market_type": _grid_market_type(),
+                "ladder_shape": "long_only" if _grid_market_type() == "spot" else "two_sided",
             }

@@ -166,3 +166,57 @@ def test_plan_reports_the_numbers_the_screen_needs():
                   "smallest_level_usdt", "largest_level_usdt", "blocked"):
         assert field in shown, f"нечего показать на экране: нет {field}"
     assert isinstance(plan, LadderPlan)
+
+
+# ── форма лестницы по рынку (#grid-spot-long-2026-09-07) ────────────────────
+
+def test_a_spot_grid_keeps_only_the_buy_ladder(monkeypatch):
+    """`compute_grid` для NEUTRAL строит половину линий вниз (buy) и половину
+    вверх (sell), где sell — ОТКРЫТИЕ короткой ноги. На споте её не существует:
+    продать можно только уже купленное.
+
+    Движок ходит на спот-клиент обычным символом `BTC/USDT`, то есть половина
+    корзины была неисполнима, и в бою осталась бы одна купленная сторона — та
+    самая случайная направленная позиция, от которой сетку и берегут. У OKX это
+    разделено так же: спотовая сетка лонговая, фьючерсная двусторонняя.
+    """
+    from core.config import settings
+    from services.grid_engine import GridEngine
+
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    monkeypatch.setattr(settings, "OKX_MARKET_TYPE", "spot", raising=False)
+
+    engine = GridEngine.__new__(GridEngine)
+    kept = engine._ladder_sides(_unit_ladder())
+
+    assert kept, "спотовая сетка обязана остаться работоспособной"
+    assert {lv["side"] for lv in kept} == {"buy"}
+
+
+def test_a_derivative_grid_keeps_both_sides(monkeypatch):
+    from core.config import settings
+    from services.grid_engine import GridEngine
+
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    monkeypatch.setattr(settings, "OKX_MARKET_TYPE", "swap", raising=False)
+
+    engine = GridEngine.__new__(GridEngine)
+    kept = engine._ladder_sides(_unit_ladder())
+
+    assert {lv["side"] for lv in kept} == {"buy", "sell"}
+
+
+def test_the_budget_follows_the_shape(monkeypatch):
+    """Бюджет считается по ТОЙ лестнице, которая будет выставлена. Иначе
+    спотовая корзина заняла бы половину бюджета и оставила вторую мёртвой.
+    """
+    from core.config import settings
+    from services.grid_engine import GridEngine
+
+    monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
+    monkeypatch.setattr(settings, "OKX_MARKET_TYPE", "spot", raising=False)
+
+    engine = GridEngine.__new__(GridEngine)
+    spot_plan = plan_ladder(engine._ladder_sides(_unit_ladder()), budget_usdt=22.5)
+
+    assert spot_plan.ladder_cost_usdt == pytest.approx(22.5)
