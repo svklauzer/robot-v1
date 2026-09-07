@@ -103,6 +103,48 @@ class GridEngine:
         except Exception:  # noqa: BLE001 — сетка не должна падать из-за учёта
             return equity * float(getattr(settings, "GRID_MAX_USED_MARGIN_PCT", 20.0)) / 100.0
 
+    def _grid_symbols(self) -> list[str]:
+        raw = str(getattr(settings, "GRID_SYMBOLS", "") or "")
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    def _venue_limits(self, symbol: str) -> dict:
+        """Минимумы площадки. Недоступность лимитов — не разрешение."""
+        try:
+            limits = self.htx.market_limits(symbol) if self.htx else {}
+        except Exception:  # noqa: BLE001 — сетка не должна падать из-за метаданных
+            limits = {}
+        if not isinstance(limits, dict):
+            return {"limits_available": False}
+        return limits
+
+    def _ladder_plan(self, symbol: str, unit_levels: list[dict]):
+        """План лестницы под бюджет символа (#grid-envelope-sizing-2026-09-07)."""
+        from services import grid_sizing
+
+        budget = grid_sizing.symbol_budget(
+            self._envelope(), self._grid_symbols(), self.store.grid_used_margin(),
+        )
+        limits = self._venue_limits(symbol)
+        return grid_sizing.plan_ladder(
+            unit_levels,
+            budget_usdt=budget,
+            min_level_usdt=float(getattr(settings, "GRID_MIN_LEVEL_USDT", 5.0)),
+            min_cost=limits.get("min_cost"),
+            min_amount=limits.get("min_amount"),
+            limits_available=bool(limits.get("limits_available", True)),
+        )
+
+    def _remember_sizing(self, symbol: str, plan) -> None:
+        """Последний расчёт размера — в состояние, а не только в лог Render.
+
+        Отказ, видимый лишь в логах, неотличим от «движок не работает»: ровно
+        этим весь август выглядели пропуски трендового цикла.
+        """
+        try:
+            self.store.put_sizing(symbol, plan.as_dict())
+        except Exception:  # noqa: BLE001
+            pass
+
     def _fresh_market(self, symbol: str):
         """Живые индикаторы + регайм + ATR по grid-ТФ. None при нехватке данных."""
         try:
@@ -430,11 +472,12 @@ class GridEngine:
                     if dist_atr >= float(getattr(settings, "GRID_BREAKOUT_ATR_DIST", 2.0)):
                         return
 
-        # карман маржи: есть ли место хотя бы под базовый ордер
+        # (#grid-envelope-sizing-2026-09-07) Дешёвая отсечка: конверт исчерпан.
+        # Настоящая проверка — «влезает ли ЛЕСТНИЦА ЦЕЛИКОМ» — ниже, после
+        # получения ATR и регайма: без них раскладки нет, а значит нет и цены.
         lev = max(float(getattr(settings, "GRID_LEVERAGE", 1.0)), 1e-9)
-        base_usdt = float(getattr(settings, "GRID_BASE_ORDER_USDT", 20.0))
         free = self._envelope() - self.store.grid_used_margin()
-        if free < base_usdt / lev:
+        if free <= 0.0:
             return  # нет свободной маржи в кармане сетки
 
         # LiquidityGuard: не открываем новый цикл при широком спреде (свип-риск).
@@ -486,15 +529,33 @@ class GridEngine:
                           f"сетка наберёт контр-сторону и поймает стоп")
                     return
 
-        v_base_qty = base_usdt / price  # базовый объём в базовой монете
-        levels = gc.compute_grid(
+        # (#grid-envelope-sizing-2026-09-07) Размер уровня выводится из конверта,
+        # а не из константы: раскладка считается сначала при единичном базовом
+        # объёме, и бюджет символа делится на её стоимость. Так лестница
+        # расходует бюджет целиком и ровно — при любом размере конверта.
+        geometry = dict(
             anchor=price, atr=atr, regime=regime,
             lines=int(getattr(settings, "GRID_LINES", 6)),
             k_vol=float(getattr(settings, "GRID_VOL_COEFF", 0.5)),
             m_step=float(getattr(settings, "GRID_STEP_MULTIPLIER", 1.1)),
-            v_base=v_base_qty,
             m_vol=float(getattr(settings, "GRID_VOL_MULTIPLIER", 1.2)),
         )
+        unit_levels = gc.compute_grid(v_base=1.0, **geometry)
+        if not unit_levels:
+            return
+
+        plan = self._ladder_plan(symbol, unit_levels)
+        self._remember_sizing(symbol, plan)
+        if not plan.ok:
+            print(f"[GRID SIZE-BLOCK] {symbol} open skipped: {plan.blocked}")
+            return
+
+        # Лестница обязана влезать ЦЕЛИКОМ. Прежняя проверка пропускала цикл,
+        # если хватало на базовый ордер, и он обрывался на середине.
+        if plan.budget_usdt / lev > free:
+            return
+
+        levels = gc.compute_grid(v_base=plan.v_base_qty, **geometry)
         if not levels:
             return
 

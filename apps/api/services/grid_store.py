@@ -47,6 +47,11 @@ class GridStore:
         self.history: list[dict] = []          # закрытые циклы (хвост)
         self.realized_pnl: float = 0.0
         self.closed_count: int = 0
+        # (#grid-envelope-sizing-2026-09-07) Последний расчёт размера уровня по
+        # символу — включая причину отказа. Не персистится: это снимок текущего
+        # тика, а не состояние цикла. Пережившая рестарт причина отказа была бы
+        # хуже её отсутствия — она бы утверждала про рынок, которого уже нет.
+        self.sizing: dict[str, dict] = {}
         self._load()
 
     # ── персист (Postgres — переживает redeploy, как trade-сделки) ───────────
@@ -122,6 +127,10 @@ class GridStore:
         with _LOCK:
             return self.cycles.get(symbol.upper())
 
+    def put_sizing(self, symbol: str, plan: dict):
+        with _LOCK:
+            self.sizing[symbol.upper()] = plan
+
     def put_cycle(self, symbol: str, cycle: dict):
         with _LOCK:
             self.cycles[symbol.upper()] = cycle
@@ -180,4 +189,9 @@ class GridStore:
                 "grid_free_margin_usdt": round(max(0.0, envelope - used), 6),
                 "realized_pnl_usdt": round(self.realized_pnl, 6),
                 "closed_cycles": self.closed_count,
+                # Расчёт размера уровня по символам: сколько бюджета, какой
+                # получается самый мелкий уровень и почему цикл не открылся.
+                # Без этого отказ по минимуму площадки виден только в логах
+                # Render и неотличим от «движок не работает».
+                "sizing": dict(self.sizing),
             }
