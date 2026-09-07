@@ -73,7 +73,8 @@ def test_readings_come_back_even_without_an_impulse():
 
 def test_missing_context_does_not_explode():
     assert detect(None, "long") == (None, {"adx": None, "adx_delta": None,
-                                           "stoch_k": None, "stoch_d": None})
+                                           "stoch_k": None, "stoch_d": None,
+                                           "tf": None})
 
 
 # ── сама защёлка ────────────────────────────────────────────────────────────
@@ -125,7 +126,17 @@ def test_snapshot_carries_the_reasoning_not_just_a_flag():
     assert snap["mode"] == "shadow"
     assert snap["window_sec"] == pytest.approx(1800.0)
     # Третье значение того же порога — рядом со снимком, а не только в коде.
-    assert snap["adx_rise_min"] == pytest.approx(0.0)
+    # (#impulse-noise-2026-09-08) 0.5, как у анти-чопа: раньше стоял 0.0, и
+    # ростом считалось +0.02 — численный шум при ADX около 11.
+    assert snap["adx_rise_min"] == pytest.approx(0.5)
+
+    # (#impulse-tf-2026-09-08) Оба ряда названы. Импульс читается с младшего ТФ,
+    # а снимает отказ, посчитанный на старшем: в ленте 07.09 ТЗ писала adx 11.31
+    # и защёлка 16.68 в одной записи, и по виду это неотличимо от
+    # рассогласования данных.
+    assert snap["tf"] == "15m"
+    assert snap["substitutes_tf"] == "1h"
+    assert snap["impulse"]["tf"] == "15m"
 
 
 # ── влияние на вход ─────────────────────────────────────────────────────────
@@ -210,6 +221,20 @@ def test_only_an_adx_impulse_substitutes_for_the_adx_condition(monkeypatch):
 def test_an_adx_impulse_still_substitutes(monkeypatch):
     monkeypatch.setattr(settings, "ENTRY_IMPULSE_LATCH_MODE", "enforce", raising=False)
     latch = ImpulseLatch()
-    latch.observe("XRP/USDT", "long", _tf(adx=19.2, adx_prev=18.8), now=0.0)
+    latch.observe("XRP/USDT", "long", _tf(adx=19.8, adx_prev=18.8), now=0.0)
 
     assert substitutes_adx_rising(latch.snapshot("XRP/USDT", "long", now=1600.0)) is True
+
+
+def test_a_hair_of_a_rise_is_no_longer_an_impulse():
+    """(#impulse-noise-2026-09-08) Прямо из ленты 07.09: защёлка вставала на
+    дельтах +0.02, +0.06, +0.07 при ADX около 11 — это шум округления, а не
+    разворот силы тренда. Порог поднят до 0.5, тем же числом, каким на тот же
+    вопрос отвечает анти-чоп."""
+    for delta in (0.02, 0.0623, 0.1786, 0.4515):
+        weak = _tf(adx=11.0 + delta, adx_prev=11.0,
+                   k=40.0, k_prev=40.0, d=35.0, d_prev=35.0)
+        assert detect(weak, "long")[0] is None, f"дельта {delta} снова считается импульсом"
+
+    strong = _tf(adx=11.6, adx_prev=11.0, k=40.0, k_prev=40.0, d=35.0, d_prev=35.0)
+    assert detect(strong, "long")[0] == IMPULSE_ADX_TURN

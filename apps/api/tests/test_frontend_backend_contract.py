@@ -907,3 +907,31 @@ def test_the_action_handler_lives_in_one_place():
     signals = _read(WEB / "app/signals/page.tsx")
     assert "function assertOk" not in signals, "журнал снова держит свою копию"
     assert "lib/apiAction" in signals
+
+
+def test_the_latch_line_names_both_series_the_backend_reports():
+    """(#impulse-tf-2026-09-08) ADX импульса и ADX условия — разные ряды:
+    событие читается с ENTRY_IMPULSE_TF (15m), а снимает отказ, посчитанный на
+    TZ_TREND_TF (1h). В ленте 07.09 в ОДНОЙ записи стояли adx 11.31 у условия и
+    16.68 у защёлки — по виду неотличимо от рассогласования данных.
+
+    Замысел был записан только в комментарии к коду; снимок теперь называет оба
+    ряда, и строка на экране обязана их показывать — иначе объяснение снова
+    остаётся там, куда владелец не смотрит.
+    """
+    from services.entry_impulse_latch import ImpulseLatch
+
+    latch = ImpulseLatch()
+    latch.observe("SOL/USDT", "long", {"15m": {
+        "adx14": 30.0, "adx14_prev": 29.0,
+        "stoch_rsi_k": 40.0, "stoch_rsi_k_prev": 30.0,
+        "stoch_rsi_d": 35.0, "stoch_rsi_d_prev": 35.0,
+    }}, now=0.0)
+    snap = latch.snapshot("SOL/USDT", "long", now=10.0)
+
+    assert snap["tf"] and snap["substitutes_tf"], "снимок снова не называет ряды"
+    assert snap["tf"] != snap["substitutes_tf"], "ряды совпали — проверить настройки"
+
+    line = _rendered(_read(WEB / "components/ImpulseLatchLine.tsx"))
+    assert "latch?.tf" in line and "substitutes_tf" in line, "строка не читает ряды"
+    assert "adx_rise_min" in line, "порог роста не показан рядом с импульсом"
