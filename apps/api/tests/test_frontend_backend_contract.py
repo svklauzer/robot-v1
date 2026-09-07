@@ -509,3 +509,76 @@ def test_free_margin_is_computed_and_shown():
     minicards = page[page.index("lg:grid-cols-5"):page.index("</section>", page.index("lg:grid-cols-5"))]
     for duplicate in ('title="Signals"', 'title="Winrate"'):
         assert duplicate not in minicards, f"дубль вернулся в ряд мини-карточек: {duplicate}"
+
+
+# ── разбор журнала сигналов (07.09) ─────────────────────────────────────────
+
+def test_the_journal_cannot_book_an_invented_result():
+    """(#manual-result-2026-09-07) Кнопки «+2.1%» и «−1.0%» отдавали в
+    `/signals/{id}/close` зашитый процент; бэкенд выводит из него цену выхода и
+    проводит сделку полным lifecycle. Выдуманный исход попадал в журнал наравне
+    с измеренными: в разбор по причинам, в форензику стопов, в
+    trade_outcomes.jsonl, на котором учится ML.
+
+    Ручка не под debug-гейтом — в отличие от инъекции цены, — то есть работала
+    в production в один клик рядом с настоящим закрытием.
+    """
+    page = _rendered((WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8"))
+
+    # Ярлыки этих причин обязаны остаться: сделки, закрытые так раньше, лежат в
+    # журнале, и test_every_close_reason_has_a_ui_label требует для них подписи.
+    # Запрещено ОТПРАВЛЯТЬ их, а не показывать.
+    labels = page[page.index("CLOSE_REASON_LABELS"):]
+    actions = page[:page.index("CLOSE_REASON_LABELS")] + labels[labels.index("};"):]
+
+    for invented in ("manual_profit_close", "manual_loss_close"):
+        assert invented not in actions, f"журнал снова умеет вписывать исход: {invented}"
+    assert "close-market" in actions, "честное закрытие по рынку исчезло"
+    assert "manual_cancel" in actions, "отмена неоткрытого сигнала не должна была уйти"
+
+
+def test_the_journal_shows_the_same_honest_pnl_as_the_dashboard():
+    """Сводка журнала показывала сырые winrate и net PnL, тогда как главная и
+    аналитика — честные. Ветка tp2_reached книжит полную цену TP2, закрываясь
+    на 92% пути, и завышение попадает ТОЛЬКО в выигрышные сделки, так что два
+    экрана давали два разных числа за один период. На главной это чинили 25.07
+    и до журнала не донесли.
+    """
+    page = _rendered((WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert "winrate_honest" in page, "журнал снова показывает сырой winrate"
+    assert "total_net_pnl_honest_usdt" in page, "журнал снова показывает сырой PnL"
+
+
+def test_reachability_line_colours_by_the_verdict_not_by_the_mode():
+    """(#shadow-verdict-2026-09-06) В shadow `allowed` всегда true: гейт считает,
+    но не блокирует. Строка красилась по нему, поэтому зелёным выходили сделки с
+    частотой вдвое ниже требуемой — у #482 17.4% против нужных 29.8%.
+    """
+    reach = (API / "services" / "tp_reachability.py").read_text(encoding="utf-8")
+    page = _rendered((WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8"))
+
+    assert "allowed=True if shadow else within" in reach, "гейт больше не так устроен"
+
+    block = page[page.index("Достижимость TP2"):]
+    block = block[:block.index("Оставлено на столе")]
+    assert "would_block" in block, "строка не показывает собственный вердикт гейта"
+    assert "reach.allowed" not in block, "цвет снова берётся из режима, а не из вердикта"
+
+
+def test_ml_badge_does_not_paint_a_verdict():
+    """(#ml-badge-2026-09-07) Значок красил ≥0.6 зелёным, ≥0.45 жёлтым, ниже
+    красным. Разделение оси ML на закрытых сделках не измерялось ни разу, а
+    GradeBadge в том же интерфейсе уже обесцвечен — там замер показал, что
+    палитра была ПЕРЕВЁРНУТА.
+
+    MLScorer при этом подмешивается в уверенность с весом 0.3 независимо от
+    ML_MODE: на вход он влияет, а как именно — неизвестно.
+    """
+    page = (WEB / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+    badge = page[page.index("function MlBadge"):]
+    badge = _rendered(badge[:badge.index("\n}\n")])
+
+    verdict_colours = [c for c in ("emerald-600", "yellow-600", "red-700") if c in badge]
+    assert verdict_colours == [], f"значок ML снова красит вердикт: {verdict_colours}"
+    assert "title=" in badge, "измерение обязано быть в подсказке"
