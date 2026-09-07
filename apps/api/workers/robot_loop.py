@@ -1026,7 +1026,41 @@ class RobotLoop:
                             radar_state=result.radar_state,
                             confidence_hint=result.confidence_hint,
                             setup_score=result.setup_quality.get("final_score", 0.0) if result.setup_quality else 0.0,
-                            payload_json={"symbol": symbol, "status": "blocked", "decision": anti_reason, "anti_drain": True},
+                            # (#anti-drain-figures-2026-09-08) Раньше здесь были
+                            # только символ и код причины. Все остальные гейты
+                            # печатают свои числа (`adx=12.2<20.00`,
+                            # `obi=-0.651`), а этот молчал — и разобрать
+                            # `blocked_position_margin_limit` по ленте было
+                            # нечем, приходилось спрашивать, сколько же он
+                            # хотел. Величины лежат прямо здесь, в области
+                            # видимости, и просто не доезжали до записи.
+                            payload_json={
+                                "symbol": symbol, "status": "blocked",
+                                "decision": anti_reason, "anti_drain": True,
+                                "checked": {
+                                    "equity_usdt": round(float(_equity_usdt or 0), 2),
+                                    "required_margin_usdt": round(float(plan.required_margin or 0), 2),
+                                    "required_margin_pct": (
+                                        round(float(plan.required_margin or 0) / float(_equity_usdt) * 100, 2)
+                                        if _equity_usdt else None
+                                    ),
+                                    "max_position_margin_pct": anti_cfg.max_position_margin_pct,
+                                    "used_margin_usdt": round(float(exposure_result.used_margin or 0), 2),
+                                    "max_used_margin_pct": anti_cfg.max_used_margin_pct,
+                                    "open_positions": len(open_positions),
+                                    "max_open_positions": anti_cfg.max_open_positions,
+                                    "confidence": round(float(effective_confidence or 0), 2),
+                                    "min_confidence": anti_cfg.min_confidence,
+                                    "net_rr_tp1": plan.net_rr_tp1,
+                                    "net_rr_tp2": plan.net_rr_tp2,
+                                    # Кап, которым СТРОИЛСЯ план. Если он выше
+                                    # max_position_margin_pct, между ними мёртвая
+                                    # полоса: план строится и всегда отвергается.
+                                    "sizing_budget_usdt": (
+                                        round(float(_pos_margin_cap), 2) if _pos_margin_cap else None
+                                    ),
+                                },
+                            },
                         )
                     )
                     db.flush()
