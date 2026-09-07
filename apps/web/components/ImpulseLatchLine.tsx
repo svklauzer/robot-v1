@@ -23,6 +23,18 @@ const TITLE =
   "этом не ослаблено. Снять отказ adx_rising может только импульс ПО ADX — " +
   "кросс Stoch записывается как наблюдение, но основанием не является.";
 
+// (#impulse-tf-2026-09-08) Ряды называются явно. ADX импульса и ADX условия —
+// РАЗНЫЕ величины: событие читается с младшего ТФ, отказ посчитан на старшем.
+// В ленте 07.09 в одной записи стояли adx 11.31 у условия и 16.68 у защёлки, и
+// по виду это неотличимо от рассогласования данных. Это замысел, а не сбой, —
+// но замысел, который до сих пор был написан только в комментарии к коду.
+function tfNote(latch: any): string | null {
+  const from = latch?.tf;
+  const over = latch?.substitutes_tf;
+  if (!from || !over || from === over) return null;
+  return `${from} → снимает отказ, посчитанный на ${over}`;
+}
+
 export default function ImpulseLatchLine({ latch }: { latch?: any }) {
   if (!latch) return null;
 
@@ -46,6 +58,15 @@ export default function ImpulseLatchLine({ latch }: { latch?: any }) {
         <span className="text-emerald-100/30"> · отказ не снимает</span>
       )}
       {latch.mode === "shadow" && <span className="text-emerald-100/30"> · наблюдение</span>}
+      {tfNote(latch) && (
+        <div
+          className="text-emerald-100/30"
+          title="ADX импульса и ADX условия — разные ряды. Событие приходит на младшем ТФ раньше, чем тренд проступит на старшем; в этом и смысл защёлки."
+        >
+          {tfNote(latch)}
+          {latch.adx_rise_min != null && ` · порог роста ${latch.adx_rise_min}`}
+        </div>
+      )}
     </div>
   );
 }

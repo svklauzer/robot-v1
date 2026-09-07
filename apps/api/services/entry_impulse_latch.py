@@ -61,6 +61,10 @@ class Impulse:
     adx_delta: float | None
     stoch_k: float | None
     stoch_d: float | None
+    # (#impulse-tf-2026-09-08) На каком ТФ событие замечено. Без него запись
+    # выглядит ошибкой: в одном событии ТЗ пишет adx 11.31, защёлка — 16.68,
+    # и это не расхождение данных, а разные ряды.
+    tf: str | None = None
 
     def age_sec(self, now: float) -> float:
         return max(0.0, now - self.at)
@@ -74,6 +78,7 @@ class Impulse:
             "adx_delta": self.adx_delta,
             "stoch_k": self.stoch_k,
             "stoch_d": self.stoch_d,
+            "tf": self.tf,
         }
 
 
@@ -87,11 +92,26 @@ def _num(source, key: str) -> float | None:
         return None
 
 
-def _entry_ctx(timeframes):
+def _entry_ctx(timeframes) -> tuple[str | None, dict | None]:
+    """(имя ряда, контекст). Имя нужно наружу: подмена условия событием с
+    ДРУГОГО ряда обязана быть видна, а не выводиться из настроек."""
     if not isinstance(timeframes, dict):
-        return None
-    name = str(getattr(settings, "ENTRY_IMPULSE_TF", "15m"))
-    return timeframes.get(name) or timeframes.get("15m") or timeframes.get("5m")
+        return None, None
+    preferred = str(getattr(settings, "ENTRY_IMPULSE_TF", "15m"))
+    for name in (preferred, "15m", "5m"):
+        ctx = timeframes.get(name)
+        if ctx:
+            return name, ctx
+    return None, None
+
+
+def condition_tf() -> str:
+    """Ряд, на котором считается условие `adx_not_rising`, которое защёлка
+    подменяет. Это `TZ_TREND_TF` (1h), а импульс берётся с `ENTRY_IMPULSE_TF`
+    (15m) — по замыслу: событие приходит на младшем ТФ раньше, чем тренд
+    проступит на старшем. Печатается рядом, чтобы разница читалась как замысел,
+    а не как ошибка."""
+    return str(getattr(settings, "TZ_TREND_TF", "1h"))
 
 
 def detect(timeframes, side: str) -> tuple[str | None, dict]:
@@ -100,8 +120,9 @@ def detect(timeframes, side: str) -> tuple[str | None, dict]:
     Показания возвращаются ВСЕГДА, даже когда события нет: в разборе нужно
     видеть, чего не хватило, иначе защёлка превращается в «просто не сработала».
     """
-    ctx = _entry_ctx(timeframes)
-    readings = {"adx": None, "adx_delta": None, "stoch_k": None, "stoch_d": None}
+    tf_name, ctx = _entry_ctx(timeframes)
+    readings = {"adx": None, "adx_delta": None, "stoch_k": None, "stoch_d": None,
+                "tf": tf_name}
     if ctx is None:
         return None, readings
 
@@ -116,6 +137,7 @@ def detect(timeframes, side: str) -> tuple[str | None, dict]:
                       if adx is not None and adx_prev is not None else None),
         "stoch_k": k,
         "stoch_d": d,
+        "tf": tf_name,
     }
 
     rise_min = float(getattr(settings, "ENTRY_IMPULSE_ADX_RISE_MIN", 0.0))
@@ -183,6 +205,12 @@ class ImpulseLatch:
             # анти-чопе, эта настройка здесь. Пока значения не видно в
             # телеметрии, расхождение приходится искать по коду.
             "adx_rise_min": float(getattr(settings, "ENTRY_IMPULSE_ADX_RISE_MIN", 0.0)),
+            # (#impulse-tf-2026-09-08) Оба ряда рядом. Импульс читается с
+            # младшего ТФ, а снимает он отказ, посчитанный на старшем: в ленте
+            # 07.09 ТЗ писала adx 11.31 и защёлка 16.68 в одной записи, и по
+            # виду это неотличимо от рассогласования данных.
+            "tf": str(getattr(settings, "ENTRY_IMPULSE_TF", "15m")),
+            "substitutes_tf": condition_tf(),
             "live": impulse is not None,
             "impulse": impulse.as_dict(moment) if impulse else None,
         }

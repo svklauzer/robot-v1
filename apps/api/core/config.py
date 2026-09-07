@@ -1431,7 +1431,12 @@ class Settings(BaseSettings):
     ENTRY_IMPULSE_LATCH_MODE: str = "shadow"
     ENTRY_IMPULSE_TF: str = "15m"
     ENTRY_IMPULSE_WINDOW_SEC: float = 1800.0     # два бара 15m
-    ENTRY_IMPULSE_ADX_RISE_MIN: float = 0.0
+    # (#impulse-noise-2026-09-08) БЫЛО 0.0 — ростом считалось любое +ε.
+    # Телеметрия 07.09: импульсы записывались на дельтах +0.02, +0.06, +0.07
+    # при ADX около 11, то есть на численном шуме. Тот же вопрос «растёт ли
+    # ADX» в анти-чопе требует 0.5 (ANTI_CHOP_YOUNG_ADX_RISE_MIN), и держать
+    # два ответа на один вопрос — это и есть третье значение «на глаз».
+    ENTRY_IMPULSE_ADX_RISE_MIN: float = 0.5
 
     # (#scan-flap-2026-09-05) Сколько проход обязан молчать, прежде чем это
     # запишут в ленту. Один тик без одобренных — норма; сообщать о нём значит
