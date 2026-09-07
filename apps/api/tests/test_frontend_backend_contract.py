@@ -781,9 +781,14 @@ def test_the_depth_feed_names_its_own_venue():
     оформления, а не как несовпадение площадок.
     """
     feed = _read(API / "services/orderbook_feed.py")
-    assert "huobi" in feed or "hbdm" in feed, "фид больше не привязан к HTX — проверить текст"
+    # 07.09 фид переведён на ACTIVE_EXCHANGE: ветка OKX появилась, но обе
+    # площадки остались, и вопрос «чья это книга» стал переменной, а не
+    # константой — тем более требующей ответа в телеметрии.
+    assert "def feed_exchange" in feed, "фид снова не выбирает биржу"
+    assert "run_okx_orderbook_feed" in feed and "run_htx_orderbook_feed" in feed
 
     main = _read(API / "main.py")
+    assert "run_orderbook_feed" in main, "стартует не диспетчер, а одна из веток"
     assert '"feed_exchange"' in main, "ответ не говорит, чей это стакан"
     assert '"active_exchange"' in main, "ответ не говорит, где исполняются ордера"
 

@@ -31,7 +31,7 @@ from services.production_entry_gate import ProductionEntryGate
 from services.reentry_cooldown import ReEntryCooldownGuard
 from services.anti_drain_guard import AntiDrainConfig, should_open_signal
 from services.orderbook_analyzer import OrderBookAnalyzer
-from services.orderbook_feed import ORDERBOOK_STORE
+from services.orderbook_feed import ORDERBOOK_STORE, feed_exchange as ob_feed_exchange
 from services.ml_trade_logger import MLTradeLogger
 from services.ml_controller import MLController
 from services.decision_event_service import DecisionEventService
@@ -1407,11 +1407,20 @@ class RobotLoop:
                     # Контекст для ML-датасета (фичи на момент входа).
                     "regime": str(result.regime or ""),
                     "radar_state": str(getattr(result, "radar_state", "") or ""),
+                    # (#depth-venue-2026-09-07) Биржа книги пишется рядом с
+                    # самими показаниями. Признаки входа сравнимы только внутри
+                    # одной площадки: у HTX step0 полная глубина, у OKX books5
+                    # пять уровней, и obi/wall_share считаются по разной. Без
+                    # метки форензика смешала бы две эпохи молча — она уже берёт
+                    # entry_depth.obi и entry_depth.cvd_ratio как признаки входа.
                     "entry_depth": (
-                        OrderBookAnalyzer.analyze(
-                            ORDERBOOK_STORE.snapshot(symbol),
-                            levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
-                        ).as_dict()
+                        {
+                            **OrderBookAnalyzer.analyze(
+                                ORDERBOOK_STORE.snapshot(symbol),
+                                levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                            ).as_dict(),
+                            "exchange": ob_feed_exchange(),
+                        }
                         if bool(getattr(settings, "ENABLE_ORDERBOOK_ENGINE", False))
                         else None
                     ),
