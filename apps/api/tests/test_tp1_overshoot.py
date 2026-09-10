@@ -58,6 +58,7 @@ def _sig(db, *, side="long", entry=100.0, tp1_pct=1.0, mfe=1.0, exit_pct=0.0,
             "post_tp1_trail_min_mfe_pct": 0.6,
             "post_tp1_trail_giveback_share": 0.4,
             "net_safe_floor_pct": 0.30,
+            "tp1_partial_enabled": True,
             "min_protective_net_usdt": 0.25,
         }}
         if market is not None:
@@ -232,6 +233,22 @@ def test_near_misses_are_counted_separately(db):
 
 # ── альтернативы ────────────────────────────────────────────────────────────
 
+def test_a_rule_that_fires_first_closes_the_rest_even_if_tp2_came_later(db):
+    """Первая версия брала лучшее из двух — max(срабатывание, факт) — и
+    приписывала правилу и защиту от отката, и весь последующий ход к TP2.
+    Цена пересекла TP1 (1.0), дошла до 1.6, откатилась к 0.9 и ушла на TP2 2.5.
+    Трейл (откат 0.7 ≥ 0.4·1.6) закрыл бы остаток на 0.9, стоп на TP1 — на 1.0.
+    """
+    traj = [[0, 0], [10, 1.0], [20, 1.6], [30, 0.9], [40, 2.5]]
+    _sig(db, tp1_pct=1.0, mfe=2.5, exit_pct=2.5, traj=traj, reason="tp2_reached")
+
+    cf = build(db)["counterfactuals"]
+
+    assert cf["actual"]["sum_pct"] == pytest.approx(1.61, abs=1e-3)
+    assert cf["partial_then_trail_at_market"]["sum_pct"] == pytest.approx(0.81, abs=1e-3)
+    assert cf["partial_then_stop_at_tp1"]["sum_pct"] == pytest.approx(0.86, abs=1e-3)
+
+
 def test_counterfactuals_use_the_same_trades_and_one_cost(db):
     """Половина на TP1 (1.0%), остаток ушёл на пик 2.0% и вернулся к 0.05%.
     Факт: 0.5·1.0 + 0.5·0.05 − 0.14 = 0.385.
@@ -292,3 +309,30 @@ def test_without_fees_in_the_snapshot_the_gate_is_unknown_not_guessed(db):
     assert trail["missed"] == 1
     assert trail["missed_gate_unknown"] == 1
     assert trail["missed_blocked_by_net_gate"] == 0
+
+
+# ── частичная фиксация на TP1 ───────────────────────────────────────────────
+
+def test_a_partial_that_was_enabled_but_never_happened_is_reported(db):
+    """Фиксация включена в снимке, а записи о ней нет: ошибка исполнения
+    глотается в ведении, и TP1 молча превращается в перенос стопа."""
+    _sig(db, tp1_pct=1.0, mfe=1.5, exit_pct=0.07, partial=False,
+         traj=[[0, 0], [10, 1.5], [20, 0.07]])
+
+    health = build(db)["tp1_partial_health"]
+
+    assert health == {"expected": 1, "missing": 1, "missing_ids": [health["missing_ids"][0]]}
+
+
+def test_without_a_partial_the_gate_sees_the_whole_position(db):
+    """position.qty не уменьшался — гейт в ведении видел всю позицию:
+    200 USDT·0.0018 = 0.36 ≥ 0.25. Тогда гейт выход не запрещал."""
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=_DIP, market=_SWAP,
+         partial=False)
+
+    out = build(db)
+    gate = out["trades"][0]["trail_gate"]
+
+    assert gate["notional_source"] == "full_position"
+    assert gate["remaining_notional_usdt"] == pytest.approx(200.0)
+    assert out["post_tp1_trail"]["missed_gate_would_pass"] == 1
