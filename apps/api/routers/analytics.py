@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from core.config import settings
 from core.db import SessionLocal
 from core.security import require_owner_action
@@ -230,7 +230,8 @@ def analytics_regime_expectancy(window_hours: float = 720.0, max_rows: int = 400
 
 @router.get("/stop-forensics", dependencies=[Depends(require_owner_action)])
 def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = None,
-                             side: str | None = None, max_rows: int = 4000):
+                             side: str | None = None, max_rows: int = 4000,
+                             outcome: str = "stop"):
     """(#stop-forensics-2026-09-04) Чем сделка, дошедшая до стопа, отличалась
     НА ВХОДЕ от остальных.
 
@@ -246,13 +247,21 @@ def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = N
     structure_score построен по шкале «хорошо для лонга» и для шортов не
     зеркалится ни в confidence, ни в setup_quality: если асимметрия реальна,
     у шортов setup_quality.structure_quality разделяет группы, а у лонгов нет.
-    """
-    from services.stop_loss_forensics import build
 
+    `outcome=tp1` (#tp1-forensics-2026-09-11) — те же признаки входа, но группы
+    делятся по достижению TP1. Проверка перед гейтом на TP1: отбирает ли хоть
+    что-то на входе сделки, дошедшие до TP1, или гейт стал бы выключателем
+    торговли, как гейт по TP2.
+    """
+    from services.stop_loss_forensics import _OUTCOMES, build
+
+    if outcome not in _OUTCOMES:
+        raise HTTPException(status_code=400,
+                            detail=f"outcome must be one of {sorted(_OUTCOMES)}")
     db = SessionLocal()
     try:
         return build(db, window_hours=window_hours, regime=regime, side=side,
-                     max_rows=max_rows)
+                     max_rows=max_rows, outcome=outcome)
     finally:
         db.close()
 

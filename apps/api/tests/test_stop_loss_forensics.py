@@ -422,3 +422,97 @@ def test_margin_reads_fields_the_gate_actually_writes():
 
     assert used, "признак перестал читать план — тест потерял смысл"
     assert used <= known, f"признак читает несуществующие поля гейта: {used - known}"
+
+
+# ── исход tp1: отличает ли вход дошедших до TP1 (#tp1-forensics-2026-09-11) ──
+
+def _tp1_sig(db, *, mfe, adx=25.0, symbol="X/USDT", tp1_hit_rate=None,
+             reason="breakeven_stop"):
+    """TP1 на 101 при входе 100 — дистанция 1%. Дошла, если MFE ≥ 1.0."""
+    signal = _sig(db, reason=reason, adx=adx)
+    signal.symbol = symbol
+    plan = dict(signal.plan_json)
+    plan["lifecycle"] = {"entry_price": 100.0, "mfe_pct": mfe}
+    if tp1_hit_rate is not None:
+        plan["tp_reach"] = dict(plan["tp_reach"], tp1_hit_rate=tp1_hit_rate)
+    signal.plan_json = plan
+    db.flush()
+    return signal
+
+
+def test_tp1_outcome_splits_by_reaching_tp1_not_by_close_reason(db):
+    """Дошедшие входили при высоком ADX. Причина закрытия у всех одна и та же —
+    деление идёт по траектории, а не по тому, чем сделка кончилась."""
+    for _ in range(6):
+        _tp1_sig(db, mfe=1.4, adx=35.0)
+    for _ in range(6):
+        _tp1_sig(db, mfe=0.4, adx=15.0)
+
+    out = build(db, min_group=5, outcome="tp1")
+    row = _rows(out, "tz_shadow.adx")
+
+    assert out["reached"]["n"] == 6 and out["not_reached"]["n"] == 6
+    assert out["base_rate"] == 0.5
+    assert row["n_reached"] == 6
+    assert row["auc"] == 1.0 and row["higher_in"] == "reached"
+    assert row["ci_excludes_half"] is True
+
+
+def test_the_measured_tp1_rate_is_judged_as_a_gate_would_use_it(db):
+    """tp_reach.tp1_hit_rate — ровно то, по чему судил бы гейт на TP1. Если
+    его AUC около 0.5, гейт на нём не отбирает, а только запрещает."""
+    for _ in range(6):
+        _tp1_sig(db, mfe=1.4, tp1_hit_rate=0.30)
+    for _ in range(6):
+        _tp1_sig(db, mfe=0.4, tp1_hit_rate=0.30)
+
+    row = _rows(build(db, min_group=5, outcome="tp1"), "tp_reach.tp1_hit_rate")
+
+    assert row["auc"] == 0.5
+    assert row["ci_excludes_half"] is False
+
+
+def test_trades_without_a_trajectory_are_skipped_not_guessed(db):
+    _sig(db, reason="stop_loss")          # без lifecycle
+    _tp1_sig(db, mfe=1.4)
+
+    out = build(db, min_group=1, outcome="tp1")
+
+    assert out["skipped_no_trajectory"] == 1
+    assert out["reached"]["n"] == 1 and out["not_reached"]["n"] == 0
+
+
+def test_levels_carry_the_reach_rate_with_an_interval(db):
+    for _ in range(3):
+        _tp1_sig(db, mfe=1.4, symbol="LTC/USDT")
+    _tp1_sig(db, mfe=0.4, symbol="LTC/USDT")
+    for _ in range(4):
+        _tp1_sig(db, mfe=0.4, symbol="ADA/USDT")
+
+    out = build(db, min_group=1, outcome="tp1")
+    symbols = next(r for r in out["categorical"] if r["feature"] == "signal.symbol")
+
+    ltc = symbols["levels"]["LTC/USDT"]
+    assert ltc["reached"] == 3 and ltc["not_reached"] == 1
+    assert ltc["reach_rate"] == 0.75
+    lo, hi = ltc["reach_rate_ci"]
+    assert lo < 0.75 < hi, "на четырёх сделках интервал обязан быть широким"
+
+
+def test_the_stop_outcome_keeps_its_keys():
+    """На ключах stop построены команды разбора владельца — их не трогаем."""
+    from services.stop_loss_forensics import _OUTCOMES
+    assert _OUTCOMES["stop"] == ("stopped", "survived", "stop_rate")
+
+
+def test_an_unknown_outcome_is_refused(db):
+    with pytest.raises(ValueError):
+        build(db, outcome="tp2")
+
+
+def test_auc_interval_is_narrow_on_many_trades_and_wide_on_few():
+    from services.stop_loss_forensics import _auc_ci
+    lo_few, hi_few = _auc_ci(0.6, 10, 10)
+    lo_many, hi_many = _auc_ci(0.6, 100, 370)
+    assert lo_few < 0.5 < hi_few
+    assert 0.5 < lo_many < 0.6 < hi_many
