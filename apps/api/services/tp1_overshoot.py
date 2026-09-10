@@ -155,6 +155,18 @@ def _retests_tp1(traj: list, tp1_dist: float) -> bool:
     return False
 
 
+def _cross_pct(traj: list, tp1_dist: float) -> float | None:
+    """Точка траектории, на которой TP1 пересечён впервые."""
+    for point in traj or []:
+        try:
+            pct = float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if pct >= tp1_dist:
+            return pct
+    return None
+
+
 def _low_after_tp1(traj: list, tp1_dist: float) -> float | None:
     """Минимум траектории после первого пересечения TP1 — по нему видно, какой
     уровень стопа остатка был бы задет, а какой нет."""
@@ -304,6 +316,8 @@ def _analyse(signal: Signal) -> dict | None:
     row["tp1_retest"] = _retests_tp1(traj, tp1_dist)
     low = _low_after_tp1(traj, tp1_dist)
     row["low_after_tp1_pct"] = round(low, 4) if low is not None else None
+    cross = _cross_pct(traj, tp1_dist)
+    row["cross_pct"] = round(cross, 4) if cross is not None else None
     # Шаг записи траектории: колебание мельче шага не записывается, поэтому
     # истинный минимум мог быть на шаг ниже записанного.
     row["traj_step_pct"] = _num(lifecycle.get("traj_step")) or float(
@@ -375,8 +389,15 @@ def _counterfactuals(rows: list[dict]) -> dict:
             curve[f].append(booked * tp1 + rest * (level if hit else max(exit_, level)) - cost)
             # Пессимистичная граница: считаем уровень задетым, если записанный
             # минимум был ближе шага траектории — прокол мог уйти незаписанным.
-            # Бьёт по верхним уровням, где стоп стоит почти вплотную к цене.
-            hit_p = low is not None and low < level + step
+            # (#lock-bound-2026-09-11) Минимум берётся ВМЕСТЕ с точкой
+            # пересечения: стоп на самом TP1 встаёт вплотную к цене, и тик
+            # чуть ниже TP1 сразу после пересечения его снимает. Первая версия
+            # точку пересечения не учитывала и для уровня 1.0 давала границу,
+            # равную оптимистичной оценке, — ровно там, где риск наибольший.
+            cross = r.get("cross_pct")
+            lows = [v for v in (low, cross) if v is not None]
+            low_p = min(lows) if lows else None
+            hit_p = low_p is not None and low_p < level + step
             curve_pess[f].append(
                 booked * tp1 + rest * (level if hit_p else max(exit_, level)) - cost)
 

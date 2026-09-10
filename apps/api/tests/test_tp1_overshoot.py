@@ -392,3 +392,18 @@ def test_the_pessimistic_bound_counts_a_dip_within_one_step_as_a_touch(db):
     assert top["vs_actual_pct"] == pytest.approx(0.0, abs=1e-6)
     # 0.5 остатка теряют 2.5 − 1.0 = 1.5 → −0.75.
     assert top["vs_actual_pessimistic_pct"] == pytest.approx(-0.75, abs=1e-6)
+
+
+def test_a_stop_on_tp1_itself_can_be_taken_out_right_at_the_cross(db):
+    """Пересекли TP1 = 1.0 на отметке 1.02, дальше только вверх и на TP2.
+    Записанные после пересечения точки все выше TP1 — оптимистично стоп на TP1
+    не задет. Но между 1.02 и следующей записью цена могла сходить на 0.97 —
+    меньше шага, записи нет, а стоп на 1.0 такой тик снимает. На 0.9 — нет."""
+    _sig(db, tp1_pct=1.0, mfe=2.5, exit_pct=2.5, reason="tp2_reached",
+         traj=[[0, 0], [10, 1.02], [20, 1.6], [30, 1.3], [40, 2.5]])
+
+    curve = {c["lock_frac_of_tp1"]: c for c in build(db)["counterfactuals"]["lock_curve"]}
+
+    assert curve[1.0]["vs_actual_pct"] == pytest.approx(0.0, abs=1e-6)
+    assert curve[1.0]["vs_actual_pessimistic_pct"] == pytest.approx(-0.75, abs=1e-6)
+    assert curve[0.9]["vs_actual_pessimistic_pct"] == pytest.approx(0.0, abs=1e-6)
