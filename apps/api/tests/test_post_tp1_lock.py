@@ -19,8 +19,12 @@ from services.signal_lifecycle import SignalLifecycleManager
 _lock = SignalLifecycleManager._post_tp1_lock_stop
 
 
-def test_off_by_default():
-    assert float(settings.POST_TP1_LOCK_FRAC) == 0.0
+def test_the_chosen_level_and_the_trail_it_replaces():
+    """Решение 11.09: стоп остатка на самом TP1 (лучшая пессимистичная оценка,
+    +9.3 п.п.), трейл 0.4·MFE выключен (−1.1 п.п.). Одно без другого не
+    ставится: включённый трейл на высоком пике книжит +0.30% — ниже стопа."""
+    assert float(settings.POST_TP1_LOCK_FRAC) == 1.0
+    assert settings.POST_TP1_TRAIL_ENABLED is False
 
 
 def test_long_stop_goes_to_the_share_of_the_tp1_distance():
