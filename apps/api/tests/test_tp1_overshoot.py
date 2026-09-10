@@ -47,10 +47,17 @@ def trail_settings(monkeypatch):
 
 
 def _sig(db, *, side="long", entry=100.0, tp1_pct=1.0, mfe=1.0, exit_pct=0.0,
-         traj=None, reason="breakeven_stop", partial=True, result=None):
+         traj=None, reason="breakeven_stop", partial=True, result=None,
+         trail_in_force=True):
     tp1 = entry * (1 + tp1_pct / 100) if side == "long" else entry * (1 - tp1_pct / 100)
     exit_price = entry * (1 + exit_pct / 100) if side == "long" else entry * (1 - exit_pct / 100)
     plan = {"lifecycle": {"entry_price": entry, "mfe_pct": mfe, "traj": traj or []}}
+    if trail_in_force:
+        plan["config"] = {"exit": {
+            "post_tp1_trail_enabled": True,
+            "post_tp1_trail_min_mfe_pct": 0.6,
+            "post_tp1_trail_giveback_share": 0.4,
+        }}
     if partial:
         plan["tp1_partial"] = {"closed_qty": 1.0, "remaining_qty": 1.0}
     signal = Signal(
@@ -110,6 +117,31 @@ def test_a_trail_that_should_have_fired_is_reported_as_missed(db):
     assert trail["missed"] == 1
     assert trail["fired"] == 0
     assert trail["median_trigger_pct"] == pytest.approx(1.18)
+
+
+def test_trades_closed_before_the_trail_existed_are_not_missed(db):
+    """Трейл после TP1 появился 03.09. Сделка с той же траекторией, но без
+    трейла в снимке конфига — не пропуск, а время до правила. Первая версия
+    отчёта этого не различала и насчитала бы баг из четырёх сделок ленты,
+    закрытых раньше, чем ветка появилась в коде."""
+    traj = [[0, 0.0], [10, 0.8], [20, 1.98], [30, 1.18], [50, 0.05]]
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=traj, trail_in_force=False)
+
+    trail = build(db)["post_tp1_trail"]
+
+    assert trail["in_force"] == 0
+    assert trail["not_yet_in_force"] == 1
+    assert trail["missed"] == 0
+
+
+def test_the_rule_of_the_trade_is_used_not_todays_setting(db, monkeypatch):
+    """Поменяли порог после закрытия — оценивать сделку по новому порогу нельзя."""
+    monkeypatch.setattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.9, raising=False)
+    traj = [[0, 0.0], [10, 0.8], [20, 1.98], [30, 1.18], [50, 0.05]]
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=traj)
+
+    # По снимку (0.4) условие наступило на 1.18; при 0.9 не наступило бы вовсе.
+    assert build(db)["post_tp1_trail"]["missed"] == 1
 
 
 def test_a_trail_that_did_fire_is_not_missed(db):
