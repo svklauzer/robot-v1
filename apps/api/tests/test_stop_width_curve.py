@@ -83,12 +83,13 @@ def test_a_closer_stop_trims_a_loser(db):
 
 def test_a_closer_stop_kills_a_winner_that_dipped_first(db):
     """Цена ушла на −0.6, потом дошла до TP1 и дала +0.9. Стоп на 0.5 закрыл бы
-    её на −0.64: −1.54 против факта. Стоп на 0.7 её пропускает."""
+    её на −0.5 − 0.14 − 0.05 (проскальзывание стопа) = −0.69: −1.59 против
+    факта. Стоп на 0.7 её пропускает."""
     _sig(db, traj=[[0, 0.0], [10, -0.6], [20, 1.5]], net=0.9)
 
     out = build(db)
 
-    assert _row(out, 0.5)["vs_actual_pct"] == pytest.approx(-1.54)
+    assert _row(out, 0.5)["vs_actual_pct"] == pytest.approx(-1.59)
     assert _row(out, 0.5)["winners_cut"] == 1
     assert _row(out, 0.7)["vs_actual_pct"] == pytest.approx(0.0)
 
@@ -108,7 +109,7 @@ def test_the_pessimistic_bound_counts_a_near_touch(db):
     half = _row(build(db), 0.5)
 
     assert half["vs_actual_pct"] == pytest.approx(0.0)
-    assert half["vs_actual_pessimistic_pct"] == pytest.approx(-1.54)
+    assert half["vs_actual_pessimistic_pct"] == pytest.approx(-1.59)
 
 
 def test_the_real_stop_is_the_anchor(db):
@@ -144,3 +145,26 @@ def test_trade_mode_filter(db):
     _sig(db, traj=[[0, 0.0], [10, -1.0]], net=-1.14, reason="stop_loss")
 
     assert build(db, trade_mode="trend")["analysed"] == 1
+
+
+def test_a_trimmed_stop_pays_the_same_fill_shortfall_as_a_real_one(db):
+    """Настоящий стоп закрылся на 0.05% хуже уровня (проскальзывание paper):
+    −1.19 вместо −1.14. Урезанный до половины стоп обязан заплатить столько же:
+    −0.69, экономия 0.5 — а не 0.55, как было, когда недостача доставалась
+    урезанию бесплатно."""
+    _sig(db, traj=[[0, 0.0], [10, -0.6], [20, -1.0]], net=-1.19, reason="stop_loss")
+
+    out = build(db)
+
+    assert out["stop_fill_residual"]["median_pct"] == pytest.approx(-0.05)
+    assert out["stop_fill_residual"]["source"] == "stop_loss_trades"
+    assert _row(out, 0.5)["vs_actual_pct"] == pytest.approx(0.5)
+
+
+def test_without_stop_trades_the_setting_is_the_shortfall(db):
+    _sig(db, traj=[[0, 0.0], [10, -0.6], [20, 1.5]], net=0.9)
+
+    fill = build(db)["stop_fill_residual"]
+
+    assert fill["source"] == "setting"
+    assert fill["median_pct"] < 0

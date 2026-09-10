@@ -129,7 +129,36 @@ def _quantile(values: list[float], q: float) -> float | None:
     return round(ordered[idx], 4)
 
 
-def _curve(rows: list[dict]) -> list[dict]:
+def _fill_residual(rows: list[dict]) -> dict:
+    """Насколько настоящий стоп исполняется хуже уровня, в % номинала.
+
+    (#stop-fill-2026-09-12) Первая версия книжила проигранный стоп ровно по
+    уровню, а настоящий в paper исполняется на PAPER_STOP_ADVERSE_SLIPPAGE_PCT
+    хуже (и восстановленная дистанция может чуть расходиться с фактической).
+    Разница доставалась каждому урезанному стопу бесплатно: на 90 днях шаг с
+    1.0 на 0.9 давал +11 п.п. при ожидаемых ~7 от одной экономии дистанции.
+
+    Калибровка по самим сделкам, закрытым по стопу: при k = 1 проигрыш обязан
+    повторить их фактическую потерю. Медиана недостачи переносится на каждый
+    проигранный стоп. Нет таких сделок — берётся настройка проскальзывания.
+    """
+    stops = [r["actual_pct"] - (-r["stop_dist_pct"] - r["cost_pct"])
+             for r in rows if r["reason"] == "stop_loss"]
+    if stops:
+        return {
+            "median_pct": round(median(stops), 4),
+            "p25_pct": _quantile(stops, 0.25),
+            "p75_pct": _quantile(stops, 0.75),
+            "n": len(stops),
+            "source": "stop_loss_trades",
+        }
+    return {
+        "median_pct": -float(getattr(settings, "PAPER_STOP_ADVERSE_SLIPPAGE_PCT", 0.05)),
+        "p25_pct": None, "p75_pct": None, "n": 0, "source": "setting",
+    }
+
+
+def _curve(rows: list[dict], fill_residual_pct: float = 0.0) -> list[dict]:
     actual_sum = sum(r["actual_pct"] for r in rows)
     out = []
     for k in _FRACS:
@@ -139,7 +168,7 @@ def _curve(rows: list[dict]) -> list[dict]:
         for r in rows:
             level = -k * r["stop_dist_pct"]
             low, step = r["pre_tp1_low_pct"], r["traj_step_pct"]
-            stopped = -k * r["stop_dist_pct"] - r["cost_pct"]
+            stopped = -k * r["stop_dist_pct"] - r["cost_pct"] + fill_residual_pct
             if k >= 1.0:
                 # Настоящий стоп: что было, то и было.
                 hit = hit_p = False
@@ -199,6 +228,7 @@ def build(db: Session, *, window_hours: float = 2160.0, trade_mode: str | None =
     consistent = [r for r in stops
                   if r["pre_tp1_low_pct"] <= -r["stop_dist_pct"] + r["traj_step_pct"]]
     winners = [r["depth_in_stops"] for r in rows if r["reached_tp1"]]
+    fill = _fill_residual(rows)
 
     return {
         "window_hours": float(window_hours),
@@ -226,7 +256,10 @@ def build(db: Session, *, window_hours: float = 2160.0, trade_mode: str | None =
             "p90": _quantile(winners, 0.90),
             "max": round(max(winners), 4) if winners else None,
         },
-        "curve": _curve(rows),
+        # Недостача исполнения настоящего стопа против уровня — переносится на
+        # каждый проигранный стоп, чтобы урезание не получало её бесплатно.
+        "stop_fill_residual": fill,
+        "curve": _curve(rows, fill["median_pct"]),
         "note": (
             "stop_frac — доля нынешней дистанции стопа. Каждая сделка "
             "проигрывается по траектории до TP1: ниже −k·стоп — закрыта там на "
@@ -235,6 +268,9 @@ def build(db: Session, *, window_hours: float = 2160.0, trade_mode: str | None =
             "засчитывается, если записанный минимум был ближе шага траектории. "
             "consistency.share — доля сделок по стопу, чья траектория доходит до "
             "восстановленного стопа: если она заметно ниже 1, дистанция стопа "
-            "восстановлена неверно и кривой верить нельзя."
+            "восстановлена неверно и кривой верить нельзя. stop_fill_residual — "
+            "медианная недостача исполнения настоящего стопа против уровня "
+            "(проскальзывание paper и расхождение восстановления); она "
+            "добавляется к каждому проигранному стопу."
         ),
     }
