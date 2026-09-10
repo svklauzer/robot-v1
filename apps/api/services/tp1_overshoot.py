@@ -46,7 +46,7 @@ _BUCKETS: tuple[tuple[str, float, float], ...] = (
 # Уровни стопа остатка после TP1 в долях дистанции TP1: 0 — вход (как нынешний
 # безубыток), 1 — сам TP1. Кривая, а не одна точка: выбирать уровень по
 # единственному варианту значит подогнать его под историю.
-_LOCK_FRACS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+_LOCK_FRACS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 0.9, 1.0)
 
 # Около безубытка остаток «вернулся в ноль». Порог — круг издержек с запасом,
 # а не ноль: закрытие на +0.05% экономически то же, что на нуле.
@@ -304,6 +304,10 @@ def _analyse(signal: Signal) -> dict | None:
     row["tp1_retest"] = _retests_tp1(traj, tp1_dist)
     low = _low_after_tp1(traj, tp1_dist)
     row["low_after_tp1_pct"] = round(low, 4) if low is not None else None
+    # Шаг записи траектории: колебание мельче шага не записывается, поэтому
+    # истинный минимум мог быть на шаг ниже записанного.
+    row["traj_step_pct"] = _num(lifecycle.get("traj_step")) or float(
+        getattr(settings, "TRAJ_MIN_STEP_PCT", 0.05))
     # Частичная фиксация была включена в момент входа, а записи о ней нет —
     # значит, на TP1 она не исполнилась, и TP1 ничего не зафиксировал.
     row["partial_expected"] = cfg_exit.get("tp1_partial_enabled") is True
@@ -335,6 +339,7 @@ def _counterfactuals(rows: list[dict]) -> dict:
     """
     actual, all_at_tp1, honest_trail, lock_tp1 = [], [], [], []
     curve: dict[float, list[float]] = {f: [] for f in _LOCK_FRACS}
+    curve_pess: dict[float, list[float]] = {f: [] for f in _LOCK_FRACS}
     for r in rows:
         if r.get("exit_pct") is None:
             continue
@@ -363,10 +368,17 @@ def _counterfactuals(rows: list[dict]) -> dict:
         # Стоп остатка на доле f дистанции TP1: задет, если после TP1 цена
         # опускалась ниже уровня, — тогда закрытие на уровне, иначе факт.
         low = r.get("low_after_tp1_pct")
+        step = r.get("traj_step_pct") or 0.0
         for f in _LOCK_FRACS:
             level = f * tp1
             hit = low is not None and low < level
             curve[f].append(booked * tp1 + rest * (level if hit else max(exit_, level)) - cost)
+            # Пессимистичная граница: считаем уровень задетым, если записанный
+            # минимум был ближе шага траектории — прокол мог уйти незаписанным.
+            # Бьёт по верхним уровням, где стоп стоит почти вплотную к цене.
+            hit_p = low is not None and low < level + step
+            curve_pess[f].append(
+                booked * tp1 + rest * (level if hit_p else max(exit_, level)) - cost)
 
     def _pack(values: list[float]) -> dict:
         return {
@@ -378,7 +390,8 @@ def _counterfactuals(rows: list[dict]) -> dict:
     actual_sum = sum(actual)
     lock_curve = [
         {"lock_frac_of_tp1": f, **_pack(vals),
-         "vs_actual_pct": round(sum(vals) - actual_sum, 4)}
+         "vs_actual_pct": round(sum(vals) - actual_sum, 4),
+         "vs_actual_pessimistic_pct": round(sum(curve_pess[f]) - actual_sum, 4)}
         for f, vals in curve.items()
     ]
 

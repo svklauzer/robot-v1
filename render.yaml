@@ -308,6 +308,12 @@ services:
         value: "0.60"
       - key: POST_TP1_TRAIL_GIVEBACK_SHARE
         value: "0.40"
+      # Стоп остатка после TP1 на доле дистанции TP1 (#post-tp1-lock-2026-09-11):
+      # 0 — безубыток, как было; 1 — сам TP1. Замер 11.09 по 103 сделкам:
+      # 0.75 → +5.4 п.п., 1.0 → +10.5 п.п. против факта. Значение — решение
+      # владельца, до него выключено.
+      - key: POST_TP1_LOCK_FRAC
+        value: "0"
 
       # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED

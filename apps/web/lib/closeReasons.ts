@@ -46,6 +46,9 @@ export const CLOSE_REASON_LABELS: Record<string, string> = {
   tp2_trail_giveback: "TP2: хвост отдал прибыль",
   // (#post-tp1-dead-zone-2026-09-03) Защита прибыли между TP1 и TP2.
   post_tp1_giveback_trail: "Фиксация отдачи после TP1",
+  // (#post-tp1-lock-2026-09-11) Стоп остатка не в безубытке, а на доле
+  // дистанции TP1 (POST_TP1_LOCK_FRAC).
+  post_tp1_lock_stop: "Стоп остатка на уровне после TP1",
 };
 
 export function closeReasonLabel(code: string | null | undefined): string {

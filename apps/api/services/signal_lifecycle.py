@@ -728,6 +728,25 @@ class SignalLifecycleManager:
                     if _be_new_stop < float(signal.stop_price):
                         signal.stop_price = _be_new_stop
 
+                # (#post-tp1-lock-2026-09-11) Стоп остатка на доле дистанции TP1
+                # вместо безубытка. Записывается в план: по записи и причина
+                # закрытия отличает этот стоп от безубытка, и разбор видит,
+                # по какому правилу жила сделка.
+                _lock_stop = self._post_tp1_lock_stop(
+                    side, _be_entry, float(tp1), float(signal.stop_price),
+                    float(getattr(settings, "POST_TP1_LOCK_FRAC", 0.0) or 0.0),
+                )
+                if _lock_stop is not None:
+                    signal.stop_price = _lock_stop
+                    _lock_plan = dict(signal.plan_json or {})
+                    _lock_plan["post_tp1_lock"] = {
+                        "frac": float(getattr(settings, "POST_TP1_LOCK_FRAC", 0.0)),
+                        "stop": _lock_stop,
+                        "breakeven_stop": _be_new_stop,
+                    }
+                    signal.plan_json = _lock_plan
+                    flag_modified(signal, "plan_json")
+
                 self.decisions.record(
                     db,
                     symbol=signal.symbol,
@@ -741,7 +760,10 @@ class SignalLifecycleManager:
                         "price": price,
                         "tp1": tp1,
                         "entry_zone": signal.entry_zone_json,
-                        "stop_moved_to": "breakeven_after_tp1",
+                        "stop_moved_to": (
+                            "post_tp1_lock" if (signal.plan_json or {}).get("post_tp1_lock")
+                            else "breakeven_after_tp1"
+                        ),
                         "breakeven_stop": float(signal.stop_price),
                         "tp1_partial": (signal.plan_json or {}).get("tp1_partial"),
                         "lifecycle": signal.plan_json.get("lifecycle") if signal.plan_json else None,
@@ -788,7 +810,11 @@ class SignalLifecycleManager:
                     # причина закрытия обязана это отражать, иначе разбор увидит
                     # «сползли в ноль» там, где на деле забрали TP2 плюс часть
                     # хвоста.
-                    reason="tp2_trail_stop" if tp2_partial else "breakeven_stop",
+                    reason=(
+                        "tp2_trail_stop" if tp2_partial
+                        else "post_tp1_lock_stop" if (signal.plan_json or {}).get("post_tp1_lock")
+                        else "breakeven_stop"
+                    ),
                 )
                 return
 
@@ -851,6 +877,28 @@ class SignalLifecycleManager:
                 )
                 return
 
+
+    @staticmethod
+    def _post_tp1_lock_stop(side: str, entry: float, tp1: float,
+                            current_stop: float, frac: float) -> float | None:
+        """Стоп остатка после TP1 на доле `frac` дистанции TP1 (0 — вход, 1 — TP1).
+
+        (#post-tp1-lock-2026-09-11) None — уровень не нужен: доля выключена или
+        уровень не лучше уже стоящего стопа (безубыток с буфером комиссии бывает
+        выше малой доли). Только в сторону прибыли и не дальше самого TP1:
+        стоп выше TP1 на лонге сработал бы на той же свече, что и TP1.
+        """
+        try:
+            frac = min(max(float(frac), 0.0), 1.0)
+            entry, tp1, current_stop = float(entry), float(tp1), float(current_stop)
+        except (TypeError, ValueError):
+            return None
+        if frac <= 0 or entry <= 0 or tp1 <= 0:
+            return None
+        level = round(entry + (tp1 - entry) * frac, 8)
+        if str(side).lower() == "long":
+            return level if level > current_stop else None
+        return level if level < current_stop else None
 
     # ── этап TP2: фиксация доли + трейл хвоста ──────────────────────────────
     # (#progressive-tp2-2026-09-03) Раньше достижение TP2 закрывало позицию
