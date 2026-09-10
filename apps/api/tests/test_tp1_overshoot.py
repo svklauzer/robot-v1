@@ -48,7 +48,7 @@ def trail_settings(monkeypatch):
 
 def _sig(db, *, side="long", entry=100.0, tp1_pct=1.0, mfe=1.0, exit_pct=0.0,
          traj=None, reason="breakeven_stop", partial=True, result=None,
-         trail_in_force=True):
+         trail_in_force=True, rest_qty=1.0, market=None):
     tp1 = entry * (1 + tp1_pct / 100) if side == "long" else entry * (1 - tp1_pct / 100)
     exit_price = entry * (1 + exit_pct / 100) if side == "long" else entry * (1 - exit_pct / 100)
     plan = {"lifecycle": {"entry_price": entry, "mfe_pct": mfe, "traj": traj or []}}
@@ -57,9 +57,13 @@ def _sig(db, *, side="long", entry=100.0, tp1_pct=1.0, mfe=1.0, exit_pct=0.0,
             "post_tp1_trail_enabled": True,
             "post_tp1_trail_min_mfe_pct": 0.6,
             "post_tp1_trail_giveback_share": 0.4,
+            "net_safe_floor_pct": 0.30,
+            "min_protective_net_usdt": 0.25,
         }}
+        if market is not None:
+            plan["config"]["market"] = market
     if partial:
-        plan["tp1_partial"] = {"closed_qty": 1.0, "remaining_qty": 1.0}
+        plan["tp1_partial"] = {"closed_qty": 1.0, "remaining_qty": rest_qty}
     signal = Signal(
         bot_id=db.bot_id, symbol="X/USDT", side=side, status="closed",
         entry_zone_json={"from": entry, "to": entry}, stop_price=entry * 0.99,
@@ -243,3 +247,48 @@ def test_counterfactuals_use_the_same_trades_and_one_cost(db):
     assert cf["partial_then_stop_at_tp1"]["sum_pct"] == pytest.approx(0.86, abs=1e-3)
     assert cf["partial_then_trail_at_market"]["sum_pct"] == pytest.approx(0.96, abs=1e-3)
     assert cf["all_out_at_tp1"]["sum_pct"] == pytest.approx(0.86, abs=1e-3)
+
+
+# ── почему трейл не сработал: гейт нетто ────────────────────────────────────
+
+_SWAP = {"taker_fee": 0.0005, "slippage_buffer_pct": 0.0002}
+_DIP = [[0, 0.0], [10, 0.8], [20, 1.98], [30, 1.18], [50, 0.05]]
+
+
+def test_a_small_remainder_is_blocked_by_the_net_gate(db):
+    """Гейт меряет выход по полу издержек (0.30% swap), а не по рынку (1.18%).
+    Остаток 100 USDT: 100·(0.0030 − 0.0012) = 0.18 < 0.25 — выход запрещён,
+    хотя по рынку он дал бы 100·(0.0118 − 0.0012) = 1.06 USDT."""
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=_DIP, market=_SWAP)
+
+    out = build(db)
+    trail, gate = out["post_tp1_trail"], out["trades"][0]["trail_gate"]
+
+    assert trail["missed"] == 1
+    assert trail["missed_blocked_by_net_gate"] == 1
+    assert gate["remaining_notional_usdt"] == pytest.approx(100.0)
+    assert gate["gate_booked_pct"] == pytest.approx(0.30)
+    assert gate["gate_net_usdt"] == pytest.approx(0.18, abs=1e-4)
+    assert gate["market_net_usdt"] == pytest.approx(1.06, abs=1e-4)
+
+
+def test_a_large_remainder_passes_so_the_miss_has_another_cause(db):
+    """Остаток 1000 USDT: 1000·0.0018 = 1.8 ≥ 0.25. Если трейл всё равно не
+    сработал — гейт ни при чём, и это надо искать в другом месте."""
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=_DIP, market=_SWAP,
+         rest_qty=10.0)
+
+    trail = build(db)["post_tp1_trail"]
+
+    assert trail["missed_gate_would_pass"] == 1
+    assert trail["missed_blocked_by_net_gate"] == 0
+
+
+def test_without_fees_in_the_snapshot_the_gate_is_unknown_not_guessed(db):
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=_DIP)
+
+    trail = build(db)["post_tp1_trail"]
+
+    assert trail["missed"] == 1
+    assert trail["missed_gate_unknown"] == 1
+    assert trail["missed_blocked_by_net_gate"] == 0

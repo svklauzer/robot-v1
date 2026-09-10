@@ -122,6 +122,48 @@ def _trail_trigger(traj: list, tp1_dist: float, *, min_mfe: float,
     return None, None
 
 
+def _trail_gate(plan: dict, entry: float, trig_pct: float) -> dict:
+    """Экономический гейт трейла после TP1, воспроизведённый по снимку сделки.
+
+    (#tp1-trail-gate-2026-09-10) Ветка `post_tp1_giveback_trail` закрывает
+    остаток только если `_estimated_net_usdt` ≥ MIN_PROTECTIVE_NET_USDT. Но нетто
+    считается НЕ по рынку в момент срабатывания, а по уровню
+    `min(net_safe_pct, рынок)` — то есть по полу издержек (0.30% swap / 0.60%
+    спот), и на номинале ОСТАТКА после частичной фиксации (position.qty там уже
+    уменьшен). При таком счёте нетто почти равно `номинал × 0.0018`, и остаток
+    меньше ~140 USDT не проходит никогда — хотя по рынку выход дал бы в разы
+    больше. Отчёт показывает обе цифры: чем гейт мерил и что было на самом деле.
+
+    Нет ставки или порогов в снимке — поля None: угадывать гейт по сегодняшним
+    настройкам значит повторить ошибку, исправленную выше для самого трейла.
+    """
+    out = {"remaining_notional_usdt": None, "gate_booked_pct": None,
+           "gate_net_usdt": None, "market_net_usdt": None, "gate_pass": None}
+    cfg = plan.get("config") or {}
+    market, cfg_exit = cfg.get("market") or {}, cfg.get("exit") or {}
+    fee = _num(market.get("taker_fee"))
+    slip = _num(market.get("slippage_buffer_pct"))
+    floor = _num(cfg_exit.get("net_safe_floor_pct"))
+    min_net = _num(cfg_exit.get("min_protective_net_usdt"))
+    rest_qty = _num((plan.get("tp1_partial") or {}).get("remaining_qty"))
+    if None in (fee, slip, floor, min_net, rest_qty) or rest_qty <= 0:
+        return out
+
+    notional = rest_qty * entry
+    net_safe = max(fee * 2 * 100 + slip * 100 + 0.15, floor)
+    booked = min(net_safe, trig_pct)
+    drag = fee * 2 + slip
+    gate_net = notional * (booked / 100.0 - drag)
+    out.update({
+        "remaining_notional_usdt": round(notional, 2),
+        "gate_booked_pct": round(booked, 4),
+        "gate_net_usdt": round(gate_net, 4),
+        "market_net_usdt": round(notional * (trig_pct / 100.0 - drag), 4),
+        "gate_pass": gate_net >= min_net,
+    })
+    return out
+
+
 def _analyse(signal: Signal) -> dict | None:
     plan = signal.plan_json or {}
     lifecycle = plan.get("lifecycle") or {}
@@ -187,6 +229,9 @@ def _analyse(signal: Signal) -> dict | None:
         and not row["reason"].startswith("tp2")
         and honest_exit is not None and honest_exit < trig_pct
     )
+
+    if trig_pct is not None:
+        row["trail_gate"] = _trail_gate(plan, entry, trig_pct)
 
     beyond = mfe - tp1_dist
     row["beyond_tp1_pct"] = round(beyond, 4)
@@ -299,6 +344,10 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
     trail_fired = [r for r in in_force if r.get("trail_fired")]
     trail_missed = [r for r in in_force if r.get("trail_missed")]
 
+    gates = [r.get("trail_gate") or {} for r in trail_missed]
+    gate_blocked = [g for g in gates if g.get("gate_pass") is False]
+    gate_passed = [g for g in gates if g.get("gate_pass") is True]
+
     near_miss = [r for r in missed if (r["ratio"] or 0) >= 0.80]
 
     return {
@@ -341,6 +390,16 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
             "missed_ids": [r["id"] for r in trail_missed][:30],
             "median_trigger_pct": _med([r["trail_trigger_pct"] for r in trail_missed]),
             "median_actual_exit_pct": _med([r["exit_pct"] for r in trail_missed]),
+            # Почему пропуск случился. blocked_by_net_gate — гейт нетто считал
+            # выход по полу издержек на остатке и не пропустил; would_pass —
+            # гейт пропускал, значит причина в другом (порядок веток, тики).
+            "missed_blocked_by_net_gate": len(gate_blocked),
+            "missed_gate_would_pass": len(gate_passed),
+            "missed_gate_unknown": len(gates) - len(gate_blocked) - len(gate_passed),
+            "median_missed_remaining_notional_usdt": _med(
+                [g.get("remaining_notional_usdt") for g in gates]),
+            "median_missed_gate_net_usdt": _med([g.get("gate_net_usdt") for g in gates]),
+            "median_missed_market_net_usdt": _med([g.get("market_net_usdt") for g in gates]),
             "note": (
                 "Правило берётся из снимка конфига каждой сделки. in_force — "
                 "сделки, жившие при включённом трейле (с 03.09). condition_met — "
