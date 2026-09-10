@@ -878,6 +878,31 @@ class SignalLifecycleManager:
                 return
 
 
+    # Этапы, на которых часть позиции закрыта до финального выхода. Их
+    # реализованный результат и издержки обязаны войти в итог сделки.
+    _REALIZED_PARTS: tuple[str, ...] = ("tp1_partial", "tp2_partial")
+
+    @classmethod
+    def _realized_parts(cls, plan: dict) -> tuple[float | None, float | None]:
+        """Сумма реализованного net и издержек всех частичных закрытий.
+
+        None — частей не было: итог сделки тогда целиком из закрытия остатка.
+        Издержки каждой части посчитаны на её собственный объём (комиссия входа
+        и выхода на закрытую долю), так что сумма частей и остатка платит вход
+        ровно один раз.
+        """
+        net = cost = None
+        for key in cls._REALIZED_PARTS:
+            part = (plan or {}).get(key) or {}
+            try:
+                if part.get("net_pnl") is not None:
+                    net = (net or 0.0) + float(part["net_pnl"])
+                if part.get("total_cost") is not None:
+                    cost = (cost or 0.0) + float(part["total_cost"])
+            except (TypeError, ValueError):
+                continue
+        return net, cost
+
     @staticmethod
     def _post_tp1_lock_stop(side: str, entry: float, tp1: float,
                             current_stop: float, frac: float) -> float | None:
@@ -1486,15 +1511,17 @@ class SignalLifecycleManager:
 
             total_cost = None
 
-        # (#tp1-partial-2026-07-09) Итог сделки = закрытие остатка + реализованная
-        # на TP1 часть. Без этого частичная фиксация терялась в отчётности.
-        tp1_partial = (signal.plan_json or {}).get("tp1_partial") or {}
-        partial_net = tp1_partial.get("net_pnl")
+        # (#tp1-partial-2026-07-09) Итог сделки = закрытие остатка + реализованные
+        # части. Без этого частичная фиксация терялась в отчётности.
+        # (#tp2-partial-sum-2026-09-12) Складывалась только часть с TP1: этап
+        # TP2 (#progressive-tp2-2026-09-03) писал свой net и издержки в план, и
+        # в итог сделки они не попадали — лучшие сделки недосчитывались бы ровно
+        # на зафиксированную на TP2 долю.
+        partial_net, partial_cost = self._realized_parts(signal.plan_json or {})
         if partial_net is not None:
-            net_pnl = round(float(net_pnl or 0.0) + float(partial_net), 6)
-            partial_cost = tp1_partial.get("total_cost")
+            net_pnl = round(float(net_pnl or 0.0) + partial_net, 6)
             if partial_cost is not None:
-                total_cost = round(float(total_cost or 0.0) + float(partial_cost), 6)
+                total_cost = round(float(total_cost or 0.0) + partial_cost, 6)
             # Консистентность фронта: result_pct закрытия считался по ОСТАТКУ
             # позиции и противоречил бы суммарному net (Result% мал, Net велик).
             # Пересчитываем % от исходной маржи сделки — та же семантика, что
