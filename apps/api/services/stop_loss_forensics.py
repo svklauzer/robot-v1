@@ -52,6 +52,21 @@ B. Поэтому в разбор добавлены поля самой зап�
 между собой там, где вердикт одинаков у всех, и считается по всей истории: свои
 входные числа гейт писал задолго до того, как начал писать вердикт.
 
+Второй исход: дошла ли сделка до TP1 (11.09)
+-------------------------------------------
+`outcome=tp1` делит те же сделки иначе — дошла ли цена до TP1 (MFE ≥ дистанции
+TP1, тот же признак, что в отчёте после TP1). Вопрос перед гейтом на TP1: до
+TP1 доходят 22% сделок при безубыточных ~43–46%, и гейт имеет смысл, только
+если на входе есть признак, отличающий дошедших. Первым в этом ряду стоит
+`tp_reach.tp1_hit_rate` — измеренная частота TP1 для символа и режима на
+дистанции TP1 самой сделки, то есть ровно то, по чему такой гейт и судил бы.
+Его AUC и есть избирательность будущего гейта. Гейт по TP2 этого замера не
+проходил: он останавливал 27 сделок из 27, и стопы у остановленных были на
+уровне базы.
+
+У AUC теперь есть 95% интервал (Hanley–McNeil), у долей по уровням — Уилсона:
+на 100 против 370 сделок пороги «0.40–0.60» слишком грубы в обе стороны.
+
 Оговорка о выборке
 ------------------
 37 против 54 — это мало. AUC в пределах 0.40–0.60 здесь не значит ничего, и
@@ -64,10 +79,39 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+import math
+
 from models.signal import Signal
 from services.phantom_fill import phantom_adjustment
+from services.tp1_overshoot import _entry_price, _tp1_dist_pct
 
 STOP_REASON = "stop_loss"
+
+# Исход, по которому делятся сделки: (группа события, остальные, ключ доли).
+# Для stop ключи прежние — на них построены команды разбора.
+_OUTCOMES: dict[str, tuple[str, str, str]] = {
+    "stop": ("stopped", "survived", "stop_rate"),
+    "tp1": ("reached", "not_reached", "reach_rate"),
+}
+
+
+def _reached_tp1(signal: Signal) -> bool | None:
+    """Дошла ли цена до TP1 — тем же признаком, что в отчёте после TP1.
+
+    Два отчёта по одним и тем же сделкам обязаны давать одно число, поэтому
+    вход и дистанция берутся из тех же функций. Нет траектории — None: сделка
+    не угадывается ни в одну из групп.
+    """
+    plan = signal.plan_json or {}
+    lifecycle = plan.get("lifecycle") or {}
+    mfe = _num(lifecycle.get("mfe_pct"))
+    entry = _entry_price(signal, lifecycle)
+    if mfe is None or not entry:
+        return None
+    dist = _tp1_dist_pct(signal, entry)
+    if dist is None:
+        return None
+    return mfe >= dist
 
 
 def _honest_net(signal: Signal) -> float:
@@ -137,6 +181,10 @@ _NUMERIC: tuple[tuple[str, str], ...] = (
     # экономика плана и ML
     ("ml.ml_score", "ML score"),
     ("tp_reach.tp1_dist_pct", "дистанция до TP1"),
+    # (#tp1-forensics-2026-09-11) Частота TP1 для символа и режима на дистанции
+    # TP1 этой сделки, измеренная по сделкам, закрытым ДО входа. Её разделение
+    # по исходу tp1 — избирательность гейта на TP1, если строить его на ней.
+    ("tp_reach.tp1_hit_rate", "измеренная частота достижения TP1"),
     ("tp_reach.tp2_dist_pct", "дистанция до TP2"),
     # (#tp-reach-margin-2026-09-07) Запас гейта достижимости: насколько
     # измеренная частота достижения TP2 выше требуемой. Ноль — ровно порог,
@@ -165,6 +213,7 @@ _CATEGORICAL: tuple[tuple[str, str], ...] = (
     # компонент structure работает в обратную сторону, и разбор по стороне —
     # прямая проверка этой гипотезы.
     ("signal.side", "сторона сделки"),
+    ("signal.symbol", "символ"),
     ("trade_mode", "режим сделки"),
     ("regime", "режим рынка"),
     ("entry_reason", "причина входа"),
@@ -282,6 +331,29 @@ def _auc(a: list[float], b: list[float]) -> float | None:
     return wins / (len(a) * len(b))
 
 
+def _auc_ci(auc: float, n1: int, n2: int, z: float = 1.96) -> tuple[float, float]:
+    """95% интервал AUC по Hanley–McNeil (1982). Для малых выборок грубоват,
+    но честнее фиксированных порогов: на 100 против 370 сделок полоса
+    «0.40–0.60 ничего не значит» слишком широка, на 20 против 20 — узка."""
+    q1 = auc / (2.0 - auc)
+    q2 = 2.0 * auc * auc / (1.0 + auc)
+    var = (auc * (1 - auc) + (n1 - 1) * (q1 - auc * auc)
+           + (n2 - 1) * (q2 - auc * auc)) / float(n1 * n2)
+    se = math.sqrt(max(var, 0.0))
+    return max(0.0, auc - z * se), min(1.0, auc + z * se)
+
+
+def _wilson(k: int, n: int, z: float = 1.96) -> list[float] | None:
+    """95% интервал Уилсона для доли k/n."""
+    if n <= 0:
+        return None
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
 def _oriented(value: float, side: str) -> float:
     """Приводит знаковый признак к виду «больше — благоприятнее для сделки»."""
     return value if str(side).lower() == "long" else -value
@@ -289,7 +361,10 @@ def _oriented(value: float, side: str) -> float:
 
 def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None,
           side: str | None = None, max_rows: int = 4000,
-          min_group: int = 5) -> dict:
+          min_group: int = 5, outcome: str = "stop") -> dict:
+    if outcome not in _OUTCOMES:
+        raise ValueError(f"unknown outcome {outcome!r}; expected one of {sorted(_OUTCOMES)}")
+    a_name, b_name, rate_key = _OUTCOMES[outcome]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(window_hours))
 
     query = db.query(Signal).filter(
@@ -301,16 +376,25 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
 
     stopped: list[Signal] = []
     survived: list[Signal] = []
+    skipped = 0
     for s in rows:
         plan = s.plan_json or {}
         if regime and str(plan.get("regime") or "") != regime:
             continue
         if side and str(s.side or "").lower() != str(side).lower():
             continue
-        (stopped if str(s.closed_reason or "") == STOP_REASON else survived).append(s)
+        if outcome == "tp1":
+            hit = _reached_tp1(s)
+            if hit is None:
+                skipped += 1
+                continue
+        else:
+            hit = str(s.closed_reason or "") == STOP_REASON
+        (stopped if hit else survived).append(s)
 
+    names = (a_name, b_name)
     numeric = [
-        _numeric_row(path, label, stopped, survived, min_group)
+        _numeric_row(path, label, stopped, survived, min_group, names)
         for path, label in _NUMERIC
     ]
     numeric = [r for r in numeric if r is not None]
@@ -318,17 +402,24 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
     numeric.sort(key=lambda r: abs(r["auc"] - 0.5), reverse=True)
 
     categorical = [
-        _categorical_row(path, label, stopped, survived)
+        _categorical_row(path, label, stopped, survived, names, rate_key)
         for path, label in _CATEGORICAL
     ]
     categorical = [r for r in categorical if r is not None]
 
+    total = len(stopped) + len(survived)
     return {
         "window_hours": float(window_hours),
         "regime": regime,
         "side": side,
-        "stopped": _group_summary(stopped),
-        "survived": _group_summary(survived),
+        "outcome": outcome,
+        a_name: _group_summary(stopped),
+        b_name: _group_summary(survived),
+        # Доля группы события во всей выборке — база, с которой сравниваются
+        # доли по уровням категориальных признаков.
+        "base_rate": round(len(stopped) / total, 4) if total else None,
+        "base_rate_ci": _wilson(len(stopped), total),
+        "skipped_no_trajectory": skipped,
         "numeric": numeric,
         "categorical": categorical,
         "note": (
@@ -345,7 +436,12 @@ def build(db: Session, *, window_hours: float = 720.0, regime: str | None = None
             "TP2 минус требуемая, с учётом ветви спасения по нецензурированной): "
             "минус означает, что гейт остановил бы вход. Он заведён взамен "
             "разреза по tp_reach.would_block, который вырожден — 07.09 вердикт "
-            "«остановил бы» стоял у восьми последних сделок из восьми."
+            "«остановил бы» стоял у восьми последних сделок из восьми. "
+            "outcome=tp1 делит сделки по достижению TP1 (MFE ≥ дистанции TP1): "
+            "auc > 0.5 — у дошедших значение выше. auc_ci — 95% интервал "
+            "Hanley–McNeil; признак что-то значит, только если интервал не "
+            "накрывает 0.5. tp_reach.tp1_hit_rate — то, по чему судил бы гейт "
+            "на TP1: его auc и есть избирательность такого гейта."
         ),
     }
 
@@ -360,7 +456,8 @@ def _group_summary(signals: list[Signal]) -> dict:
 
 
 def _numeric_row(path: str, label: str, stopped: list[Signal],
-                 survived: list[Signal], min_group: int) -> dict | None:
+                 survived: list[Signal], min_group: int,
+                 names: tuple[str, str] = ("stopped", "survived")) -> dict | None:
     def collect(items: list[Signal]) -> list[float]:
         out: list[float] = []
         for s in items:
@@ -388,32 +485,39 @@ def _numeric_row(path: str, label: str, stopped: list[Signal],
         else "indistinguishable"
     )
 
+    lo, hi = _auc_ci(auc, len(a), len(b))
+    ev, rest = names
     return {
         "feature": path,
         "label": label,
-        "n_stopped": len(a),
-        "n_survived": len(b),
-        "median_stopped": round(_median(a), 6),
-        "median_survived": round(_median(b), 6),
+        f"n_{ev}": len(a),
+        f"n_{rest}": len(b),
+        f"median_{ev}": round(_median(a), 6),
+        f"median_{rest}": round(_median(b), 6),
         "auc": round(auc, 4),
-        # >0.5 — у стопнутых значение ВЫШЕ; <0.5 — ниже.
-        "higher_in": "stopped" if auc > 0.5 else "survived",
+        "auc_ci": [round(lo, 4), round(hi, 4)],
+        "ci_excludes_half": hi < 0.5 or lo > 0.5,
+        # >0.5 — у группы события значение ВЫШЕ; <0.5 — ниже.
+        "higher_in": ev if auc > 0.5 else rest,
         "verdict": verdict,
     }
 
 
 def _categorical_row(path: str, label: str, stopped: list[Signal],
-                     survived: list[Signal]) -> dict | None:
+                     survived: list[Signal],
+                     names: tuple[str, str] = ("stopped", "survived"),
+                     rate_key: str = "stop_rate") -> dict | None:
     levels: dict[str, dict] = {}
+    ev, rest = names
 
-    for group, items in (("stopped", stopped), ("survived", survived)):
+    for group, items in ((ev, stopped), (rest, survived)):
         for s in items:
             plan = s.plan_json or {}
             raw = _value(s, plan, path)
             if raw is None:
                 continue
             key = str(raw)
-            slot = levels.setdefault(key, {"stopped": 0, "survived": 0, "net_usdt": 0.0})
+            slot = levels.setdefault(key, {ev: 0, rest: 0, "net_usdt": 0.0})
             slot[group] += 1
             slot["net_usdt"] = round(slot["net_usdt"] + _honest_net(s), 6)
 
@@ -421,9 +525,10 @@ def _categorical_row(path: str, label: str, stopped: list[Signal],
         return None
 
     for slot in levels.values():
-        total = slot["stopped"] + slot["survived"]
+        total = slot[ev] + slot[rest]
         slot["n"] = total
-        slot["stop_rate"] = round(slot["stopped"] / total, 4) if total else None
+        slot[rate_key] = round(slot[ev] / total, 4) if total else None
+        slot[f"{rate_key}_ci"] = _wilson(slot[ev], total)
 
     return {
         "feature": path,
