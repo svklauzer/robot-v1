@@ -336,3 +336,20 @@ def test_without_a_partial_the_gate_sees_the_whole_position(db):
     assert gate["notional_source"] == "full_position"
     assert gate["remaining_notional_usdt"] == pytest.approx(200.0)
     assert out["post_tp1_trail"]["missed_gate_would_pass"] == 1
+
+
+def test_a_snapshot_without_fee_gets_it_from_the_trade_cost(db):
+    """С 02.09 снимок писался без ставки (#snapshot-fee-2026-09-11). Круг
+    издержек сделки 0.28 / 200 = 0.14% → ставка (0.0014 − 0.0002)/2 = 0.0006,
+    это swap → пол 0.30, а не записанный по ошибке спотовый 0.60.
+    Нетто гейта: 100·(0.0030 − 0.0014) = 0.16 < 0.25 — выход запрещён."""
+    _sig(db, tp1_pct=0.73, mfe=1.98, exit_pct=0.05, traj=_DIP,
+         market={"taker_fee": None, "slippage_buffer_pct": 0.0002})
+
+    gate = build(db)["trades"][0]["trail_gate"]
+
+    assert gate["fee_source"] == "derived_from_trade_cost"
+    assert gate["fee_rate"] == pytest.approx(0.0006)
+    assert gate["gate_booked_pct"] == pytest.approx(0.30)
+    assert gate["gate_net_usdt"] == pytest.approx(0.16, abs=1e-4)
+    assert gate["gate_pass"] is False

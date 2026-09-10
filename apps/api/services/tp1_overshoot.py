@@ -79,13 +79,19 @@ def _tp1_dist_pct(signal: Signal, entry: float) -> float | None:
     return dist if dist > 0 else None
 
 
-def _cost_pct(signal: Signal, entry: float) -> float:
-    """Круг издержек в % номинала. Нет данных — типичный круг swap."""
+def _actual_cost_pct(signal: Signal, entry: float) -> float | None:
+    """Фактический круг издержек сделки в % номинала; None — данных нет."""
     cost = _num(signal.closed_total_cost)
     qty = _num(signal.qty) or _num((signal.plan_json or {}).get("qty"))
     if cost and qty and entry > 0:
         return cost / (qty * entry) * 100.0
-    return 0.14
+    return None
+
+
+def _cost_pct(signal: Signal, entry: float) -> float:
+    """Круг издержек в % номинала. Нет данных — типичный круг swap."""
+    actual = _actual_cost_pct(signal, entry)
+    return actual if actual is not None else 0.14
 
 
 def _remaining_share(plan: dict) -> float:
@@ -145,7 +151,8 @@ def _retests_tp1(traj: list, tp1_dist: float) -> bool:
 
 
 def _trail_gate(plan: dict, entry: float, trig_pct: float,
-                full_qty: float | None = None) -> dict:
+                full_qty: float | None = None,
+                actual_cost_pct: float | None = None) -> dict:
     """Экономический гейт трейла после TP1, воспроизведённый по снимку сделки.
 
     (#tp1-trail-gate-2026-09-10) Ветка `post_tp1_giveback_trail` закрывает
@@ -167,6 +174,17 @@ def _trail_gate(plan: dict, entry: float, trig_pct: float,
     fee = _num(market.get("taker_fee"))
     slip = _num(market.get("slippage_buffer_pct"))
     floor = _num(cfg_exit.get("net_safe_floor_pct"))
+    out["fee_source"] = "snapshot"
+    if fee is None and slip is not None and actual_cost_pct is not None:
+        # (#snapshot-fee-2026-09-11) С 02.09 снимок писался без ставки, а пол
+        # издержек — по споту при любом рынке. Ставка восстанавливается из
+        # фактических издержек сделки (круг = 2·ставка + проскальзывание), пол
+        # пересчитывается по ней: записанный 0.60 для swap неверен.
+        fee = max((actual_cost_pct / 100.0 - slip) / 2.0, 0.0)
+        floor = float(getattr(settings, "NET_SAFE_FLOOR_SWAP_PCT", 0.30) if fee <= 0.001
+                      else getattr(settings, "NET_SAFE_FLOOR_SPOT_PCT", 0.60))
+        out["fee_source"] = "derived_from_trade_cost"
+    out["fee_rate"] = round(fee, 6) if fee is not None else None
     min_net = _num(cfg_exit.get("min_protective_net_usdt"))
     # Без частичной фиксации position.qty не уменьшался, и гейт видел ВСЮ
     # позицию — так же считает `_position_notional_usdt` в ведении.
@@ -259,7 +277,8 @@ def _analyse(signal: Signal) -> dict | None:
 
     if trig_pct is not None:
         row["trail_gate"] = _trail_gate(plan, entry, trig_pct,
-                                        full_qty=_num(signal.qty) or _num(plan.get("qty")))
+                                        full_qty=_num(signal.qty) or _num(plan.get("qty")),
+                                        actual_cost_pct=_actual_cost_pct(signal, entry))
     row["tp1_retest"] = _retests_tp1(traj, tp1_dist)
     # Частичная фиксация была включена в момент входа, а записи о ней нет —
     # значит, на TP1 она не исполнилась, и TP1 ничего не зафиксировал.
