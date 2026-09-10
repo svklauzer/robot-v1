@@ -377,3 +377,18 @@ def test_the_lock_curve_trades_protection_for_runners(db):
     assert max(curve, key=curve.get) == 0.5
     # Точка 1.0 кривой — та же альтернатива «стоп на TP1».
     assert curve[1.0] == pytest.approx(cf["partial_then_stop_at_tp1"]["sum_pct"], abs=1e-6)
+
+
+def test_the_pessimistic_bound_counts_a_dip_within_one_step_as_a_touch(db):
+    """Бегун откатился до 1.03 при TP1 = 1.0 и ушёл на TP2. Траектория пишет
+    точку каждые 0.05%, так что настоящий минимум мог быть 0.98 — ниже TP1.
+    Оптимистично стоп на TP1 бегуна не задел, пессимистично — задел."""
+    _sig(db, tp1_pct=1.0, mfe=2.5, exit_pct=2.5, reason="tp2_reached",
+         traj=[[0, 0], [10, 1.0], [20, 1.6], [30, 1.03], [40, 2.5]])
+
+    cf = build(db)["counterfactuals"]
+    top = next(c for c in cf["lock_curve"] if c["lock_frac_of_tp1"] == 1.0)
+
+    assert top["vs_actual_pct"] == pytest.approx(0.0, abs=1e-6)
+    # 0.5 остатка теряют 2.5 − 1.0 = 1.5 → −0.75.
+    assert top["vs_actual_pessimistic_pct"] == pytest.approx(-0.75, abs=1e-6)

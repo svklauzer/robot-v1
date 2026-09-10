@@ -137,6 +137,8 @@ def snapshot(
             "post_tp1_trail_enabled": bool(_g("POST_TP1_TRAIL_ENABLED", False)),
             "post_tp1_trail_min_mfe_pct": float(_g("POST_TP1_TRAIL_MIN_MFE_PCT", 0)),
             "post_tp1_trail_giveback_share": float(_g("POST_TP1_TRAIL_GIVEBACK_SHARE", 0)),
+            # (#post-tp1-lock-2026-09-11) Уровень стопа остатка после TP1.
+            "post_tp1_lock_frac": float(_g("POST_TP1_LOCK_FRAC", 0)),
             "exit_require_flow_confirm": bool(_g("EXIT_REQUIRE_FLOW_CONFIRM", True)),
         },
         # ── защиты и фильтры ────────────────────────────────────────────────

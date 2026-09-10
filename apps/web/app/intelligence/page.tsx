@@ -110,6 +110,7 @@ const IMPORTANT_DECISIONS = [
   // было — то есть достижение TP1 и выход в безубыток лента не показывала.
   "tp1_reached",
   "breakeven_stop",
+  "post_tp1_lock_stop",
   "signal_expired",
   "position_already_open",
 ];

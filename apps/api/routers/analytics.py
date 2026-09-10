@@ -647,7 +647,7 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
         items = []
 
         trailing_reasons = {"protective_trailing_stop", "adaptive_trailing_stop", "trend_trailing_stop"}
-        post_tp1_reasons = {"adaptive_post_tp1_stop"}
+        post_tp1_reasons = {"adaptive_post_tp1_stop", "post_tp1_lock_stop"}
         mfe_capture_reasons = {"adaptive_mfe_capture"}
 
         for s in signals:
