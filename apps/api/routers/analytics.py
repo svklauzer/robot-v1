@@ -266,6 +266,26 @@ def analytics_stop_forensics(window_hours: float = 720.0, regime: str | None = N
         db.close()
 
 
+@router.get("/stop-width", dependencies=[Depends(require_owner_action)])
+def analytics_stop_width(window_hours: float = 2160.0, trade_mode: str | None = None,
+                         side: str | None = None, max_rows: int = 4000):
+    """(#stop-width-2026-09-12) Не слишком ли далеко стоит стоп.
+
+    Гейт на TP1 не прошёл проверку: лучшая когорта доходит до TP1 в 38% и всё
+    равно в минусе — стоп стоит дальше цели. Здесь каждая сделка проигрывается
+    по своей траектории со стопом на доле k нынешней дистанции (первое событие
+    до TP1 решает). Ничего не меняет — только показания.
+    """
+    from services.stop_width_curve import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, trade_mode=trade_mode,
+                     side=side, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/tp1-conditional", dependencies=[Depends(require_owner_action)])
 def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geometric",
                               max_rows: int = 4000):
