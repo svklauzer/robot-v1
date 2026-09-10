@@ -353,3 +353,27 @@ def test_a_snapshot_without_fee_gets_it_from_the_trade_cost(db):
     assert gate["gate_booked_pct"] == pytest.approx(0.30)
     assert gate["gate_net_usdt"] == pytest.approx(0.16, abs=1e-4)
     assert gate["gate_pass"] is False
+
+
+# ── кривая уровня стопа остатка ─────────────────────────────────────────────
+
+def test_the_lock_curve_trades_protection_for_runners(db):
+    """Две сделки, TP1 = 1.0, половина зафиксирована.
+    Бегун: после TP1 откат до 0.6 и уход на TP2 2.5 — уровни 0.75 и 1.0 его
+    срезают. Отдавший: пик 1.5 и безубыток 0.07 — любой уровень выше нуля его
+    спасает. Лучший уровень — 0.5: спасает отдавшего и не трогает бегуна.
+    """
+    _sig(db, tp1_pct=1.0, mfe=2.5, exit_pct=2.5, reason="tp2_reached",
+         traj=[[0, 0], [10, 1.0], [20, 1.6], [30, 0.6], [40, 2.5]])
+    _sig(db, tp1_pct=1.0, mfe=1.5, exit_pct=0.07,
+         traj=[[0, 0], [10, 1.0], [20, 1.5], [30, 0.07]])
+
+    cf = build(db)["counterfactuals"]
+    curve = {c["lock_frac_of_tp1"]: c["sum_pct"] for c in cf["lock_curve"]}
+
+    assert curve[0.0] == pytest.approx(1.61 + 0.395, abs=1e-3)
+    assert curve[0.5] == pytest.approx(1.61 + 0.61, abs=1e-3)
+    assert curve[0.75] == pytest.approx(0.735 + 0.735, abs=1e-3)
+    assert max(curve, key=curve.get) == 0.5
+    # Точка 1.0 кривой — та же альтернатива «стоп на TP1».
+    assert curve[1.0] == pytest.approx(cf["partial_then_stop_at_tp1"]["sum_pct"], abs=1e-6)

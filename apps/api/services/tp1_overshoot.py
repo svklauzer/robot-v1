@@ -43,6 +43,11 @@ _BUCKETS: tuple[tuple[str, float, float], ...] = (
     ("2.00+", 2.00, float("inf")),
 )
 
+# Уровни стопа остатка после TP1 в долях дистанции TP1: 0 — вход (как нынешний
+# безубыток), 1 — сам TP1. Кривая, а не одна точка: выбирать уровень по
+# единственному варианту значит подогнать его под историю.
+_LOCK_FRACS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+
 # Около безубытка остаток «вернулся в ноль». Порог — круг издержек с запасом,
 # а не ноль: закрытие на +0.05% экономически то же, что на нуле.
 _BE_EPS_PCT = 0.20
@@ -148,6 +153,23 @@ def _retests_tp1(traj: list, tp1_dist: float) -> bool:
         if pct < tp1_dist:
             return True
     return False
+
+
+def _low_after_tp1(traj: list, tp1_dist: float) -> float | None:
+    """Минимум траектории после первого пересечения TP1 — по нему видно, какой
+    уровень стопа остатка был бы задет, а какой нет."""
+    crossed = False
+    low = None
+    for point in traj or []:
+        try:
+            pct = float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not crossed:
+            crossed = pct >= tp1_dist
+            continue
+        low = pct if low is None else min(low, pct)
+    return low
 
 
 def _trail_gate(plan: dict, entry: float, trig_pct: float,
@@ -280,6 +302,8 @@ def _analyse(signal: Signal) -> dict | None:
                                         full_qty=_num(signal.qty) or _num(plan.get("qty")),
                                         actual_cost_pct=_actual_cost_pct(signal, entry))
     row["tp1_retest"] = _retests_tp1(traj, tp1_dist)
+    low = _low_after_tp1(traj, tp1_dist)
+    row["low_after_tp1_pct"] = round(low, 4) if low is not None else None
     # Частичная фиксация была включена в момент входа, а записи о ней нет —
     # значит, на TP1 она не исполнилась, и TP1 ничего не зафиксировал.
     row["partial_expected"] = cfg_exit.get("tp1_partial_enabled") is True
@@ -310,6 +334,7 @@ def _counterfactuals(rows: list[dict]) -> dict:
     оплачен один раз, доли выходов в сумме — единица.
     """
     actual, all_at_tp1, honest_trail, lock_tp1 = [], [], [], []
+    curve: dict[float, list[float]] = {f: [] for f in _LOCK_FRACS}
     for r in rows:
         if r.get("exit_pct") is None:
             continue
@@ -335,6 +360,14 @@ def _counterfactuals(rows: list[dict]) -> dict:
         rest_lock = tp1 if r.get("tp1_retest") else max(exit_, tp1)
         lock_tp1.append(booked * tp1 + rest * rest_lock - cost)
 
+        # Стоп остатка на доле f дистанции TP1: задет, если после TP1 цена
+        # опускалась ниже уровня, — тогда закрытие на уровне, иначе факт.
+        low = r.get("low_after_tp1_pct")
+        for f in _LOCK_FRACS:
+            level = f * tp1
+            hit = low is not None and low < level
+            curve[f].append(booked * tp1 + rest * (level if hit else max(exit_, level)) - cost)
+
     def _pack(values: list[float]) -> dict:
         return {
             "n": len(values),
@@ -342,11 +375,21 @@ def _counterfactuals(rows: list[dict]) -> dict:
             "mean_pct": round(sum(values) / len(values), 4) if values else None,
         }
 
+    actual_sum = sum(actual)
+    lock_curve = [
+        {"lock_frac_of_tp1": f, **_pack(vals),
+         "vs_actual_pct": round(sum(vals) - actual_sum, 4)}
+        for f, vals in curve.items()
+    ]
+
     return {
         "actual": _pack(actual),
         "all_out_at_tp1": _pack(all_at_tp1),
         "partial_then_trail_at_market": _pack(honest_trail),
         "partial_then_stop_at_tp1": _pack(lock_tp1),
+        # Шаг траектории 0.05% цены: откат глубже шага виден, мельче — нет,
+        # поэтому высокие уровни чуть оптимистичны (исполнение ровно по уровню).
+        "lock_curve": lock_curve,
         "note": (
             "Все варианты в % номинала за вычетом одного круга издержек, на одних "
             "и тех же сделках, дошедших до TP1. Первое событие по траектории "
