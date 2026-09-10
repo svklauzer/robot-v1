@@ -159,18 +159,31 @@ def _analyse(signal: Signal) -> dict | None:
         return row
 
     traj = lifecycle.get("traj") or []
-    trig_pct, trig_peak = _trail_trigger(
-        traj, tp1_dist,
-        min_mfe=float(getattr(settings, "POST_TP1_TRAIL_MIN_MFE_PCT", 0.60)),
-        share=float(getattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.40)),
-    )
+
+    # (#tp1-overshoot-2026-09-10) Правило берётся из СНИМКА КОНФИГА самой
+    # сделки, а не из текущих настроек. Трейл после TP1 появился 03.09 вечером:
+    # проверять его на сделках, для которых его ещё не существовало, значило бы
+    # насчитать «неотработавшую ветку» там, где ветки не было. Так и вышло в
+    # первой версии отчёта — четыре из шести «пропусков» в ленте закрылись до
+    # 03.09.
+    cfg_exit = ((plan.get("config") or {}).get("exit") or {})
+    trail_in_force = cfg_exit.get("post_tp1_trail_enabled") is True
+    min_mfe = _num(cfg_exit.get("post_tp1_trail_min_mfe_pct"))
+    share = _num(cfg_exit.get("post_tp1_trail_giveback_share"))
+    if min_mfe is None:
+        min_mfe = float(getattr(settings, "POST_TP1_TRAIL_MIN_MFE_PCT", 0.60))
+    if share is None:
+        share = float(getattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.40))
+
+    trig_pct, trig_peak = _trail_trigger(traj, tp1_dist, min_mfe=min_mfe, share=share)
+    row["trail_in_force"] = trail_in_force
     row["trail_trigger_pct"] = round(trig_pct, 4) if trig_pct is not None else None
     row["trail_trigger_peak"] = round(trig_peak, 4) if trig_peak is not None else None
     row["trail_fired"] = row["reason"] == "post_tp1_giveback_trail"
-    # Условие наступило, а закрылась сделка иначе — и не лучше, чем дал бы
-    # трейл. Закрытия ЗА TP2 сюда не относятся: там своя лестница.
+    # Условие наступило, правило было в силе, а закрылась сделка иначе — и хуже,
+    # чем дал бы трейл. Закрытия ЗА TP2 сюда не относятся: там своя лестница.
     row["trail_missed"] = bool(
-        trig_pct is not None and not row["trail_fired"]
+        trail_in_force and trig_pct is not None and not row["trail_fired"]
         and not row["reason"].startswith("tp2")
         and honest_exit is not None and honest_exit < trig_pct
     )
@@ -281,9 +294,10 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
     for r in reached:
         reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
 
-    trail_eligible = [r for r in reached if r.get("trail_trigger_pct") is not None]
-    trail_fired = [r for r in reached if r.get("trail_fired")]
-    trail_missed = [r for r in reached if r.get("trail_missed")]
+    in_force = [r for r in reached if r.get("trail_in_force")]
+    trail_eligible = [r for r in in_force if r.get("trail_trigger_pct") is not None]
+    trail_fired = [r for r in in_force if r.get("trail_fired")]
+    trail_missed = [r for r in in_force if r.get("trail_missed")]
 
     near_miss = [r for r in missed if (r["ratio"] or 0) >= 0.80]
 
@@ -317,6 +331,10 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
         "post_tp1_trail": {
             "min_mfe_pct": float(getattr(settings, "POST_TP1_TRAIL_MIN_MFE_PCT", 0.60)),
             "giveback_share": float(getattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.40)),
+            # Сколько дошедших до TP1 сделок вообще жили при включённом трейле.
+            # Остальные закрыты до 03.09 и в пропуски не засчитываются.
+            "in_force": len(in_force),
+            "not_yet_in_force": len(reached) - len(in_force),
             "condition_met": len(trail_eligible),
             "fired": len(trail_fired),
             "missed": len(trail_missed),
@@ -324,10 +342,12 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
             "median_trigger_pct": _med([r["trail_trigger_pct"] for r in trail_missed]),
             "median_actual_exit_pct": _med([r["exit_pct"] for r in trail_missed]),
             "note": (
-                "condition_met — после TP1 наступило условие трейла (пик ≥ "
-                "min_mfe, откат ≥ share·пик). missed — условие наступило, а сделка "
-                "закрылась иначе и хуже: ветка выхода не отработала. Цена "
-                "срабатывания — рынок в тот момент, где реальный стоп исполнился бы."
+                "Правило берётся из снимка конфига каждой сделки. in_force — "
+                "сделки, жившие при включённом трейле (с 03.09). condition_met — "
+                "после TP1 наступило условие трейла (пик ≥ min_mfe, откат ≥ "
+                "share·пик). missed — условие наступило, а сделка закрылась иначе "
+                "и хуже: ветка выхода не отработала. Цена срабатывания — рынок в "
+                "тот момент, где реальный стоп исполнился бы."
             ),
         },
         "counterfactuals": _counterfactuals(reached),
