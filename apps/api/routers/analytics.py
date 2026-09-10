@@ -285,6 +285,27 @@ def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geomet
         db.close()
 
 
+@router.get("/tp1-overshoot", dependencies=[Depends(require_owner_action)])
+def analytics_tp1_overshoot(window_hours: float = 720.0, side: str | None = None,
+                            max_rows: int = 4000):
+    """(#tp1-overshoot-2026-09-10) Что происходит с позицией ПОСЛЕ TP1.
+
+    Перед постройкой гейта на TP1: как часто сделка перешагивает TP1, насколько
+    далеко уходит, сколько потом отдаёт — и отрабатывает ли трейл после TP1,
+    когда его условие наступает. Считается по траектории сделки, а не по
+    итоговым полям.
+
+    Ничего не блокирует и не меняет — только показания.
+    """
+    from services.tp1_overshoot import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, side=side, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/entry-gate-census", dependencies=[Depends(require_owner_action)])
 def analytics_entry_gate_census(window_hours: float = 24.0, max_rows: int = 20000):
     """(#entry-gate-census-2026-09-04) Что на самом деле не пускает входы.
