@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
@@ -36,10 +37,38 @@ from services.ml_trade_logger import MLTradeLogger
 from services.ml_controller import MLController
 from services.decision_event_service import DecisionEventService
 from services.decision_config import snapshot as config_snapshot
+from services.exit_policy import ExitPolicyService
+from core.logging import log_event
 
 from models.signal import Signal
 from models.position import Position
 from models.intelligence_event import IntelligenceEvent
+
+logger = logging.getLogger(__name__)
+
+
+def _snapshot_fee_rate(symbol: str, market_type: str | None,
+                       exchange: str | None) -> float | None:
+    """Ставка тейкера для снимка конфига сделки — по бирже, где она откроется.
+
+    (#snapshot-fee-2026-09-11) С 02.09 (b12cd8a) у SignalLifecycleManager нет
+    общего `exit_policy`: клиент биржи резолвится на каждый сигнал. Снимок
+    продолжал звать `self.lifecycle.exit_policy._fee_rate`, AttributeError
+    глотался молча — и у каждой сделки с 02.09 в снимке taker_fee=None,
+    round_trip_pct=None, а net_safe_floor_pct записан по споту (0.60) даже для
+    swap. Решения это не задевало — ведение считает ставку само, — но записи
+    о сделках врали, и воспроизвести по ним гейт выхода было нельзя.
+    Отказ теперь пишется в лог, а не исчезает.
+    """
+    try:
+        rate, _ = ExitPolicyService(exchange=exchange)._fee_rate(symbol, market_type)
+        return float(rate)
+    except Exception as exc:  # noqa: BLE001 — снимок не должен ронять цикл
+        log_event(logger, logging.WARNING, "config_snapshot_fee_unavailable",
+                  symbol=symbol, market_type=market_type, exchange=exchange,
+                  error_type=type(exc).__name__, error=str(exc))
+        return None
+
 
 class RobotLoop:
     def __init__(self):
@@ -1319,12 +1348,9 @@ class RobotLoop:
             # сигнала — снимок обязан описывать решение, а не более поздний
             # конфиг.
             _routing = plan.routing or {}
-            try:
-                _fee_rate, _ = self.lifecycle.exit_policy._fee_rate(
-                    symbol, _routing.get("market_type")
-                )
-            except Exception:  # noqa: BLE001 — снимок не должен ронять цикл
-                _fee_rate = None
+            _fee_rate = _snapshot_fee_rate(
+                symbol, _routing.get("market_type"), settings.active_exchange
+            )
             _decision_config = config_snapshot(
                 market_type=str(_routing.get("market_type") or ""),
                 fee_rate=_fee_rate,
