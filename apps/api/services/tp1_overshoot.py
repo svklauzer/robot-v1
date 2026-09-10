@@ -122,7 +122,30 @@ def _trail_trigger(traj: list, tp1_dist: float, *, min_mfe: float,
     return None, None
 
 
-def _trail_gate(plan: dict, entry: float, trig_pct: float) -> dict:
+def _retests_tp1(traj: list, tp1_dist: float) -> bool:
+    """Вернулась ли цена ниже TP1 после того, как его пересекла.
+
+    Нужна альтернативе «стоп остатка на TP1»: такой стоп закрывает остаток на
+    ПЕРВОМ возврате к TP1, даже если потом цена ушла к TP2. Без этого
+    альтернатива приписывает себе и защиту от отката, и весь последующий ход —
+    то есть выигрывает у факта по построению.
+    """
+    crossed = False
+    for point in traj or []:
+        try:
+            pct = float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not crossed:
+            crossed = pct >= tp1_dist
+            continue
+        if pct < tp1_dist:
+            return True
+    return False
+
+
+def _trail_gate(plan: dict, entry: float, trig_pct: float,
+                full_qty: float | None = None) -> dict:
     """Экономический гейт трейла после TP1, воспроизведённый по снимку сделки.
 
     (#tp1-trail-gate-2026-09-10) Ветка `post_tp1_giveback_trail` закрывает
@@ -145,7 +168,11 @@ def _trail_gate(plan: dict, entry: float, trig_pct: float) -> dict:
     slip = _num(market.get("slippage_buffer_pct"))
     floor = _num(cfg_exit.get("net_safe_floor_pct"))
     min_net = _num(cfg_exit.get("min_protective_net_usdt"))
-    rest_qty = _num((plan.get("tp1_partial") or {}).get("remaining_qty"))
+    # Без частичной фиксации position.qty не уменьшался, и гейт видел ВСЮ
+    # позицию — так же считает `_position_notional_usdt` в ведении.
+    partial = plan.get("tp1_partial") or {}
+    rest_qty = _num(partial.get("remaining_qty")) if partial else _num(full_qty)
+    out["notional_source"] = "remainder_after_partial" if partial else "full_position"
     if None in (fee, slip, floor, min_net, rest_qty) or rest_qty <= 0:
         return out
 
@@ -231,7 +258,12 @@ def _analyse(signal: Signal) -> dict | None:
     )
 
     if trig_pct is not None:
-        row["trail_gate"] = _trail_gate(plan, entry, trig_pct)
+        row["trail_gate"] = _trail_gate(plan, entry, trig_pct,
+                                        full_qty=_num(signal.qty) or _num(plan.get("qty")))
+    row["tp1_retest"] = _retests_tp1(traj, tp1_dist)
+    # Частичная фиксация была включена в момент входа, а записи о ней нет —
+    # значит, на TP1 она не исполнилась, и TP1 ничего не зафиксировал.
+    row["partial_expected"] = cfg_exit.get("tp1_partial_enabled") is True
 
     beyond = mfe - tp1_dist
     row["beyond_tp1_pct"] = round(beyond, 4)
@@ -271,14 +303,18 @@ def _counterfactuals(rows: list[dict]) -> dict:
         actual.append(booked * tp1 + rest * exit_ - cost)
         all_at_tp1.append(tp1 - cost)
 
-        # Трейл, исполненный по рынку в момент срабатывания (как реальный стоп),
-        # если сработал раньше фактического закрытия.
+        # (#tp1-overshoot-cf-2026-09-11) Первое событие решает. Трейл,
+        # сработавший на откате, закрыл бы остаток ТАМ — даже если потом цена
+        # ушла к TP2. Первая версия брала лучшее из двух (max(trig, exit)) и
+        # приписывала трейлу и защиту от отката, и весь последующий ход: на 60
+        # сделках +18.2 п.п. остатка вместо честных +3.5.
         trig = r.get("trail_trigger_pct")
-        rest_trail = trig if (trig is not None and trig > exit_) else exit_
+        rest_trail = trig if trig is not None else exit_
         honest_trail.append(booked * tp1 + rest * rest_trail - cost)
 
-        # Стоп остатка переносится не в безубыток, а на уровень TP1.
-        lock_tp1.append(booked * tp1 + rest * max(exit_, tp1) - cost)
+        # Стоп остатка на уровне TP1: закрывает на первом возврате к TP1.
+        rest_lock = tp1 if r.get("tp1_retest") else max(exit_, tp1)
+        lock_tp1.append(booked * tp1 + rest * rest_lock - cost)
 
     def _pack(values: list[float]) -> dict:
         return {
@@ -294,10 +330,12 @@ def _counterfactuals(rows: list[dict]) -> dict:
         "partial_then_stop_at_tp1": _pack(lock_tp1),
         "note": (
             "Все варианты в % номинала за вычетом одного круга издержек, на одних "
-            "и тех же сделках, дошедших до TP1. partial_then_trail_at_market — "
-            "трейл после TP1, исполненный по рынку в момент срабатывания; "
-            "partial_then_stop_at_tp1 — стоп остатка на уровне TP1 вместо "
-            "безубытка (оптимистично: исполнение ровно по TP1)."
+            "и тех же сделках, дошедших до TP1. Первое событие по траектории "
+            "решает: сработавшее правило закрывает остаток, что бы цена ни "
+            "делала потом. partial_then_trail_at_market — трейл после TP1 по "
+            "рынку в момент срабатывания; partial_then_stop_at_tp1 — стоп "
+            "остатка на уровне TP1 вместо безубытка, на первом возврате к TP1 "
+            "(исполнение ровно по TP1, без проскальзывания)."
         ),
     }
 
@@ -350,6 +388,9 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
 
     near_miss = [r for r in missed if (r["ratio"] or 0) >= 0.80]
 
+    partial_expected = [r for r in reached if r.get("partial_expected")]
+    partial_missing = [r for r in partial_expected if not r["partial"]]
+
     return {
         "window_hours": window_hours,
         "side": side,
@@ -361,6 +402,14 @@ def build(db: Session, *, window_hours: float = 720.0, side: str | None = None,
         # само по себе диагноз (фиксация не сработала или ещё не существовала).
         "reached_without_partial_fill": sum(1 for r in reached if not r["partial"]),
         "near_miss_80pct": len(near_miss),
+        # (#tp1-partial-health-2026-09-11) Фиксация на TP1 была включена при
+        # входе, а в плане её нет: исполнение молча не случилось (ошибка
+        # глотается в ведении). Такая сделка на TP1 только двигает стоп.
+        "tp1_partial_health": {
+            "expected": len(partial_expected),
+            "missing": len(partial_missing),
+            "missing_ids": [r["id"] for r in partial_missing][:30],
+        },
         "overshoot": {
             "went_further_1_25x": len(went_further),
             "went_further_share": _share(len(went_further), len(reached)),
