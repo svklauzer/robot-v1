@@ -1,7 +1,9 @@
 from datetime import datetime, timezone, timedelta
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, or_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from core.db import SessionLocal
 from core.security import require_owner_action
 from models.subscriber import Subscriber
@@ -11,22 +13,30 @@ from services.telegram_router import TelegramRouter
 router = APIRouter(prefix="/subscribers", tags=["subscribers"])
 
 
+# (#clients-audit-2026-09-12) Дни — от одного дня до десяти лет: отрицательное
+# число «продлевало» в прошлое, опечатка в нулях давала подписку на века.
+_Days = Field(30, ge=1, le=3650)
+
+
 class CreateSubscriberRequest(BaseModel):
-    telegram_user_id: str
+    telegram_user_id: str = Field(..., min_length=1)
     username: str | None = None
     full_name: str | None = None
     plan: str = "vip"
-    days: int = 30
+    days: int = _Days
     is_trial: bool = False
     notes: str | None = None
 
 
 class ExtendSubscriberRequest(BaseModel):
-    days: int = 30
+    days: int = _Days
 
 
 class UpdateSubscriberStatusRequest(BaseModel):
-    status: str
+    # Статусы, которые знает система: active/expired ставят оплата и сторож
+    # подписок, blocked — владелец. Любая другая строка создавала подписчика ни
+    # в каком состоянии: не активен и не истёк.
+    status: Literal["active", "expired", "blocked"]
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -154,14 +164,32 @@ async def create_subscriber(payload: CreateSubscriberRequest):
             .first()
         )
 
+        kept_longer_expiry = False
         if existing:
+            # (#clients-audit-2026-09-12) «Выдать доступ» уже существующему
+            # подписчику перезаписывал срок на now + days: оплаченные 60 дней
+            # срезались до 30. Срок не сокращается — остаётся более длинный.
+            current = _aware(existing.expires_at)
+            paid_active = (existing.status == "active" and not existing.is_trial
+                           and current is not None and current > now)
+            if current is not None and current > expires_at:
+                expires_at = current
+                kept_longer_expiry = True
             existing.username = payload.username or existing.username
             existing.full_name = payload.full_name or existing.full_name
             existing.plan = payload.plan
             existing.status = "active"
             existing.expires_at = expires_at
-            existing.is_trial = payload.is_trial
-            existing.notes = payload.notes
+            # Действующую оплаченную подписку не превращаем в пробную.
+            if not paid_active:
+                existing.is_trial = payload.is_trial
+            # Заметки ДОПИСЫВАЮТСЯ: в них живут метки выданных льготных
+            # периодов (affiliate_*_trial), по которым проверяется «один на
+            # человека». Перезапись пустым стирала метку — льготу можно было
+            # получить снова.
+            note = (payload.notes or "").strip()
+            if note and note not in (existing.notes or ""):
+                existing.notes = f"{existing.notes}; {note}" if existing.notes else note
             sub = existing
         else:
             sub = Subscriber(
@@ -187,7 +215,8 @@ async def create_subscriber(payload: CreateSubscriberRequest):
             f"Plan: {sub.plan}\n"
             f"Expires: {sub.expires_at}",
         )
-        return {"status": "ok", "subscriber_id": sub.id, "expires_at": str(sub.expires_at)}
+        return {"status": "ok", "subscriber_id": sub.id, "expires_at": str(sub.expires_at),
+                "kept_longer_expiry": kept_longer_expiry}
 
     except Exception as e:
         db.rollback()
@@ -205,7 +234,8 @@ async def extend_subscriber(subscriber_id: int, payload: ExtendSubscriberRequest
             return {"status": "error", "error": "subscriber_not_found"}
 
         now = datetime.now(timezone.utc)
-        base = sub.expires_at if sub.expires_at and sub.expires_at > now else now
+        current = _aware(sub.expires_at)
+        base = current if current and current > now else now
         sub.expires_at = base + timedelta(days=payload.days)
         sub.status = "active"
         db.commit()

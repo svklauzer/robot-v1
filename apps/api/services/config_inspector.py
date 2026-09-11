@@ -40,7 +40,11 @@ _SECRET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 # URL подключений содержат логин/пароль в теле строки.
-_URL_PATTERN = re.compile(r"(DATABASE_URL|REDIS_URL|_URI$)", re.IGNORECASE)
+# (#config-audit-2026-09-12) Прокси — туда же: `http://user:pass@host:port`
+# типичная форма. VIP_INVITE_LINK — постоянный вход в платный канал: кто увидел
+# (скриншот страницы уже достаточен), тот вошёл бесплатно.
+_URL_PATTERN = re.compile(r"(DATABASE_URL|REDIS_URL|_URI$|_PROXY_URL$|VIP_INVITE_LINK)",
+                          re.IGNORECASE)
 
 
 def is_sensitive(name: str) -> bool:

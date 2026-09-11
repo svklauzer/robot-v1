@@ -29,6 +29,10 @@ def test_the_okx_passphrase_is_masked():
     "JWT_SECRET", "OWNER_PASSWORD", "OWNER_API_TOKEN",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET",
     "DATABASE_URL", "REDIS_URL",
+    # (#config-audit-2026-09-12) Прокси с логином в URL и постоянная ссылка в
+    # платный VIP-канал.
+    "HTX_PROXY_URL", "OKX_PROXY_URL", "KRAKEN_PROXY_URL", "TELEGRAM_PROXY_URL",
+    "VIP_INVITE_LINK",
 ])
 def test_every_credential_is_masked(name):
     """Полный набор того, чем система подписывается, ходит в БД и авторизует
@@ -55,7 +59,10 @@ def test_masking_does_not_swallow_ordinary_thresholds():
     страница перестала бы отвечать на вопрос, ради которого заведена.
     """
     for name in ("MAX_ACTIVE_SIGNALS", "TZ_ADX_MIN", "SIGNAL_PROFILE",
-                 "FUNDING_ARB_MIN_SIGN_CONSISTENCY", "LEVELS_SIGNAL_TF"):
+                 "FUNDING_ARB_MIN_SIGN_CONSISTENCY", "LEVELS_SIGNAL_TF",
+                 # Публичные по замыслу: партнёрские ссылки и срок одноразовых
+                 # приглашений.
+                 "OKX_AFFILIATE_LINK", "HTX_AFFILIATE_LINK", "VIP_INVITE_EXPIRE_HOURS"):
         assert not is_sensitive(name), f"{name} спрятан без причины"
 
 
