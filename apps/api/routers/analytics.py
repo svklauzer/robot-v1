@@ -286,6 +286,26 @@ def analytics_stop_width(window_hours: float = 2160.0, trade_mode: str | None = 
         db.close()
 
 
+@router.get("/tp1-distance", dependencies=[Depends(require_owner_action)])
+def analytics_tp1_distance(window_hours: float = 2160.0, trade_mode: str | None = None,
+                           side: str | None = None, max_rows: int = 4000):
+    """(#tp1-distance-2026-09-12) Где ставить TP1.
+
+    Гейт на TP1 и ширина стопа проверены и закрыты. Здесь TP1 переносится на
+    долю j нынешней дистанции, и каждая сделка проигрывается по траектории при
+    нынешних правилах (фиксация доли на TP1, стоп остатка на нём же).
+    Ничего не меняет — только показания.
+    """
+    from services.tp1_distance_curve import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, trade_mode=trade_mode,
+                     side=side, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/tp1-conditional", dependencies=[Depends(require_owner_action)])
 def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geometric",
                               max_rows: int = 4000):
