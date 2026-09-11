@@ -260,6 +260,14 @@ export default function HealthPage() {
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
         </Panel>
 
+        {/* (#okx-universe-2026-09-12) Вселенная следует за биржей исполнения. */}
+        <Panel title="Вселенная">
+          <InfoRow label="Биржа исполнения" value={String(health?.universe?.exchange || "-").toUpperCase()} />
+          <InfoRow label="Ключ" value={health?.universe?.source || "-"} />
+          <InfoRow label="Символов" value={(health?.universe?.symbols || []).length} />
+          <div className="pt-2 text-xs text-emerald-100/60">{(health?.universe?.symbols || []).join(", ") || "-"}</div>
+        </Panel>
+
         <Panel title="HTX funding arb">
           <InfoRow label="Status" value={fundingArb?.enabled ? "enabled" : "disabled"} danger={!fundingArb?.enabled} />
           <InfoRow label="Symbols" value={(fundingArb?.symbols || []).join(", ") || "-"} />

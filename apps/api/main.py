@@ -747,6 +747,15 @@ async def lifespan(app: FastAPI):
                 ob_symbols = list((ob_bot.config_json or {}).get("symbols", [])) if ob_bot else []
             finally:
                 ob_db.close()
+                # (#okx-universe-2026-09-12) Плюс символы открытых сделок: символ,
+                # убранный из вселенной, доживает до закрытия — и его выходу
+                # нужна книга (ускорение выхода по потоку).
+                open_syms = [
+                    row[0] for row in ob_db.query(Signal.symbol)
+                    .filter(Signal.status.in_(["published", "opened", "tp1", "breakeven"]))
+                    .distinct().all()
+                ]
+                ob_symbols = list(dict.fromkeys(ob_symbols + [s for s in open_syms if s]))
             if not ob_symbols:
                 ob_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "DOT/USDT"]
             orderbook_feed_task = asyncio.create_task(
@@ -2135,7 +2144,14 @@ def system_health():
                 "interval_min": getattr(settings, "FUNDING_OBSERVE_INTERVAL_MIN", 60.0),
             },
         }
-        return SystemHealthService().summary(db, loops=loops)
+        out = SystemHealthService().summary(db, loops=loops)
+        # (#okx-universe-2026-09-12) Какая вселенная действует и откуда взята.
+        out["universe"] = {
+            "exchange": settings.active_exchange,
+            "source": settings.universe_source,
+            "symbols": settings.symbols,
+        }
+        return out
 
     finally:
         db.close()
