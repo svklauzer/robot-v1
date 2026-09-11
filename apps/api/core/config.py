@@ -597,7 +597,7 @@ class Settings(BaseSettings):
     # выброс на малой выборке, а не доказанный edge.
     # NB: боевая вселенная задаётся HTX_SYMBOLS в env Render — там ARB тоже
     # нужно убрать, иначе дефолт не применится.
-    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT"
+    HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -637,7 +637,7 @@ class Settings(BaseSettings):
     # MAX_ACTIVE_SIGNALS_PER_SYMBOL=1 × 7 символов HTX_SYMBOLS.
     MAX_ACTIVE_SIGNALS: int = 100
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
-    RISK_EQUITY_USDT: float = 950.0
+    RISK_EQUITY_USDT: float = 3000.0
     MAX_USED_MARGIN_PCT: float = 0.85
 
     # (#leak-correlation) Кластерный лимит нетто-направления. Наша вселенная —
