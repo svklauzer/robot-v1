@@ -20,8 +20,21 @@
 
 Единицы: ставка в ПРОЦЕНТАХ за один период площадки (как в funding_rates.jsonl).
 Результат в USDT, знак «плюс = расход».
+
+Закрытая сделка — по расчётам, а не по часам (#funding-settlements-2026-09-12)
+------------------------------------------------------------------------------
+Фондирование списывается дискретно: платит тот, кто держит позицию в момент
+расчёта (HTX и OKX — 00:00, 08:00, 16:00 UTC; Kraken — каждый час). Для
+закрытой части позиции время известно, и считается число расчётов, которые
+она пересекла: сделка 07:30–08:30 платит один полный период, 08:30–15:59 — ни
+одного. Непрерывная амортизация (часы / период) остаётся только для оценки на
+этапе плана, когда время выхода неизвестно. До этой правки закрытие брало
+плановую оценку — 1 час на любую сделку, — и шорт на двое суток недосчитывал
+шесть расчётов.
 """
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from core.config import settings
 
@@ -29,6 +42,7 @@ from core.config import settings
 PERIOD_HOURS = {
     "htx": 8.0,
     "huobi": 8.0,
+    "okx": 8.0,
     "kraken": 1.0,
 }
 
@@ -72,6 +86,26 @@ def periods_elapsed(hold_hours: float | None, venue: str | None = None) -> float
     return max(0.0, float(hold_hours)) / period_hours(venue)
 
 
+def _utc_hours(moment: datetime) -> float:
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.timestamp() / 3600.0
+
+
+def settlements_crossed(opened_at: datetime, closed_at: datetime,
+                        venue: str | None = None) -> int:
+    """Сколько расчётов фондирования позиция пересекла: моменты t = k·период
+    от 00:00 UTC, открытие < t ≤ закрытие. Пустое или обратное окно — 0."""
+    period = period_hours(venue)
+    start, end = _utc_hours(opened_at), _utc_hours(closed_at)
+    if end <= start or period <= 0:
+        return 0
+    # Сравнение в целых секундах: 08:00:00 не должно стать 07:59:59.999.
+    period_s = int(round(period * 3600))
+    start_s, end_s = int(round(start * 3600)), int(round(end * 3600))
+    return max(0, end_s // period_s - start_s // period_s)
+
+
 def funding_usdt(
     *,
     notional: float,
@@ -81,6 +115,8 @@ def funding_usdt(
     rate_pct: float | None = None,
     venue: str | None = None,
     symbol: str | None = None,
+    opened_at: datetime | None = None,
+    closed_at: datetime | None = None,
 ) -> float:
     """Фондирование за удержание. Плюс — расход, минус — доход.
 
@@ -94,7 +130,11 @@ def funding_usdt(
     if rate_pct is None:
         rate_pct = float(getattr(settings, "FUNDING_FALLBACK_RATE_PCT", 0.01))
 
-    amount = float(notional) * (float(rate_pct) / 100.0) * periods_elapsed(hold_hours, venue)
+    if opened_at is not None and closed_at is not None:
+        periods = float(settlements_crossed(opened_at, closed_at, venue))
+    else:
+        periods = periods_elapsed(hold_hours, venue)
+    amount = float(notional) * (float(rate_pct) / 100.0) * periods
 
     # Ставка > 0: лонг платит, шорт получает. При отрицательной — наоборот,
     # знак переворачивается сам.

@@ -386,6 +386,10 @@ class ExecutionEngine:
             liquidity="taker",
             holding_funding_periods=1 if route.market_type != "spot" else 0,
             leverage=route.leverage,
+            # (#funding-settlements-2026-09-12) Закрываемая доля платит расчёты,
+            # которые пересекла от открытия до этой минуты.
+            opened_at=position.opened_at,
+            closed_at=datetime.now(timezone.utc),
         )
 
         close_side = self._close_order_side(position.side)
@@ -466,6 +470,10 @@ class ExecutionEngine:
             liquidity="taker",
             holding_funding_periods=1 if route.market_type != "spot" else 0,
             leverage=route.leverage,
+            # (#funding-settlements-2026-09-12) Остаток платит все расчёты от
+            # открытия до закрытия.
+            opened_at=position.opened_at,
+            closed_at=datetime.now(timezone.utc),
         )
 
         close_side = self._close_order_side(position.side)
