@@ -132,7 +132,11 @@ class VenueCompareService:
         (HTX_SYMBOLS) ∪ CROSS_FARB_SYMBOLS. Иначе удаление символа из торговой
         вселенной (как SOL из грида) молча лишило бы cross-arb данных по его
         паре — P2 не должен зависеть от env торгового контура."""
-        base = [s.strip().upper() for s in settings.symbols]
+        # (#okx-universe-2026-09-12) Вселенная HTX, а не действующая: с
+        # ACTIVE_EXCHANGE=okx settings.symbols — вселенная OKX, где есть CHIP и
+        # PI, которых нет на HTX. Сравнение HTX↔Kraken запрашивало их у HTX и
+        # получало BadSymbol с тремя повторами каждый час.
+        base = [s.strip().upper() for s in settings.symbols_for("htx")]
         raw = str(getattr(settings, "CROSS_FARB_SYMBOLS", "") or "")
         extra = [s.strip().upper() for s in raw.split(",") if s.strip()]
         return base + [s for s in extra if s not in base]

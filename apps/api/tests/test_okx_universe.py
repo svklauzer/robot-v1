@@ -85,3 +85,17 @@ def test_the_owner_chosen_okx_universe_is_live_in_both_places():
     blueprint = (ROOT / "render.yaml").read_text(encoding="utf-8")
     assert f"key: OKX_SYMBOLS\n        value: {chosen}" in blueprint
     assert settings.OKX_SYMBOLS == chosen
+
+
+def test_the_htx_kraken_compare_asks_htx_only_for_htx_symbols(monkeypatch):
+    """Лог 12.09: «htx does not have market symbol CHIP/USDT:USDT» — сравнение
+    HTX↔Kraken брало действующую вселенную (OKX) и спрашивало CHIP у HTX."""
+    from services.venue_compare import VenueCompareService
+
+    _set(monkeypatch, "okx", "BTC/USDT,TRX/USDT", "BTC/USDT,CHIP/USDT,PI/USDT")
+    monkeypatch.setattr(settings, "CROSS_FARB_SYMBOLS", "", raising=False)
+
+    symbols = VenueCompareService._default_symbols()
+
+    assert "CHIP/USDT" not in symbols and "PI/USDT" not in symbols
+    assert symbols == ["BTC/USDT", "TRX/USDT"]
