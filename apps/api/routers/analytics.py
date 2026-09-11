@@ -326,6 +326,23 @@ def analytics_early_exits(reason: str = "breakeven_lock", window_hours: float = 
         db.close()
 
 
+@router.get("/after-stop", dependencies=[Depends(require_owner_action)])
+def analytics_after_stop(window_hours: float = 2160.0, same_side: bool = False,
+                         max_rows: int = 6000):
+    """(#after-stop-2026-09-12) Доля стопов и деньги следующей сделки в
+    зависимости от того, чем закончилась прошлая по тому же символу и сколько
+    часов прошло. Проверка гипотезы из разбора стопов 12.09: после стопа 43.8%
+    стопов против 27.8% без истории. Ничего не блокирует — только показания.
+    """
+    from services.after_stop_report import build
+
+    db = SessionLocal()
+    try:
+        return build(db, window_hours=window_hours, same_side=same_side, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/tp1-conditional", dependencies=[Depends(require_owner_action)])
 def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geometric",
                               max_rows: int = 4000):
