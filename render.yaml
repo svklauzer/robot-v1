@@ -93,6 +93,10 @@ services:
         value: spot
       - key: HTX_SYMBOLS
         value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
+      # Вселенная OKX (#okx-universe-2026-09-12): действует, когда ACTIVE_EXCHANGE=okx.
+      # Пока совпадает с HTX — список меняет владелец по research.okx_universe.
+      - key: OKX_SYMBOLS
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.

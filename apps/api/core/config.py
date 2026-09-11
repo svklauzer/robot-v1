@@ -605,6 +605,11 @@ class Settings(BaseSettings):
     # NB: боевая вселенная задаётся HTX_SYMBOLS в env Render — там ARB тоже
     # нужно убрать, иначе дефолт не применится.
     HTX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT"
+    # (#okx-universe-2026-09-12) Вселенная OKX. У каждой биржи свой листинг и
+    # своя ликвидность: на OKX есть то, чего нет на HTX, и наоборот. Вселенная
+    # следует за биржей ИСПОЛНЕНИЯ (ACTIVE_EXCHANGE) — переключение биржи само
+    # переключает список. Пусто — берётся HTX_SYMBOLS, как было до ключа.
+    OKX_SYMBOLS: str = ""
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -2705,9 +2710,27 @@ class Settings(BaseSettings):
         # dedupe, сохраняя порядок
         return list(dict.fromkeys(defaults + extra))
 
+    def symbols_for(self, exchange: str | None) -> List[str]:
+        """(#okx-universe-2026-09-12) Вселенная конкретной биржи."""
+        raw = self.HTX_SYMBOLS
+        if str(exchange or "").strip().lower() == "okx" and str(self.OKX_SYMBOLS or "").strip():
+            raw = self.OKX_SYMBOLS
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    @property
+    def universe_source(self) -> str:
+        """Из какого ключа взята действующая вселенная."""
+        if self.active_exchange == "okx" and str(self.OKX_SYMBOLS or "").strip():
+            return "OKX_SYMBOLS"
+        return "HTX_SYMBOLS"
+
     @property
     def symbols(self) -> List[str]:
-        return [s.strip() for s in self.HTX_SYMBOLS.split(",") if s.strip()]
+        """Вселенная биржи исполнения. Через это свойство её читают все: конфиг
+        бота при старте, сканер, стакан, research. Открытые сделки ведутся из
+        базы, а не из вселенной, — символ, убранный из списка, доживает до
+        закрытия через клиента своей биржи."""
+        return self.symbols_for(self.active_exchange)
 
     @property
     def funding_arb_symbols(self) -> List[str]:
