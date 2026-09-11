@@ -77,6 +77,8 @@ const IMPORTANT_DECISIONS = [
   // достижимости TP2 и под extended_from_ema20 — эти коды реально доминируют
   // среди live-блокировок, но были невидимы на дашборде.
   "tp2_reached_too_rarely",
+  // (#momentum-late-2026-09-12) Гейт импульса по тренду в enforce.
+  "momentum_aligned_late_entry",
   "extended_from_ema20",
   "extended_from_ema20_shadow",
   "symbol_policy_confidence_too_low",
@@ -930,6 +932,7 @@ function decisionLabel(code: string | null | undefined) {
 
     // достижимость цели и экономика
     tp2_reached_too_rarely: "TP2 достигается слишком редко",
+    momentum_aligned_late_entry: "Импульс уже по тренду — поздний вход",
     net_rr_blended_too_low: "RR (смешанный) ниже минимума",
     entry_zone_support_too_far: "Опора слишком далеко от рынка",
 

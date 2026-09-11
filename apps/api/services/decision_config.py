@@ -184,6 +184,8 @@ def snapshot(
             # (#tp-reachability-2026-08-03) Порог достижимости цели — тоже ось,
             # меняющая выборку.
             "tp_reach_mode": str(_g("TP_REACH_MODE", "shadow")).lower(),
+            # (#momentum-late-2026-09-12) Гейт импульса по тренду на входе.
+            "momentum_gate_mode": str(_g("MOMENTUM_GATE_MODE", "shadow")).lower(),
             # 24.08.2026: `tp_reach_max_ratio` снят вместе с самим отношением.
             # Порог частоты выводится из RR сделки и осью конфига не является —
             # осью остаётся запас к нему.

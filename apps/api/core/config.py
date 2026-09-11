@@ -9,6 +9,7 @@ _MODE_CHOICES: dict[str, frozenset[str]] = {
     "TZ_MODE": frozenset({"shadow", "enforce"}),
     "TREND_TRIGGER_MODE": frozenset({"shadow", "enforce"}),
     "TP_REACH_MODE": frozenset({"shadow", "enforce"}),
+    "MOMENTUM_GATE_MODE": frozenset({"off", "shadow", "enforce"}),
     "ML_MODE": frozenset({"off", "shadow", "advisory", "full_auto"}),
 }
 
@@ -322,6 +323,12 @@ class Settings(BaseSettings):
     # менять надо в обоих местах (render.yaml + Render Dashboard), иначе правка
     # не доедет до прода.
     TZ_ENFORCE_CONDITIONS: str = "kama,di,obv,adx,adx_rising,stoch"
+
+    # (#momentum-late-2026-09-12) Вход, когда импульс 15m уже смотрит по тренду
+    # (up+bullish, down+bearish): 79 сделок −43.4 USDT против +5.8 на 60
+    # нейтральных, разрыв в обеих половинах 45 дней и в обе стороны. shadow —
+    # вердикт в план, enforce — такой вход не открывается. Решает владелец.
+    MOMENTUM_GATE_MODE: str = "shadow"
 
     # (# tp-reachability-2026-08-03, переписан 24.08.2026) Достижимость цели:
     # план против факта. TP_REACH_MODE: shadow | enforce. В enforce не берём
