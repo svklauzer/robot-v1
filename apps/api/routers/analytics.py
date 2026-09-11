@@ -306,6 +306,25 @@ def analytics_tp1_distance(window_hours: float = 2160.0, trade_mode: str | None 
         db.close()
 
 
+@router.get("/early-exits", dependencies=[Depends(require_owner_action)])
+def analytics_early_exits(reason: str = "breakeven_lock", window_hours: float = 2160.0,
+                          max_rows: int = 4000):
+    """(#be-lock-leak-2026-09-12) Сделки с заданной причиной закрытия: вход,
+    выход, пик, издержки и ожидаемый пол замка — с разбивкой спот/своп.
+
+    Первый вопрос — почему `breakeven_lock` теряет в среднем 0.66 USDT на
+    сделке: тик проваливается под пол или пол не покрывает круг издержек.
+    Ничего не меняет — только показания.
+    """
+    from services.early_exit_forensics import build
+
+    db = SessionLocal()
+    try:
+        return build(db, reason=reason, window_hours=window_hours, max_rows=max_rows)
+    finally:
+        db.close()
+
+
 @router.get("/tp1-conditional", dependencies=[Depends(require_owner_action)])
 def analytics_tp1_conditional(window_hours: float = 720.0, marker: str = "geometric",
                               max_rows: int = 4000):
