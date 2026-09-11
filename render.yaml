@@ -514,6 +514,15 @@ services:
       # позиций. При открытых хеджах доля за ним сохраняется.
       - key: ENABLE_FUNDING_ARB
         value: "false"
+      # Наблюдение ставок HTX и OKX (#okx-funding-2026-09-12): только чтение,
+      # раз в час, независимо от выключателя арбитража — копим данные для
+      # пересчёта экономики, из-за которой контуры выключали.
+      - key: FUNDING_OBSERVE_ENABLED
+        value: "true"
+      - key: FUNDING_OBSERVE_VENUES
+        value: "htx,okx"
+      - key: FUNDING_OBSERVE_INTERVAL_MIN
+        value: "60"
       - key: ENABLE_FUTURES
         value: "true"
       - key: FUNDING_ARB_SYMBOLS
