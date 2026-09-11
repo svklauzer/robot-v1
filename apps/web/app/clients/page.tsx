@@ -70,8 +70,9 @@ export default function ClientsPage() {
     // не менял экран, и это неотличимо от «создал, но список не обновился».
     // Форма при этом очищалась в любом случае — введённые данные пропадали
     // вместе с ошибкой, о которой никто не узнал.
+    let created: any = null;
     try {
-      assertOk(await apiPost("/subscribers", {
+      created = assertOk(await apiPost("/subscribers", {
         telegram_user_id: form.telegram_user_id.trim(),
         username: form.username.trim() || null,
         full_name: form.full_name.trim() || null,
@@ -83,6 +84,12 @@ export default function ClientsPage() {
     } catch (e) {
       reportActionError(e);
       return;
+    }
+
+    // (#clients-audit-2026-09-12) Бэкенд не сокращает уже оплаченный срок —
+    // владелец должен это увидеть, а не удивиться, что «30 дней» не сработали.
+    if (created?.kept_longer_expiry) {
+      alert(`Срок не сокращён: у подписчика уже оплачено до ${created.expires_at}`);
     }
 
     setForm({
