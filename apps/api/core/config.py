@@ -1324,6 +1324,10 @@ class Settings(BaseSettings):
     OB_OKX_BOOK_CHANNEL: str = "books"
     OB_BOOK_LEVELS: int = 150
     OB_OKX_SHADOW_ENABLED: bool = True
+    # (#okx-gate-compare-2026-09-12) Выборка решений гейта по обеим книгам:
+    # раз в 30 с, ~сутки на символ (services/book_gate_compare.py).
+    OB_COMPARE_SAMPLE_SEC: float = 30.0
+    OB_COMPARE_SAMPLES: int = 2880
     OB_WS_URL: str = ""
     OB_DEPTH_LEVELS: int = 10
     OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)

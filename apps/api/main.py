@@ -1127,6 +1127,11 @@ def orderbook_compare():
     out = compare_books()
     # Счётчики фида OKX: пустая тень без них неотличима от «ещё не набралось».
     out["feeds"] = FEED_STATS
+    # (#okx-gate-compare-2026-09-12) Как часто гейт пропускает вход на каждой
+    # книге и какие пороги дали бы OKX ту же избирательность.
+    from services import book_gate_compare
+
+    out["gate"] = book_gate_compare.summary()
     out["primary_exchange"] = ob_feed_exchange()
     out["shadow_exchange"] = (
         "okx" if ob_feed_exchange() != "okx"
