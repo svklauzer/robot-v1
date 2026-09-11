@@ -124,6 +124,19 @@ const IMPORTANT_DECISIONS = [
   ...Object.keys(CLOSE_REASON_LABELS),
 ];
 
+// Псевдосимвол событий про весь цикл — services/loop_skip_reporter.py SYSTEM_SYMBOL.
+const SYSTEM_SYMBOL = "SYSTEM";
+
+// Первая часть кода отказа по символу (workers/robot_loop.py, _scan_skips):
+// "no_analysis", "hold:<причина>", "<setup_decision>:<комментарий сетапа>".
+const SCAN_STAGE_LABELS: Record<string, string> = {
+  no_analysis: "нет анализа",
+  hold: "нет сетапа",
+  wait: "сетап ждёт",
+  reject: "сетап отклонён",
+  trend_blocked_by_entry_gate: "тренд закрыт гейтом входа",
+};
+
 export default function IntelligencePage() {
   const [scanData, setScanData] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
@@ -595,30 +608,20 @@ function EventCard({ event }: { event: any }) {
         {decisionExplanation(event)}
       </p>
 
-      <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-        <Metric label="Action" value={event.action ?? payload.action ?? "-"} />
-        <Metric label="Regime" value={event.regime ?? payload.regime ?? "-"} />
-        <Metric label="Radar" value={event.radar_state ?? payload.radar_state ?? "-"} />
-        <Metric label="Conf" value={event.confidence_hint ?? payload.confidence_hint ?? "-"} />
-        <Metric label="Setup" value={event.setup_score ?? payload.setup_quality?.final_score ?? "-"} />
-        <Metric label="Age" value={payload.watch_age_minutes ? `${payload.watch_age_minutes}m` : "-"} />
-      </div>
-
-      {/* (#scan-visibility-2026-09-05) У молчания вся суть в длительности:
-          «нет кандидатов» минуту и семь часов — разные новости, а карточка
-          показывала одну строку без числа. held_sec пишется бэкендом с 06.09. */}
-      {payload.held_sec != null && (
-        <div className="mt-4 rounded-xl border border-emerald-950 bg-black/20 p-3 text-xs">
-          <span className="text-emerald-100/50">Держится: </span>
-          <span className="text-emerald-200">{formatHeld(payload.held_sec)}</span>
-          {payload.repeat === false && (
-            <span className="ml-2 text-yellow-300">начало простоя</span>
-          )}
-          {payload.symbols != null && (
-            <span className="ml-2 text-emerald-100/50">
-              одобрено {payload.approved ?? 0} из {payload.symbols}
-            </span>
-          )}
+      {/* (#system-card-2026-09-12) Событие про весь цикл, а не про монету: у
+          него нет ни режима, ни радара, ни уверенности. Торговая сетка давала
+          здесь шесть прочерков, а то, ради чего запись пишется, — почему
+          молчим и сколько, — не выводилось. */}
+      {event.symbol === SYSTEM_SYMBOL ? (
+        <SystemEventBody decision={event.decision} payload={payload} />
+      ) : (
+        <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
+          <Metric label="Action" value={event.action ?? payload.action ?? "-"} />
+          <Metric label="Regime" value={event.regime ?? payload.regime ?? "-"} />
+          <Metric label="Radar" value={event.radar_state ?? payload.radar_state ?? "-"} />
+          <Metric label="Conf" value={event.confidence_hint ?? payload.confidence_hint ?? "-"} />
+          <Metric label="Setup" value={event.setup_score ?? payload.setup_quality?.final_score ?? "-"} />
+          <Metric label="Age" value={payload.watch_age_minutes ? `${payload.watch_age_minutes}m` : "-"} />
         </div>
       )}
 
@@ -678,6 +681,127 @@ function Card({ title, value }: { title: string; value: any }) {
     <div className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
       <div className="text-sm text-emerald-100/60">{title}</div>
       <div className="mt-2 text-2xl font-bold text-emerald-200">{value}</div>
+    </div>
+  );
+}
+
+function SystemEventBody({ decision, payload }: { decision: string; payload: any }) {
+  const resumed = decision === "loop_resumed" || decision === "scan_candidates_resumed";
+  const blockers: string[] = Array.isArray(payload.blockers) ? payload.blockers : [];
+  const found: any[] = Array.isArray(payload.found) ? payload.found : [];
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        {resumed ? (
+          <>
+            {/* У возобновления held_sec — длительность закончившегося молчания. */}
+            <Metric label="Молчание длилось" value={formatHeld(payload.held_sec)} />
+            <Metric label="Причина была" value={payload.after_skip ? decisionLabel(payload.after_skip) : "-"} />
+          </>
+        ) : (
+          <>
+            <Metric label="Держится" value={formatHeld(payload.held_sec)} danger={Number(payload.held_sec) >= 3600} />
+            <Metric label="Запись" value={payload.repeat ? "пульс, причина та же" : "начало"} />
+          </>
+        )}
+
+        {payload.symbols != null && (
+          <Metric label="Одобрено за проход" value={`${payload.approved ?? 0} из ${payload.symbols}`} />
+        )}
+
+        {decision === "loop_skip_live_safety" && (
+          <>
+            <Metric label="Дневной убыток" value={`${payload.daily_loss_pct ?? "-"}% из ${payload.max_daily_loss_pct ?? "-"}%`} danger />
+            <Metric label="Сделок сегодня" value={`${payload.trades_today ?? "-"} из ${payload.max_trades_per_day ?? "-"}`} />
+            <Metric label="Kill switch" value={payload.kill_switch_enabled ? (payload.kill_switch_reason || "включён") : "выключен"} danger={!!payload.kill_switch_enabled} />
+          </>
+        )}
+
+        {decision === "loop_skip_exchange_switch" && (
+          <>
+            <Metric label="Неактивная биржа" value={String(payload.inactive_exchange || "-").toUpperCase()} />
+            <Metric label="Ордеров / позиций" value={`${payload.open_orders ?? 0} / ${payload.open_positions ?? 0}`} danger />
+          </>
+        )}
+      </div>
+
+      {payload.by_symbol && <ScanSkipsBySymbol bySymbol={payload.by_symbol} />}
+
+      {blockers.length > 0 && (
+        <div className="rounded-xl border border-yellow-900/60 bg-black/20 p-3">
+          <div className="mb-1 text-emerald-100/50">Блокеры</div>
+          <ul className="list-disc space-y-1 pl-4 text-yellow-200">
+            {blockers.map((b, i) => <li key={`${b}-${i}`}>{b}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {found.length > 0 && (
+        <div className="rounded-xl border border-yellow-900/60 bg-black/20 p-3">
+          <div className="mb-1 text-emerald-100/50">
+            Открыто на {String(payload.inactive_exchange || "неактивной бирже").toUpperCase()} — разобрать руками
+          </div>
+          <ul className="space-y-1 text-yellow-200">
+            {found.map((f, i) => (
+              <li key={`${f?.id ?? i}`}>
+                {f?.kind === "order" ? "ордер" : "позиция"} {f?.symbol || f?.raw || "-"} {f?.side || ""}{" "}
+                {f?.size_unknown ? "(размер не отдан биржей — возможно ложное срабатывание)" : f?.size ?? ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {payload.error && (
+        <div className="text-emerald-100/50">Ошибка проверки: {String(payload.error)}</div>
+      )}
+    </div>
+  );
+}
+
+// Почему каждый символ не дошёл до одобрения: одинаковые причины собираются
+// в строку, числа из скобок (range_pos_long_too_high(0.72>0.60)) остаются у символа.
+function ScanSkipsBySymbol({ bySymbol }: { bySymbol: Record<string, string> }) {
+  const groups = new Map<string, { stage: string; code: string; items: { symbol: string; detail: string; raw: string }[] }>();
+
+  for (const [symbol, raw] of Object.entries(bySymbol || {})) {
+    const text = String(raw || "");
+    const cut = text.indexOf(":");
+    const stage = cut >= 0 ? text.slice(0, cut) : text;
+    const rest = cut >= 0 ? text.slice(cut + 1) : "";
+    const paren = rest.indexOf("(");
+    const code = paren >= 0 ? rest.slice(0, paren) : rest;
+    const detail = paren >= 0 ? rest.slice(paren) : "";
+    const key = `${stage}:${code}`;
+    if (!groups.has(key)) groups.set(key, { stage, code, items: [] });
+    groups.get(key)!.items.push({ symbol: symbol.replace("/USDT", ""), detail, raw: text });
+  }
+
+  const rows = Array.from(groups.values()).sort((a, b) => b.items.length - a.items.length);
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-emerald-950 bg-black/20 p-3">
+      <div className="mb-2 text-emerald-100/50">Почему нет кандидатов</div>
+      <div className="space-y-2">
+        {rows.map((g) => (
+          <div key={`${g.stage}:${g.code}`} className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md bg-emerald-950 px-2 py-0.5 text-emerald-300">
+              {SCAN_STAGE_LABELS[g.stage] || g.stage}
+            </span>
+            {g.code && <span className="text-emerald-100/80">{g.code}</span>}
+            <span className="text-emerald-100/40">×{g.items.length}</span>
+            <span className="flex flex-wrap gap-1">
+              {g.items.map((it) => (
+                <span key={it.symbol} title={it.raw} className="rounded border border-emerald-900 px-1.5 text-emerald-200">
+                  {it.symbol}{it.detail && <span className="text-emerald-100/50"> {it.detail}</span>}
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1193,6 +1317,32 @@ function decisionExplanation(e: any) {
 
   if (decision === "short_candidate_but_shorts_disabled") {
     return "Найден SHORT-кандидат, но short-сделки отключены текущим режимом.";
+  }
+
+  // (#system-card-2026-09-12) События про весь цикл. Без этих веток пояснением
+  // был машинный код — fallback ниже отдаёт decision как есть.
+  if (decision === "scan_no_candidate") {
+    return `Цикл работает, но за проход ни один из ${payload?.symbols ?? "-"} символов не дошёл до одобрения сетапа. Это рынок, а не остановка робота: причины по символам ниже.`;
+  }
+
+  if (decision === "scan_candidates_resumed") {
+    return "Символы снова доходят до одобрения сетапа — дальше их судьба в событиях по монетам (гейты, план, стакан).";
+  }
+
+  if (decision === "loop_resumed") {
+    return "Цикл снова делает торговые шаги после простоя.";
+  }
+
+  if (decision === "loop_skip_validation_gates") {
+    return "Цикл пропускает торговые шаги: live не разрешён гейтами готовности. Открытые позиции ведутся отдельным циклом.";
+  }
+
+  if (decision === "loop_skip_exchange_switch") {
+    return `На неактивной бирже ${String(payload?.inactive_exchange || "").toUpperCase()} есть открытые ордера или позиции — новые входы на ${String(payload?.active_exchange || "активной").toUpperCase()} стоят, пока их не разберут руками.`;
+  }
+
+  if (decision === "loop_skip_live_safety") {
+    return "Сработал предохранитель live-safety: новые входы стоят до снятия блокера.";
   }
 
   return payload?.reason || e?.decision || "-";

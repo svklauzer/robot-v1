@@ -331,3 +331,83 @@ def test_immediate_clearing_stays_the_default():
     assert [r["decision"] for r in rec.rows] == [
         "loop_skip_live_safety", "loop_resumed",
     ]
+
+
+# ── карточка SYSTEM (#system-card-2026-09-12) ───────────────────────────────
+
+def _system_card_source() -> str:
+    web = API.parent / "web" / "app" / "intelligence" / "page.tsx"
+    if not web.exists():
+        pytest.skip("нет фронтенда")
+    ui = web.read_text(encoding="utf-8")
+    body = ui.split("function SystemEventBody", 1)[1]
+    return body.split("\nfunction Metric", 1)[0]
+
+
+def test_system_card_reads_every_field_the_backend_writes():
+    """Карточка SYSTEM рисовала торговую сетку (Action/Regime/Radar/Conf/
+    Setup/Age) — у события про весь цикл этих полей нет, и владелец видел
+    шесть прочерков. Причины по символам, блокеры и позиции на неактивной
+    бирже в payload лежали, но не выводились нигде."""
+    loop_src = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+    scan_call = loop_src.split("self.scan_reporter.report(", 1)[1].split("db.flush()", 1)[0]
+    keys = set(re.findall(r'"([a-z_]+)":', scan_call))
+    assert {"symbols", "approved", "by_symbol"} <= keys
+
+    main_src = (API / "main.py").read_text(encoding="utf-8")
+    safety_call = main_src.split('reason="loop_skip_live_safety"', 1)[1].split("db.commit()", 1)[0]
+    keys |= set(re.findall(r'"([a-z_]+)"', safety_call))
+
+    guard_src = (API / "services" / "exchange_switch_guard.py").read_text(encoding="utf-8")
+    guard_result = guard_src.split("result: dict = {", 1)[1].split("}", 1)[0]
+    keys |= set(re.findall(r'"([a-z_]+)":', guard_result))
+
+    keys |= {"held_sec", "repeat", "after_skip"}  # пишет сам репортёр
+    # Служебные поля гейта: когда проверяли, включён ли он, достижима ли биржа.
+    keys -= {"checked_at", "enabled", "reachable", "safe", "active_exchange"}
+
+    card = _system_card_source()
+    missing = sorted(k for k in keys if f"payload.{k}" not in card)
+    assert not missing, f"поле SYSTEM-события не выводится карточкой: {missing}"
+
+
+def test_the_card_is_chosen_by_the_reporter_symbol():
+    web = API.parent / "web" / "app" / "intelligence" / "page.tsx"
+    if not web.exists():
+        pytest.skip("нет фронтенда")
+    ui = web.read_text(encoding="utf-8")
+    assert f'const SYSTEM_SYMBOL = "{SYSTEM_SYMBOL}"' in ui
+    assert "event.symbol === SYSTEM_SYMBOL" in ui
+
+
+def test_every_scan_skip_stage_has_a_label():
+    """Первая часть кода отказа по символу — стадия; без ярлыка в карточке
+    будет машинное слово."""
+    web = API.parent / "web" / "app" / "intelligence" / "page.tsx"
+    if not web.exists():
+        pytest.skip("нет фронтенда")
+    ui = web.read_text(encoding="utf-8")
+    labels = ui.split("const SCAN_STAGE_LABELS", 1)[1].split("};", 1)[0]
+
+    loop_src = (API / "workers" / "robot_loop.py").read_text(encoding="utf-8")
+    stages = set(re.findall(r'_scan_skips\[symbol\] = f?"([a-z_]+)[:"{]', loop_src))
+    mi_src = (API / "services" / "market_intelligence.py").read_text(encoding="utf-8")
+    stages |= set(re.findall(r'setup_decision = "([a-z_]+)"', mi_src))
+    stages |= set(re.findall(r'decision = "([a-z_]+)"', mi_src)) - {"approve"}
+
+    missing = sorted(s for s in stages if f"{s}:" not in labels)
+    assert not missing, f"стадия отказа без ярлыка: {missing}"
+
+
+def test_system_events_explain_themselves_in_words():
+    """Fallback пояснения отдаёт decision как есть — у SYSTEM это был
+    `scan_no_candidate` вместо фразы."""
+    web = API.parent / "web" / "app" / "intelligence" / "page.tsx"
+    if not web.exists():
+        pytest.skip("нет фронтенда")
+    ui = web.read_text(encoding="utf-8")
+    explanation = ui.split("function decisionExplanation", 1)[1].split("\nfunction ", 1)[0]
+    for code in ("scan_no_candidate", "scan_candidates_resumed", "loop_resumed",
+                 "loop_skip_validation_gates", "loop_skip_exchange_switch",
+                 "loop_skip_live_safety"):
+        assert f'decision === "{code}"' in explanation, code
