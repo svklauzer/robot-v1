@@ -176,6 +176,11 @@ services:
       # ── ДВИЖКИ (ВСЕ ВКЛЮЧЕНЫ) ─────────────────────────────────────────────
       - key: ENABLE_ORDERBOOK_ENGINE
         value: "true"
+      # Полная книга OKX в тени, пока рабочий фид на HTX (#okx-depth-2026-09-12):
+      # решения по ней не принимаются, /orderbook/compare сравнивает метрики
+      # всех потребителей глубины перед переключением фида.
+      - key: OB_OKX_SHADOW_ENABLED
+        value: "true"
       - key: ENABLE_CRT_STRATEGY
         value: "true"       # ВКЛЮЧЕН
       - key: ENABLE_RANGE_STRATEGY

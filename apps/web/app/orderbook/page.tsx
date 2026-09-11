@@ -8,6 +8,8 @@ import { RefreshCw, BookOpen, Database, BarChart3 } from "lucide-react";
 export default function OrderbookPage() {
   const [ob, setOb] = useState<any>(null);
   const [ml, setMl] = useState<any>(null);
+  // (#okx-depth-2026-09-12) Рабочая книга против теневой OKX.
+  const [cmp, setCmp] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
   const [vpSym, setVpSym] = useState("BTC/USDT");
@@ -33,6 +35,7 @@ export default function OrderbookPage() {
       ]);
       setOb(obData);
       setMl(mlData);
+      setCmp(await apiGet("/orderbook/compare").catch(() => null));
     } finally {
       setLoading(false);
     }
@@ -182,6 +185,8 @@ export default function OrderbookPage() {
         )}
       </section>
 
+      <BookCompare data={cmp} />
+
       <section className="rounded-2xl border border-emerald-900 bg-black/30 p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -238,6 +243,76 @@ export default function OrderbookPage() {
         ML-датасет: <span className="font-bold text-emerald-200">{mlCount}</span> закрытых из {mlTarget} для обучения · win {ml?.wins ?? 0} / loss {ml?.losses ?? 0} · с depth-фичами: <span className="font-bold text-emerald-200">{ml?.with_entry_depth ?? 0}</span> · последняя запись: {ml?.last_logged_at || "-"} ({ml?.last_symbol || "-"})
       </section>
     </AppShell>
+  );
+}
+
+// (#okx-depth-2026-09-12) Сравнение книг перед переключением фида. 07.09 фид
+// перевели на OKX books5 без этой проверки: thinness стала тождественно 1.0,
+// wall_share и obi поехали, пороги входа сломались молча. Здесь видно, дают ли
+// обе книги одинаковые метрики всем трём потребителям глубины.
+function BookCompare({ data }: { data: any }) {
+  if (!data) return null;
+  const rows: [string, any][] = Object.entries(data.symbols || {});
+  const primary = String(data.primary_exchange || "").toUpperCase();
+  const shadow = data.shadow_exchange ? String(data.shadow_exchange).toUpperCase() : null;
+  const keys: [string, string][] = [
+    ["levels_bid", "уровней"],
+    ["spread_pct", "спред %"],
+    ["obi", "OBI"],
+    ["bid_wall", "стенка bid"],
+    ["ask_wall", "стенка ask"],
+    ["thinness_long", "thinness long"],
+    ["thinness_short", "thinness short"],
+  ];
+  const cell = (v: any) => (v === null || v === undefined ? "—" : fmt(v, 4));
+  return (
+    <section className="rounded-2xl border border-cyan-900 bg-black/30 p-5">
+      <h2 className="mb-1 text-lg font-semibold text-cyan-200">
+        Сравнение книг: {primary} (рабочая){shadow ? ` и ${shadow} (тень)` : ""}
+      </h2>
+      <p className="mb-4 max-w-4xl text-xs leading-relaxed text-cyan-100/50">
+        Тень — полная книга OKX (канал {data.okx_channel}, до {data.book_levels} уровней), по ней
+        решения не принимаются. Метрики — те, что читают вход и выход: thinness (доля первых
+        пяти уровней во всей книге), стенки и OBI по {data.levels} уровням. Переключать фид на
+        OKX — когда медианы сойдутся.
+      </p>
+      {!shadow && <div className="text-sm text-cyan-100/50">Тень выключена или рабочий фид уже на OKX.</div>}
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="text-xs text-cyan-100/50">
+            <tr>
+              <th className="px-2 py-1">Символ</th>
+              {keys.map(([k, label]) => (
+                <th key={k} className="px-2 py-1">{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-t border-cyan-900 font-semibold text-cyan-200">
+              <td className="px-2 py-1">медиана {primary}</td>
+              {keys.map(([k]) => <td key={k} className="px-2 py-1">{cell(data.median?.primary?.[k])}</td>)}
+            </tr>
+            {shadow && (
+              <tr className="border-t border-cyan-950 font-semibold text-cyan-200">
+                <td className="px-2 py-1">медиана {shadow}</td>
+                {keys.map(([k]) => <td key={k} className="px-2 py-1">{cell(data.median?.shadow?.[k])}</td>)}
+              </tr>
+            )}
+            {rows.map(([sym, r]) => (
+              <tr key={sym} className="border-t border-cyan-950 align-top">
+                <td className="px-2 py-1">{sym}</td>
+                {keys.map(([k]) => (
+                  <td key={k} className="px-2 py-1">
+                    <div>{cell(r?.primary?.[k])}</div>
+                    {shadow && <div className="text-cyan-300/60">{cell(r?.shadow?.[k])}</div>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
