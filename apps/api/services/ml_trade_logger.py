@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 from core.config import settings
+from services.close_reasons import reached_tp2
 
 
 class MLTradeLogger:
@@ -199,7 +200,9 @@ class MLTradeLogger:
                 "is_win": bool(closed_net_pnl is not None and float(closed_net_pnl) > 0),
                 "is_loss": bool(closed_net_pnl is not None and float(closed_net_pnl) < 0),
                 "hit_stop": closed_reason == "stop_loss",
-                "hit_tp2": closed_reason == "tp2_reached",
+                # (#tp2-stage-2026-09-12) Этап TP2 закрывает хвост своими
+                # причинами — сделка до TP2 при этом дошла.
+                "hit_tp2": reached_tp2(closed_reason, plan),
                 "protected_profit": closed_reason in [
                     "protective_breakeven_profit_guard",
                     "adaptive_mfe_capture",

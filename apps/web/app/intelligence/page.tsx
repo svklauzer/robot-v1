@@ -113,6 +113,13 @@ const IMPORTANT_DECISIONS = [
   "post_tp1_lock_stop",
   "signal_expired",
   "position_already_open",
+
+  // (#decision-allowlist-close-reasons-2026-09-12) Все причины закрытия — из
+  // общего модуля ярлыков. Третий раз список отставал от бэкенда: закрытия
+  // этапа TP2 (tp2_trail_stop, tp2_trail_giveback), трейлы и выходы ТЗ лента
+  // отбрасывала целиком. Причина, у которой есть ярлык, теперь проходит сама —
+  // а ярлык обязателен по контрактному тесту.
+  ...Object.keys(CLOSE_REASON_LABELS),
 ];
 
 export default function IntelligencePage() {

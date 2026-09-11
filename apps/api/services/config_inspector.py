@@ -162,6 +162,9 @@ _PINNED_PREFIXES: tuple[str, ...] = (
     "LEARNING_",                        # условия входа в learning-режиме
     "SCALP_", "RANGE_", "CRT_",         # пороги альт-движков
     "GRID_", "FUNDING_ARB", "CROSS_FARB",
+    # (#okx-funding-2026-09-12) Наблюдение ставок: без него экономику арбитража
+    # не по чему пересчитать — вычищать из блупринта нельзя.
+    "FUNDING_OBSERVE",
 )
 _PINNED_SUFFIXES: tuple[str, ...] = (
     "_ENABLED",   # любой тумблер поведения

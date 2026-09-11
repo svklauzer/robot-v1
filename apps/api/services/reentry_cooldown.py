@@ -38,6 +38,11 @@ class ReEntryCooldownGuard:
         "trend_trailing_stop": 30,
         "tp1_reached": 30,
         "tp2_reached": 30,
+        # (#tp2-stage-2026-09-12) Прибыльные выходы после TP1 и TP2 — та же пауза,
+        # что у tp2_reached; без записи они получали умолчание 60 минут.
+        "tp2_trail_stop": 30,
+        "tp2_trail_giveback": 30,
+        "post_tp1_lock_stop": 30,
     }
 
     def _now(self):

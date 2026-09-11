@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 
+from services.close_reasons import reached_tp2
+
 
 class TradeOutcomeLogger:
     def __init__(self, path: str = "/app/storage/ml/trade_outcomes.jsonl"):
@@ -66,7 +68,7 @@ class TradeOutcomeLogger:
                 "is_win": bool(signal.closed_net_pnl is not None and signal.closed_net_pnl > 0),
                 "is_loss": bool(signal.closed_net_pnl is not None and signal.closed_net_pnl < 0),
                 "hit_stop": signal.closed_reason == "stop_loss",
-                "hit_tp2": signal.closed_reason == "tp2_reached",
+                "hit_tp2": reached_tp2(signal.closed_reason, signal.plan_json or {}),
                 "protected_profit": signal.closed_reason in [
                     "adaptive_mfe_capture",
                     "protective_trailing_stop",

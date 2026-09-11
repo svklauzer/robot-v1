@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.config import settings
 from core.db import SessionLocal
 from core.security import require_owner_action
+from services.close_reasons import reached_tp2
 from models.bot import Bot
 from models.signal import Signal
 from services.exposure_guard import ExposureGuard
@@ -752,7 +753,7 @@ def analytics_signal_quality(limit: int = 200, only_lifecycle: bool = False):
             trailing_count += reason in trailing_reasons
             post_tp1_stop_count += reason in post_tp1_reasons
             mfe_capture_count += reason in mfe_capture_reasons
-            tp2_count += reason == "tp2_reached"
+            tp2_count += reached_tp2(reason, plan)
             went_positive += bool(lifecycle.get("went_positive"))
             positive_then_negative += bool(lifecycle.get("positive_then_negative"))
 

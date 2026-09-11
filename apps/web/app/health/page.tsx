@@ -209,6 +209,9 @@ export default function HealthPage() {
           <LoopRow title="Telegram Delivery" enabled={loops?.telegram_delivery_loop?.enabled} created={loops?.telegram_delivery_loop?.task_created} done={loops?.telegram_delivery_loop?.task_done} />
           <LoopRow title="Payment Reconciliation" enabled={loops?.payment_reconciliation_loop?.enabled} created={loops?.payment_reconciliation_loop?.task_created} done={loops?.payment_reconciliation_loop?.task_done} />
           <LoopRow title="Funding Arb Loop" enabled={loops?.funding_arb_loop?.enabled} created={loops?.funding_arb_loop?.task_created} done={loops?.funding_arb_loop?.task_done} />
+          {/* (#okx-funding-2026-09-12) Наблюдение ставок HTX/OKX — только чтение,
+              идёт и при выключенном арбитраже: без него экономику не по чему считать. */}
+          <LoopRow title="Funding Observe (HTX/OKX)" enabled={loops?.funding_observe_loop?.enabled} created={loops?.funding_observe_loop?.task_created} done={loops?.funding_observe_loop?.task_done} />
         </Panel>
 
         <Panel title="Live safety">
