@@ -196,11 +196,14 @@ def _first_touch(fav: float, adv: float, target: float | None, stop: float,
 
 def replay(trade: Trade, path: list[tuple[float, float, float, float]], policy: str, *,
            pessimistic: bool = True, k: float = 2.0, kama: list[float | None] | None = None,
-           atr: list[float | None] | None = None, partial: float = 0.5) -> Result:
+           atr: list[float | None] | None = None, partial: float = 0.5,
+           stop_slip: float = 0.0) -> Result:
     """Проигрыш одного правила по пути сделки. Путь начинается со свечи ПОСЛЕ
     входа; конец пути — ограничение удержания (выход по закрытию). `atr` —
     готовый ряд с прогревом на свечах до входа; без него ATR считается по
-    самому пути и первые 14 свечей его нет."""
+    самому пути и первые 14 свечей его нет. `stop_slip` — неблагоприятное
+    проскальзывание каждого выхода по стопу (цели исполняются по уровню).
+    `partial=0` — без фиксации на TP1: вся позиция едет со стопом на TP1."""
     atr = atr if atr is not None else atr_pct(path)
     stop = -trade.stop_dist_pct
     res = Result()
@@ -216,7 +219,7 @@ def replay(trade: Trade, path: list[tuple[float, float, float, float]], policy: 
             eff_stop = max(stop, trade.cost_pct) if be_armed else stop
             touch = _first_touch(fav, adv, trade.tp1_pct, eff_stop, pessimistic)
             if touch == "stop":
-                res.exits.append(Exit(rest, eff_stop, "stop"))
+                res.exits.append(Exit(rest, eff_stop - stop_slip, "stop"))
                 return res
             if touch == "target":
                 res.exits.append(Exit(partial, trade.tp1_pct, "tp1"))
@@ -235,7 +238,8 @@ def replay(trade: Trade, path: list[tuple[float, float, float, float]], policy: 
         target = trade.tp2_pct if policy == "current" else None
         touch = _first_touch(fav, adv, target, stop, pessimistic)
         if touch == "stop":
-            res.exits.append(Exit(rest, stop, "stop_after_tp1" if policy != "chandelier" else "trail"))
+            res.exits.append(Exit(rest, stop - stop_slip,
+                                  "stop_after_tp1" if policy != "chandelier" else "trail"))
             return res
         if touch == "target":
             res.exits.append(Exit(rest, target, "tp2"))

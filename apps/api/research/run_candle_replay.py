@@ -21,6 +21,9 @@ from research.candle_replay import (
 )
 
 WARMUP_BARS = 100
+# Неблагоприятное проскальзывание выхода по стопу — как у настоящего стопа в
+# paper (PAPER_STOP_ADVERSE_SLIPPAGE_PCT), во всех вариантах одинаково.
+STOP_SLIP = 0.05
 POLICIES: tuple[tuple[str, str, dict], ...] = (
     ("current", "current", {}),
     ("atr_trail_k2", "atr_trail", {"k": 2.0}),
@@ -28,6 +31,11 @@ POLICIES: tuple[tuple[str, str, dict], ...] = (
     ("chandelier_k3", "chandelier", {"k": 3.0}),
     ("kama", "kama", {}),
     ("be_atr_k1", "be_atr", {"k": 1.0}),
+    # Без фиксации половины на TP1: стоп всей позиции переносится на TP1.
+    ("full_lock_tp2", "current", {"partial": 0.0}),
+    ("full_lock_trail_k2", "atr_trail", {"k": 2.0, "partial": 0.0}),
+    ("full_lock_trail_k3", "atr_trail", {"k": 3.0, "partial": 0.0}),
+    ("full_lock_kama", "kama", {"partial": 0.0}),
 )
 
 
@@ -106,7 +114,7 @@ def run(export: Path, max_hold_hours: float = 72.0, mode: str | None = None) -> 
                    "actual": t.actual_pct}
             for name, policy, kw in POLICIES:
                 for pess in (True, False):
-                    res = replay(t, path, policy, pessimistic=pess,
+                    res = replay(t, path, policy, pessimistic=pess, stop_slip=STOP_SLIP,
                                  atr=atr_full[start_i:], kama=kama_full[start_i:], **kw)
                     row[f"{name}|{'pess' if pess else 'opt'}"] = net_pct(t, res)
             rows.append(row)
