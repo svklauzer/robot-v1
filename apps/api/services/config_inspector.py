@@ -77,7 +77,9 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
                             # совпадает раньше по порядку групп.
                             "GRADE_", "CONFIDENCE_", "ENTRY_IMPULSE_",
                             # (#momentum-late-2026-09-12) Гейт импульса по тренду.
-                            "MOMENTUM_")),
+                            "MOMENTUM_",
+                            # (#tp1-partial-off-2026-09-12) Гейт смешанной награды.
+                            "MIN_NET_RR")),
     ("Стакан / ликвидность", ("OB_", "ORDERBOOK", "LIQUIDITY", "DEPTH_", "SLIPPAGE")),
     # OKX_ и ACTIVE_EXCHANGE — там же, где HTX_: это маршрут исполнения.
     # (#okx-affiliate-2026-09-08) Партнёрка отдельной группой и ДО «Комиссий»:
