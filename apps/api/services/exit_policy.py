@@ -750,11 +750,19 @@ class ExitPolicyService:
         )
         threshold_source = f"dynamic(stop={round(stop_distance_pct, 3)}%)" if stop_distance_pct else "static_fallback"
 
-        if tp2_pct > 0 and current_pct >= tp2_pct * 0.92:
+        # (#tp2-stage-2026-09-12) Правило закрывало весь остаток на 92% пути к
+        # TP2 и книжило ЦЕНУ TP2 — рынок до неё не доходил (phantom). Заодно оно
+        # перехватывало этап TP2 (#progressive-tp2-2026-09-03): цена проходит
+        # полосу 92–100% раньше, чем касается TP2, так что за 90 дней через этап
+        # не прошла ни одна сделка, и TP2 остался потолком. При включённом этапе
+        # правило молчит — TP2 обрабатывает ведение на самом уровне. Без этапа —
+        # закрывает по рынку.
+        if (tp2_pct > 0 and current_pct >= tp2_pct * 0.92
+                and not bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True))):
             return ExitDecision(
                 exit=True, reason="tp2_reached",
-                exit_price=round(float(tp2_price), 8),
-                note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f}",
+                exit_price=round(float(current_price), 8),
+                note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f} fill=market",
             )
 
         if stop_distance_pct is not None and stop_distance_pct >= 3.0:

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from core.config import settings
 from services import funding_cost
-from services.exchange_factory import get_exchange_client
+from services.exchange_factory import get_exchange_client, resolve_exchange_name
 
 
 @dataclass
@@ -39,6 +39,10 @@ class CostEngine:
         # (#okx-satellite-exchange-routing-2026-09-02) — там это биржа сигнала,
         # а не текущий ACTIVE_EXCHANGE.
         self.htx = get_exchange_client(exchange)
+        # (#funding-settlements-2026-09-12) Площадка нужна фондированию: её
+        # каденция расчётов. Раньше не передавалась, и все брали период по
+        # умолчанию.
+        self.venue = resolve_exchange_name(exchange)
 
     def fee_rate(
         self,
@@ -93,6 +97,8 @@ class CostEngine:
         hold_hours: float | None = None,
         funding_rate_pct: float | None = None,
         venue: str | None = None,
+        opened_at=None,
+        closed_at=None,
     ) -> CostPreview:
         entry_price = float(entry_price)
         exit_price = float(exit_price)
@@ -130,8 +136,10 @@ class CostEngine:
             market_type=market_type,
             hold_hours=hold_hours,
             rate_pct=funding_rate_pct,
-            venue=venue,
+            venue=venue or getattr(self, "venue", None),
             symbol=symbol,
+            opened_at=opened_at,
+            closed_at=closed_at,
         )
 
         if side_value in ["long", "buy"]:
