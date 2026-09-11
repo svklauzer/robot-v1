@@ -63,6 +63,14 @@ def test_the_depth_feed_also_covers_open_trades():
     assert "open_syms" in main_src and "ob_symbols + [s for s in open_syms if s]" in main_src
 
 
+def test_the_feed_only_adds_open_trades_of_its_own_exchange():
+    """Сделка на HTX по символу, которого нет на OKX, не должна давать фиду OKX
+    ошибку подписки: её цена и выходы идут через HTX."""
+    main_src = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
+    assert "Signal.exchange" in main_src.split("open_syms = [", 1)[1][:400]
+    assert '== _venue' in main_src
+
+
 def test_health_says_which_universe_is_live():
     main_src = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
     page = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")

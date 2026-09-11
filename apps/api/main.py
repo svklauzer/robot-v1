@@ -750,10 +750,17 @@ async def lifespan(app: FastAPI):
                 # (#okx-universe-2026-09-12) Плюс символы открытых сделок: символ,
                 # убранный из вселенной, доживает до закрытия — и его выходу
                 # нужна книга (ускорение выхода по потоку).
+                # Только сделки ТОЙ ЖЕ биржи, что и фид: сделка, открытая на HTX по
+                # символу, которого нет на OKX, иначе дала бы фиду OKX ошибку
+                # подписки. Её цена и выходы идут через её биржу, книга ей не нужна.
+                from services.orderbook_feed import feed_exchange as _ob_venue
+
+                _venue = _ob_venue()
                 open_syms = [
-                    row[0] for row in ob_db.query(Signal.symbol)
+                    sym for sym, ex in ob_db.query(Signal.symbol, Signal.exchange)
                     .filter(Signal.status.in_(["published", "opened", "tp1", "breakeven"]))
                     .distinct().all()
+                    if sym and str(ex or "htx").strip().lower() == _venue
                 ]
                 ob_symbols = list(dict.fromkeys(ob_symbols + [s for s in open_syms if s]))
             if not ob_symbols:
