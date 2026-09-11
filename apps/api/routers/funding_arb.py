@@ -41,6 +41,15 @@ def funding_arb_summary():
         db.close()
 
 
+@router.get("/economics", dependencies=[Depends(require_owner_action)])
+def funding_arb_economics(window_hours: float = 168.0, hold_periods: int | None = None):
+    """(#okx-funding-2026-09-12) Экономика по биржам на наблюдениях журнала:
+    внутрибиржевой хедж на HTX и OKX и межбиржевой HTX↔OKX. Ничего не открывает."""
+    from services.funding_venue_economics import build
+
+    return build(window_hours=window_hours, hold_periods=hold_periods)
+
+
 @router.post("/scan", dependencies=[Depends(require_owner_action)])
 def funding_arb_scan(payload: FundingArbScanRequest | None = None):
     db = SessionLocal()

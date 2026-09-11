@@ -60,12 +60,12 @@ def is_derivative(market_type: str | None) -> bool:
     return str(market_type or "").lower() in ("swap", "futures", "perp")
 
 
-def observed_rate_pct(symbol: str) -> float | None:
-    """Наблюдаемая ставка из журнала. None — наблюдений нет."""
+def observed_rate_pct(symbol: str, venue: str | None = None) -> float | None:
+    """Наблюдаемая ставка из журнала по бирже сделки. None — наблюдений нет."""
     try:
         from services import funding_rate_history
 
-        stats = funding_rate_history.stability(symbol)
+        stats = funding_rate_history.stability(symbol, venue=venue)
         if int(stats.get("observations") or 0) <= 0:
             return None
         rate = stats.get("mean_rate_pct")
@@ -126,7 +126,7 @@ def funding_usdt(
         return 0.0
 
     if rate_pct is None and symbol:
-        rate_pct = observed_rate_pct(symbol)
+        rate_pct = observed_rate_pct(symbol, venue)
     if rate_pct is None:
         rate_pct = float(getattr(settings, "FUNDING_FALLBACK_RATE_PCT", 0.01))
 

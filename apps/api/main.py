@@ -131,6 +131,8 @@ ml_retrain_loop_enabled = True
 
 venues_spread_task = None
 venues_spread_loop_enabled = True
+funding_observe_task = None
+funding_observe_loop_enabled = True
 # Сериализует ведение позиций между медленным SCAN и быстрым MANAGE циклами,
 # чтобы одну позицию не обрабатывали два цикла одновременно.
 position_manage_lock = asyncio.Lock()
@@ -438,6 +440,42 @@ async def background_walkforward_loop():
         await asyncio.sleep(int(getattr(settings, "WALKFORWARD_INTERVAL_SEC", 86400)))
 
 
+async def background_funding_observe_loop():
+    """Наблюдение ставок фандинга HTX и OKX (#okx-funding-2026-09-12).
+
+    Только чтение: снимок ставки и базиса в журнал с меткой биржи, без позиций,
+    ордеров и строк в базе. Идёт при любом значении ENABLE_FUNDING_ARB — пока
+    контуры выключены, другого источника истории ставок нет. Сбой прохода не
+    валит цикл и ничего не трогает в торговле.
+    """
+    global funding_observe_loop_enabled
+
+    await asyncio.sleep(45)
+
+    while funding_observe_loop_enabled:
+        try:
+            if bool(getattr(settings, "FUNDING_OBSERVE_ENABLED", True)):
+                from services.funding_observer import observe_once
+
+                # Ходит в биржи синхронно (ccxt на requests) — только через поток.
+                result = await asyncio.to_thread(observe_once)
+                errors = result.get("errors") or []
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "funding_observe",
+                    recorded=result.get("recorded"),
+                    errors=len(errors),
+                    first_error=errors[0] if errors else None,
+                )
+        except Exception as e:  # noqa: BLE001
+            log_event(logger, logging.ERROR, "funding_observe_loop_error",
+                      error_type=type(e).__name__, error=str(e))
+
+        interval_min = max(float(getattr(settings, "FUNDING_OBSERVE_INTERVAL_MIN", 60.0) or 60.0), 5.0)
+        await asyncio.sleep(interval_min * 60)
+
+
 async def background_venues_spread_loop():
     """Почасовой снапшот funding-спредов HTX↔Kraken (#kraken-p1-2026-07-18, P1.5).
 
@@ -681,7 +719,7 @@ def initialize_database_schema():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, grid_task, grid_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled, venues_spread_task, venues_spread_loop_enabled
+    global robot_task, robot_loop_enabled, subscription_task, subscription_loop_enabled, telegram_delivery_task, telegram_delivery_loop_enabled, payment_reconciliation_task, payment_reconciliation_loop_enabled, funding_arb_task, funding_arb_loop_enabled, grid_task, grid_loop_enabled, manage_task, manage_loop_enabled, orderbook_feed_task, orderbook_feed_enabled, digest_task, digest_loop_enabled, ml_retrain_task, ml_retrain_loop_enabled, venues_spread_task, venues_spread_loop_enabled, funding_observe_task, funding_observe_loop_enabled
 
     initialize_database_schema()
     bootstrap_owner_and_bot()
@@ -735,6 +773,8 @@ async def lifespan(app: FastAPI):
 
     venues_spread_loop_enabled = True
     venues_spread_task = asyncio.create_task(background_venues_spread_loop())
+    funding_observe_loop_enabled = True
+    funding_observe_task = asyncio.create_task(background_funding_observe_loop())
     egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
     walkforward_task = asyncio.create_task(background_walkforward_loop())
 
@@ -779,6 +819,10 @@ async def lifespan(app: FastAPI):
     venues_spread_loop_enabled = False
     if venues_spread_task:
         venues_spread_task.cancel()
+
+    funding_observe_loop_enabled = False
+    if funding_observe_task:
+        funding_observe_task.cancel()
 
     # (#walk-forward-2026-07-27) egress-монитор и walk-forward тоже надо гасить:
     # незакрытые задачи держат event loop при остановке инстанса.

@@ -64,14 +64,14 @@ def test_explicit_rate_wins_over_fallback(monkeypatch):
 
 def test_fallback_used_when_no_observations(monkeypatch):
     monkeypatch.setattr(settings, "FUNDING_FALLBACK_RATE_PCT", 0.01, raising=False)
-    monkeypatch.setattr(funding_cost, "observed_rate_pct", lambda _s: None)
+    monkeypatch.setattr(funding_cost, "observed_rate_pct", lambda _s, _v=None: None)
     value = funding_cost.funding_usdt(notional=1000.0, side="long", market_type="swap",
                                       hold_hours=8.0, venue="htx", symbol="BTC/USDT")
     assert value == pytest.approx(0.1)
 
 
 def test_observed_rate_is_preferred_over_fallback(monkeypatch):
-    monkeypatch.setattr(funding_cost, "observed_rate_pct", lambda _s: 0.08)
+    monkeypatch.setattr(funding_cost, "observed_rate_pct", lambda _s, _v=None: 0.08)
     value = funding_cost.funding_usdt(notional=1000.0, side="long", market_type="swap",
                                       hold_hours=8.0, venue="htx", symbol="BTC/USDT")
     assert value == pytest.approx(0.8)
