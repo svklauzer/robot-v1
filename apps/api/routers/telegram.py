@@ -152,9 +152,27 @@ def _validate_pre_checkout(pcq: dict) -> tuple[bool, str | None]:
             return False, "Платёж не найден. Начните заново через /plans."
         if payment.status == "paid":
             return False, "Этот счёт уже оплачен."
+        # (#stars-price-drift-2026-09-12) Звёзды при зачислении сверяются с
+        # ТЕКУЩЕЙ ценой тарифа. Счёт, выставленный до смены цены, прошёл бы
+        # оплату по старой цене и упал бы на сверке: звёзды списаны, VIP не
+        # выдан. Отказ здесь происходит ДО списания.
+        if str(pcq.get("currency") or "").upper() == "XTR":
+            expected = int(settings.stars_price_for_plan(payment.plan_code))
+            if expected <= 0:
+                return False, "Тариф сейчас недоступен. Выберите тариф заново через /plans."
+            if int(pcq.get("total_amount") or 0) != expected:
+                return False, "Цена тарифа изменилась. Запросите новый счёт через /plans."
         return True, None
     finally:
         db.close()
+
+
+async def _alert_owner(title: str, body: str) -> None:
+    """Уведомление владельцу, которое само не роняет денежную ветку."""
+    try:
+        await SignalBroadcaster().send_owner_alert(title, body)
+    except Exception as e:  # noqa: BLE001
+        log_event(logger, logging.ERROR, "owner_alert_failed", title=title, error=str(e))
 
 
 async def _handle_successful_payment(message: dict) -> dict:
@@ -188,6 +206,16 @@ async def _handle_successful_payment(message: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             log_event(logger, logging.WARNING, "vip_invite_create_failed", error=str(e))
 
+        # Ссылки нет ни одноразовой, ни постоянной — человек заплатил и ждёт
+        # доступа, который выдать может только владелец.
+        if not invite_link and not settings.VIP_INVITE_LINK:
+            await _alert_owner(
+                "VIP ОПЛАЧЕН, ССЫЛКИ НЕТ",
+                f"Платёж #{payment_id}, пользователь {subscriber.telegram_user_id}: "
+                "одноразовую ссылку создать не удалось, VIP_INVITE_LINK не задан. "
+                "Выдайте доступ вручную.",
+            )
+
         text = CustomerNotificationService().payment_success_text(
             payment, subscriber, activated=activated, invite_link=invite_link,
         )
@@ -197,10 +225,45 @@ async def _handle_successful_payment(message: dict) -> dict:
         log_event(logger, logging.INFO, "stars_payment_confirmed",
                   payment_id=payment_id, activated=activated, has_invite=bool(invite_link))
         return {"status": "ok", "stage": "successful_payment", "payment_id": payment_id, "activated": activated}
+    except ValueError as e:
+        # (#payment-not-applied-2026-09-12) Правило денег не пустило зачисление
+        # (сумма, повтор события, статус). Само не исправится — повтор доставки
+        # упадёт так же. Звёзды при этом УЖЕ списаны: владельцу — сразу, человеку —
+        # ответ, а не тишина.
+        db.rollback()
+        log_event(logger, logging.ERROR, "successful_payment_rejected",
+                  payment_id=payment_id, error=str(e))
+        await _alert_owner(
+            "ОПЛАТА ПОЛУЧЕНА, НЕ ЗАЧИСЛЕНА",
+            f"Платёж #{payment_id}, чат {chat_id}, charge {charge_id}: {e}. "
+            "Звёзды списаны — проверьте и выдайте доступ вручную.",
+        )
+        if chat_id:
+            try:
+                await SignalBroadcaster().send_message(
+                    chat_id,
+                    "✅ Оплата получена. Доступ проверим и выдадим вручную — "
+                    "владелец уже уведомлён. Статус: /status.",
+                    message_type="payment_manual_review",
+                )
+            except Exception as send_error:  # noqa: BLE001
+                log_event(logger, logging.WARNING, "payment_manual_review_notify_failed",
+                          error=str(send_error))
+        return {"status": "error", "error": str(e), "owner_alerted": True}
     except Exception as e:  # noqa: BLE001
+        # Технический сбой (база, сеть). Раньше ответ был 200 с ошибкой внутри —
+        # Telegram считал апдейт доставленным и больше его не присылал: оплата
+        # терялась насовсем. Ошибка в ответе заставляет Telegram повторить
+        # доставку; зачисление идемпотентно (повтор проведённого платежа не
+        # продлевает подписку второй раз).
         db.rollback()
         log_event(logger, logging.ERROR, "successful_payment_failed", payment_id=payment_id, error=str(e))
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+        await _alert_owner(
+            "ОПЛАТА НЕ ЗАЧИСЛЕНА — ПОВТОР",
+            f"Платёж #{payment_id}, чат {chat_id}: {type(e).__name__}: {e}. "
+            "Telegram повторит доставку; если не пройдёт — выдайте доступ вручную.",
+        )
+        raise HTTPException(status_code=500, detail="payment_not_applied_retry")
     finally:
         db.close()
 
