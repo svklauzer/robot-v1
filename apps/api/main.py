@@ -1122,9 +1122,11 @@ def orderbook_compare():
     потребителей глубины по каждому символу и медианы. Переключать фид на OKX —
     только когда они сойдутся; 07.09 переключение без этой проверки сломало
     пороги входа."""
-    from services.orderbook_feed import compare_books, feed_exchange as ob_feed_exchange
+    from services.orderbook_feed import FEED_STATS, compare_books, feed_exchange as ob_feed_exchange
 
     out = compare_books()
+    # Счётчики фида OKX: пустая тень без них неотличима от «ещё не набралось».
+    out["feeds"] = FEED_STATS
     out["primary_exchange"] = ob_feed_exchange()
     out["shadow_exchange"] = (
         "okx" if ob_feed_exchange() != "okx"

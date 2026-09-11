@@ -87,3 +87,25 @@ def test_the_book_is_cut_to_the_same_depth_as_htx():
     top_b, top_a = book.top(150)
     assert len(top_b) == 150 and len(top_a) == 150
     assert top_b[0][0] == 1000.0 and top_a[0][0] == 1001.0
+
+
+def test_a_zero_checksum_means_none_was_sent():
+    """Живой поток OKX 12.09: checksum=0 в каждом сообщении канала books.
+    Принимать ноль за сумму значило отбрасывать каждый снимок — теневая книга
+    не наполнилась ни разу."""
+    book = OkxLocalBook()
+    assert book.apply("snapshot", {"bids": [["100", "1", "0", "1"]], "asks": [["101", "1", "0", "1"]],
+                                   "seqId": 1, "prevSeqId": -1, "checksum": 0})
+    assert book.apply("update", {"bids": [["100", "2", "0", "1"]], "asks": [],
+                                 "seqId": 2, "prevSeqId": 1, "checksum": 0})
+    assert book.top(5)[0] == [[100.0, 2.0]]
+
+
+def test_a_crossed_book_is_rebuilt():
+    """Без контрольной суммы целостность держит последовательность; бид выше
+    аска — верный признак, что книга разошлась с биржей."""
+    book = OkxLocalBook()
+    assert book.apply("snapshot", {"bids": [["100", "1", "0", "1"]], "asks": [["101", "1", "0", "1"]],
+                                   "seqId": 1, "prevSeqId": -1, "checksum": 0})
+    assert book.apply("update", {"bids": [["102", "1", "0", "1"]], "asks": [],
+                                 "seqId": 2, "prevSeqId": 1, "checksum": 0}) is False
