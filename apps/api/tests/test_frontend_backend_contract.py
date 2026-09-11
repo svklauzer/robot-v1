@@ -935,3 +935,13 @@ def test_the_latch_line_names_both_series_the_backend_reports():
     line = _rendered(_read(WEB / "components/ImpulseLatchLine.tsx"))
     assert "latch?.tf" in line and "substitutes_tf" in line, "строка не читает ряды"
     assert "adx_rise_min" in line, "порог роста не показан рядом с импульсом"
+
+
+def test_the_decision_feed_lets_every_close_reason_through():
+    """(#decision-allowlist-close-reasons-2026-09-12) Белый список ленты решений
+    трижды отставал от бэкенда, и событие без кода в списке отбрасывалось
+    целиком. Все причины закрытия берутся из общего модуля ярлыков."""
+    src = _read(WEB / "app/intelligence/page.tsx")
+    start = src.index("const IMPORTANT_DECISIONS")
+    body = src[start: src.index("];", start)]
+    assert "...Object.keys(CLOSE_REASON_LABELS)" in body

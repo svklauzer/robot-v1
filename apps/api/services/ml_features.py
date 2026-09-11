@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.close_reasons import reached_tp2
+
 # (#audit-ml-cvd) CVD из окна с горсткой сделок — шум (cvd_ratio схлопывается в
 # ±1.0 при 1–2 сделках; в live так почти всегда). Ниже порога зануляем CVD-фичи
 # — ОДИНАКОВО в train и serve, иначе train/serve skew.
@@ -199,7 +201,7 @@ def row_to_label(row: dict, label_kind: str = "beats_costs",
     if label_kind == "hit_tp2":
         if "hit_tp2" in labels:
             return 1 if labels.get("hit_tp2") else 0
-        return 1 if str(row.get("closed_reason")) == "tp2_reached" else 0
+        return 1 if reached_tp2(row.get("closed_reason"), row.get("plan") or {}) else 0
 
     pnl = row.get("closed_net_pnl")
     if pnl is None:

@@ -139,3 +139,24 @@ def test_analytics_page_surfaces_validation_gates_contract():
     assert "validationGates?.closed_count" in page
     assert "validationGates?.failed_setup_share_pct" in page
     assert "validationGates?.positive_then_negative_rate_pct" in page
+
+
+def test_funding_page_and_health_show_the_venue_observation():
+    """(#okx-funding-2026-09-12) Наблюдение ставок HTX/OKX и экономика по
+    биржам — на странице арбитража, цикл наблюдения — на странице здоровья."""
+    page = (ROOT / "apps/web/app/funding/page.tsx").read_text(encoding="utf-8")
+    health = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
+    main_src = (ROOT / "apps/api/main.py").read_text(encoding="utf-8")
+
+    assert "/funding-arb/economics" in page
+    assert "function VenueEconomics" in page
+    assert "break_even_periods" in page and "net_over_hold_pct" in page
+    assert "funding_observe_loop" in health
+    assert '"funding_observe_loop": {' in main_src
+
+
+def test_the_banner_no_longer_claims_history_while_nothing_scanned():
+    """Плашка при выключенном арбитраже говорила «сканирование и история
+    живы» — при ENABLE_FUNDING_ARB=false скан не ходил и история не копилась."""
+    page = (ROOT / "apps/web/app/funding/page.tsx").read_text(encoding="utf-8")
+    assert "Сканирование и история живы" not in page

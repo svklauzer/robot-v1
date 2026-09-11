@@ -24,6 +24,8 @@ export default function FundingArbPage() {
   const [action, setAction] = useState<string | null>(null);
   const [notional, setNotional] = useState("100");
   const [lastSmoke, setLastSmoke] = useState<any>(null);
+  // (#okx-funding-2026-09-12) Экономика по наблюдениям HTX и OKX.
+  const [economics, setEconomics] = useState<any>(null);
 
   async function loadAll() {
     setLoading(true);
@@ -36,6 +38,8 @@ export default function FundingArbPage() {
       setSummary(summaryData || null);
       setOpportunities(oppData?.items || []);
       setPositions(posData?.items || []);
+      // Отдельно и без падения страницы: отчёт ходит за комиссиями бирж.
+      setEconomics(await apiGet("/funding-arb/economics?window_hours=168").catch(() => null));
     } finally {
       setLoading(false);
     }
@@ -170,13 +174,13 @@ export default function FundingArbPage() {
                 ENABLE_FUNDING_ARB = false
               </div>
               <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-                Сканирование и история живы, новые позиции не открываются.
-                Причина отключения — не пороги, а комиссия спота: круг
-                спот+своп стоит 0.5% (из них 0.4% спот), поэтому при базовой
-                ставке HTX 0.0100%/8ч окупаемость наступает на 50-м периоде,
-                а удержание ограничено 30-ю. Сделка не может выйти в плюс ни
-                при каком развитии. Рычаг здесь — тариф комиссий, а не
-                настройки арбитража.
+                Сканирование арбитража и новые позиции выключены. Ставки HTX и
+                OKX при этом наблюдаются раз в час отдельным циклом — экономика
+                по биржам ниже. Причина отключения — не пороги, а комиссия
+                спота: круг спот+своп на HTX стоит 0.5% (из них 0.4% спот),
+                поэтому при базовой ставке 0.0100%/8ч окупаемость наступает на
+                50-м периоде, а удержание ограничено 30-ю. У OKX спот вдвое
+                дешевле (круг ~0.3%) — это и проверяет наблюдение.
               </p>
             </div>
           )}
@@ -301,7 +305,7 @@ export default function FundingArbPage() {
           </div>
           <div className="rounded-lg border border-emerald-900/50 bg-black/20 p-3">
             <div className="mb-1 font-semibold text-emerald-200">3. Комиссии</div>
-            Round-trip ≈ 0.5% нотионала (spot 0.2%×2 + perp 0.05%×2). Нужно держать достаточно периодов.
+            Round-trip на HTX ≈ 0.5% нотионала (spot 0.2%×2 + perp 0.05%×2), на OKX ≈ 0.3% (spot 0.1%×2 + perp 0.05%×2). Нужно держать достаточно периодов.
           </div>
           <div className="rounded-lg border border-emerald-900/50 bg-black/20 p-3">
             <div className="mb-1 font-semibold text-emerald-200">4. Выход</div>
@@ -309,6 +313,8 @@ export default function FundingArbPage() {
           </div>
         </div>
       </section>
+
+      <VenueEconomics data={economics} />
 
       {/* ── Paper smoke result ── */}
       {lastSmoke && (
@@ -592,6 +598,112 @@ function PositionCard({ item, isOpen }: { item: any; isOpen: boolean }) {
         {isOpen ? `Opened: ${formatDate(item.opened_at)}` : `${formatDate(item.opened_at)} → ${formatDate(item.closed_at)}`}
       </div>
     </div>
+  );
+}
+
+// (#okx-funding-2026-09-12) Экономика арбитража по наблюдениям журнала ставок:
+// внутрибиржевой хедж на каждой бирже и межбиржевой спред. Решение вернуть
+// арбитраж принимается по этим числам, не раньше чем через неделю наблюдений.
+function VenueEconomics({ data }: { data: any }) {
+  const intra: any[] = data?.intra || [];
+  const cross: any[] = data?.cross || [];
+  const hold = data?.hold_periods;
+  const observed = intra.some((r) => (r.observations || 0) > 0);
+  return (
+    <section className="rounded-2xl border border-cyan-900 bg-black/30 p-5">
+      <h2 className="mb-1 flex items-center gap-2 text-xl font-semibold text-cyan-200">
+        <ArrowDownUp size={18} />
+        Наблюдение ставок: {(data?.venues || ["htx", "okx"]).join(" / ").toUpperCase()}
+      </h2>
+      <p className="mb-4 max-w-4xl text-xs leading-relaxed text-cyan-100/50">
+        Только чтение: ставка и базис раз в час, при любом состоянии арбитража.
+        Ставки — % за 8-часовой период; осторожная — нижний квартиль наблюдавшихся.
+        «Окупаемость» — за сколько периодов доход покроет круг издержек; «итог» —
+        результат за {hold ?? "-"} периодов удержания. Решать по этим числам не
+        раньше чем через неделю наблюдений.
+      </p>
+
+      {!data && <Empty text="Отчёт экономики недоступен" />}
+      {data && !observed && (
+        <Empty text="Наблюдений пока нет — цикл пишет раз в час, первые строки появятся через час после деплоя" />
+      )}
+
+      {data && observed && (
+        <>
+          <div className="mb-2 text-sm font-semibold text-cyan-200">Хедж внутри биржи (спот лонг + своп шорт)</div>
+          <div className="mb-5 overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="text-xs text-cyan-100/50">
+                <tr>
+                  <th className="px-2 py-1">Биржа</th>
+                  <th className="px-2 py-1">Символ</th>
+                  <th className="px-2 py-1">Замеров</th>
+                  <th className="px-2 py-1">Осторожная ставка</th>
+                  <th className="px-2 py-1">Круг издержек</th>
+                  <th className="px-2 py-1">Окупаемость, периодов</th>
+                  <th className="px-2 py-1">Итог за {hold ?? "-"}</th>
+                  <th className="px-2 py-1">Комиссия из</th>
+                </tr>
+              </thead>
+              <tbody>
+                {intra.map((r) => (
+                  <tr key={`${r.venue}-${r.symbol}`} className="border-t border-cyan-950">
+                    <td className="px-2 py-1 font-semibold uppercase">{r.venue}</td>
+                    <td className="px-2 py-1">{r.symbol}</td>
+                    <td className="px-2 py-1">{r.observations}{r.span_hours != null ? ` · ${r.span_hours} ч` : ""}</td>
+                    <td className="px-2 py-1">{fmtPct(r.conservative_rate_pct)}</td>
+                    <td className="px-2 py-1">{fmtPct(r.round_trip_pct)}</td>
+                    <td className="px-2 py-1">{r.break_even_periods ?? "не окупается"}</td>
+                    <td className={`px-2 py-1 font-semibold ${Number(r.net_over_hold_pct) > 0 ? "text-emerald-300" : "text-red-300"}`}>
+                      {fmtPct(r.net_over_hold_pct)}
+                    </td>
+                    <td className={`px-2 py-1 text-xs ${String(r.fee_source || "").includes("fallback") ? "text-yellow-300" : "text-cyan-100/50"}`}>
+                      {r.fee_source}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mb-2 text-sm font-semibold text-cyan-200">Между биржами (своп шорт там, где ставка выше)</div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="text-xs text-cyan-100/50">
+                <tr>
+                  <th className="px-2 py-1">Пара</th>
+                  <th className="px-2 py-1">Символ</th>
+                  <th className="px-2 py-1">Общих часов</th>
+                  <th className="px-2 py-1">Средний спред</th>
+                  <th className="px-2 py-1">Направление</th>
+                  <th className="px-2 py-1">Знак держится</th>
+                  <th className="px-2 py-1">Окупаемость, периодов</th>
+                  <th className="px-2 py-1">Итог за {hold ?? "-"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cross.map((r) => (
+                  <tr key={`${r.pair}-${r.symbol}`} className="border-t border-cyan-950">
+                    <td className="px-2 py-1 font-semibold uppercase">{r.pair}</td>
+                    <td className="px-2 py-1">{r.symbol}</td>
+                    <td className="px-2 py-1">{r.hours_both_observed}</td>
+                    <td className="px-2 py-1">{fmtPct(r.mean_spread_pct)}</td>
+                    <td className="px-2 py-1">{r.direction || "-"}</td>
+                    <td className="px-2 py-1">
+                      {r.sign_consistency != null ? `${Math.round(Number(r.sign_consistency) * 100)}%` : "-"}
+                    </td>
+                    <td className="px-2 py-1">{r.break_even_periods ?? "не окупается"}</td>
+                    <td className={`px-2 py-1 font-semibold ${Number(r.net_over_hold_pct) > 0 ? "text-emerald-300" : "text-red-300"}`}>
+                      {fmtPct(r.net_over_hold_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

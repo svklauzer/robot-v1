@@ -2099,6 +2099,15 @@ def system_health():
                 "task_done": funding_arb_task.done() if funding_arb_task else None,
                 "scan_interval_hours": settings.FUNDING_ARB_SCAN_INTERVAL_HOURS,
             },
+            # (#okx-funding-2026-09-12) Наблюдение ставок по биржам — только чтение.
+            "funding_observe_loop": {
+                "enabled": funding_observe_loop_enabled
+                and bool(getattr(settings, "FUNDING_OBSERVE_ENABLED", True)),
+                "task_created": funding_observe_task is not None,
+                "task_done": funding_observe_task.done() if funding_observe_task else None,
+                "venues": getattr(settings, "FUNDING_OBSERVE_VENUES", ""),
+                "interval_min": getattr(settings, "FUNDING_OBSERVE_INTERVAL_MIN", 60.0),
+            },
         }
         return SystemHealthService().summary(db, loops=loops)
 
