@@ -92,7 +92,7 @@ services:
       - key: HTX_MARKET_TYPE
         value: spot
       - key: HTX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
@@ -449,7 +449,7 @@ services:
 
       # ── Risk management ───────────────────────────────────────────────────
       - key: RISK_EQUITY_USDT
-        value: "950"
+        value: "3000"
       - key: RISK_PER_TRADE_PCT
         value: "0.4"
       - key: LIVE_MAX_ORDER_NOTIONAL_USDT
