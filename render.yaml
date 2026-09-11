@@ -358,6 +358,10 @@ services:
       # Возврат в enforce — после разреза stop-forensics по would_block.
       - key: TP_REACH_MODE
         value: shadow
+      # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
+      # вердикт пишется в план сделки, enforce — такой вход не открывается.
+      - key: MOMENTUM_GATE_MODE
+        value: shadow
       - key: TP_REACH_EV_MARGIN
         value: "1.0"
       - key: TP_REACH_MIN_SAMPLE

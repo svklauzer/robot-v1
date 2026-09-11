@@ -24,7 +24,7 @@ from services.telegram_router import TelegramRouter
 from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
-from services import trend_trigger, tz_entry_shadow, tp_reachability
+from services import trend_trigger, tz_entry_shadow, tp_reachability, momentum_gate
 from services.regime_expectancy_sizer import RegimeExpectancySizer
 from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
@@ -786,6 +786,25 @@ class RobotLoop:
                 db.flush()
                 continue
 
+            # (#momentum-late-2026-09-12) Импульс 15m уже смотрит по тренду —
+            # ход случился. В shadow только вердикт в план, в enforce вход не
+            # открывается. Разбор и цифры — в services/momentum_gate.py.
+            _momentum = momentum_gate.evaluate(str(getattr(result, "reason", "") or ""))
+            if _momentum and _momentum.get("blocks"):
+                self.decisions.record(
+                    db,
+                    symbol=symbol,
+                    status="blocked",
+                    decision="momentum_aligned_late_entry",
+                    action=result.action,
+                    regime=str(getattr(result, "regime", "") or ""),
+                    radar_state=getattr(result, "radar_state", None),
+                    confidence_hint=getattr(result, "confidence_hint", None),
+                    payload=_momentum,
+                )
+                db.flush()
+                continue
+
             performance = self.symbol_performance_guard.analyze(
                 db=db,
                 bot_id=bot.id,
@@ -1458,6 +1477,8 @@ class RobotLoop:
                     # ходе инструмента. У скальпа цель стоит на 0.8% при медианном
                     # ходе 0.391% — RR считается от геометрии, которой нет.
                     "tp_reach": _tp_reach.as_dict(),
+                    # (#momentum-late-2026-09-12) Вердикт гейта импульса — и в тени.
+                    "momentum_gate": _momentum,
                     # (#expectancy-2026-07-27) ПРИЧИНА ВХОДА. Раньше не писалась
                     # вовсе: разрез результата по типу сетапа был невозможен —
                     # `trend_volume_breakout_v2` и разворот от поддержки лежали в
