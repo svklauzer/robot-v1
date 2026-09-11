@@ -26,6 +26,15 @@ wall_share на двух площадках считаются по разной
 
 Всё под флагом ENABLE_ORDERBOOK_ENGINE; если фид молчит, снимок отдаёт None →
 анализатор уходит в pass-through, торговля как обычно.
+
+Полная книга OKX и тень (#okx-depth-2026-09-12). OKX теперь идёт каналом
+`books` (до 400 уровней, книга ведётся локально — см. services/okx_book.py) и
+отдаётся потребителям обрезанной до глубины HTX `step0` (`OB_BOOK_LEVELS`).
+Пока фид закреплён на HTX, книга OKX пишется в ТЕНЕВОЕ хранилище
+(`OB_OKX_SHADOW_ENABLED`): решения по ней не принимаются, а `/orderbook/compare`
+показывает метрики всех трёх потребителей — depth_thinness, wall_share, obi —
+по обеим книгам рядом. Переключать фид — только когда они сойдутся: 07.09
+переключение без такой проверки молча сломало пороги входа.
 """
 from __future__ import annotations
 
@@ -91,6 +100,16 @@ class OrderBookStore:
 ORDERBOOK_STORE = OrderBookStore(
     trades_window_sec=float(getattr(settings, "OB_CVD_WINDOW_SEC", 60)),
 )
+
+# (#okx-depth-2026-09-12) Книга OKX, пока рабочий фид на HTX. Только для
+# сравнения — ни вход, ни выход её не читают.
+ORDERBOOK_SHADOW_STORE = OrderBookStore(
+    trades_window_sec=float(getattr(settings, "OB_CVD_WINDOW_SEC", 60)),
+)
+
+
+def book_levels() -> int:
+    return max(int(getattr(settings, "OB_BOOK_LEVELS", 150) or 150), 10)
 
 
 # Спот и перпетуал — РАЗНЫЕ книги с разной ликвидностью и разной лентой.
@@ -244,12 +263,52 @@ def _okx_inst_id(ccxt_symbol: str, market_type: str | None = None) -> str:
     return inst
 
 
-async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | None = None):
+def handle_okx_message(msg: dict, inst_map: dict, books: dict, store: "OrderBookStore",
+                       levels: int) -> list[str]:
+    """Одно сообщение OKX → хранилище. Возвращает instId, чью книгу надо
+    пересобрать (пропуск в последовательности или неверная контрольная сумма).
+
+    `books` — полная книга, ведётся локально; `books5` и прочие — готовые
+    снимки, как было.
+    """
+    from services.okx_book import OkxLocalBook
+
+    arg = msg.get("arg") or {}
+    rows = msg.get("data") or []
+    inst = arg.get("instId")
+    sym = inst_map.get(inst)
+    if not sym or not rows:
+        return []
+
+    channel = str(arg.get("channel") or "")
+    if channel == "books":
+        book = books.setdefault(inst, OkxLocalBook())
+        action = str(msg.get("action") or "update")
+        for row in rows:
+            if not book.apply(action, row):
+                book.reset()
+                return [inst]
+        store.update_book(sym, *book.top(levels))
+    elif channel.startswith("books"):
+        book = rows[-1]
+        store.update_book(sym, book.get("bids", []), book.get("asks", []))
+    elif channel == "trades":
+        store.add_trades(sym, [
+            {"side": d.get("side"), "amount": d.get("sz")} for d in rows
+        ])
+    return []
+
+
+async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | None = None,
+                                 *, shadow: bool = False):
     """Фид OKX. Форма та же, что у HTX-ветки, различия — в протоколе.
 
     OKX не пингует клиента: молчание не отличить от смерти сокета, поэтому при
     тишине шлём строку "ping" сами и ждём "pong". Реконнект — только если и
     после пинга тишина, иначе спокойный рынок выглядел бы обрывом.
+
+    `shadow=True` — тень рядом с рабочим фидом HTX: только книга, без ленты
+    сделок, в отдельное хранилище.
     """
     try:
         import websockets
@@ -261,6 +320,9 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
     market_type = ob_market_type()
     url = okx_ws_url()
     inst_map = {_okx_inst_id(s, market_type): s for s in symbols}
+    book_channel = str(getattr(settings, "OB_OKX_BOOK_CHANNEL", "books") or "books")
+    levels = book_levels()
+    books: dict = {}
     backoff = 2.0
     read_timeout = float(getattr(settings, "OB_WS_READ_TIMEOUT_SEC", 30.0))
     _Closed = getattr(websockets, "ConnectionClosed", ())
@@ -268,13 +330,16 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
     while enabled_fn():
         try:
             async with websockets.connect(url, ping_interval=None, max_size=2 ** 23) as ws:
+                books.clear()
                 args = []
                 for inst in inst_map:
-                    args.append({"channel": "books5", "instId": inst})
-                    args.append({"channel": "trades", "instId": inst})
+                    args.append({"channel": book_channel, "instId": inst})
+                    if not shadow:
+                        args.append({"channel": "trades", "instId": inst})
                 await ws.send(json.dumps({"op": "subscribe", "args": args}))
                 log_event(logger, 20, "ob_feed_connected", url=url, exchange="okx",
                           market_type=market_type, symbols=len(inst_map),
+                          channel=book_channel, levels=levels, shadow=shadow,
                           example_symbol=next(iter(inst_map), None))
                 backoff = 2.0
                 awaiting_pong = False
@@ -310,20 +375,14 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
                     if msg.get("event"):
                         continue
 
-                    arg = msg.get("arg") or {}
-                    rows = msg.get("data") or []
-                    sym = inst_map.get(arg.get("instId"))
-                    if not sym or not rows:
-                        continue
-
-                    channel = str(arg.get("channel") or "")
-                    if channel.startswith("books"):
-                        book = rows[-1]
-                        store.update_book(sym, book.get("bids", []), book.get("asks", []))
-                    elif channel == "trades":
-                        store.add_trades(sym, [
-                            {"side": d.get("side"), "amount": d.get("sz")} for d in rows
-                        ])
+                    # Книга, которой нельзя верить, пересобирается с нового
+                    # снимка: отписка и подписка заново на этот инструмент.
+                    for inst in handle_okx_message(msg, inst_map, books, store, levels):
+                        log_event(logger, 30, "ob_feed_book_resync", exchange="okx",
+                                  inst=inst, shadow=shadow)
+                        sub_arg = [{"channel": book_channel, "instId": inst}]
+                        await ws.send(json.dumps({"op": "unsubscribe", "args": sub_arg}))
+                        await ws.send(json.dumps({"op": "subscribe", "args": sub_arg}))
 
         except asyncio.CancelledError:
             raise
@@ -341,9 +400,73 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
 
 
 async def run_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | None = None):
-    """Единая точка входа: слушаем ту биржу, на которой идут ордера."""
+    """Единая точка входа: слушаем ту биржу, на которой идут ордера.
+
+    (#okx-depth-2026-09-12) Если рабочий фид на HTX, рядом идёт тень OKX —
+    для сравнения книг перед переключением.
+    """
     venue = feed_exchange()
     if venue == "okx":
         await run_okx_orderbook_feed(symbols, enabled_fn, store)
-    else:
-        await run_htx_orderbook_feed(symbols, enabled_fn, store)
+        return
+    tasks = [run_htx_orderbook_feed(symbols, enabled_fn, store)]
+    if bool(getattr(settings, "OB_OKX_SHADOW_ENABLED", True)):
+        tasks.append(run_okx_orderbook_feed(symbols, enabled_fn, ORDERBOOK_SHADOW_STORE,
+                                            shadow=True))
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _book_metrics(snapshot: dict | None, levels: int) -> dict | None:
+    """Метрики всех потребителей книги — тех, что сломались на books5 07.09."""
+    if not snapshot:
+        return None
+    from services.entry_zone import depth_thinness
+    from services.orderbook_analyzer import OrderBookAnalyzer
+
+    bids, asks = snapshot.get("bids") or [], snapshot.get("asks") or []
+    spread, _ = OrderBookAnalyzer.spread_pct(bids, asks)
+
+    def _r(value, nd=4):
+        return round(value, nd) if value is not None else None
+
+    return {
+        "levels_bid": len(bids),
+        "levels_ask": len(asks),
+        "spread_pct": _r(spread),
+        "obi": _r(OrderBookAnalyzer.imbalance(bids, asks, levels)),
+        "bid_wall": _r(OrderBookAnalyzer.wall_share(bids, levels)),
+        "ask_wall": _r(OrderBookAnalyzer.wall_share(asks, levels)),
+        "thinness_long": _r(depth_thinness("long", snapshot)),
+        "thinness_short": _r(depth_thinness("short", snapshot)),
+        "age_sec": _r(snapshot.get("age_sec"), 2),
+    }
+
+
+def compare_books(primary: OrderBookStore | None = None,
+                  shadow: OrderBookStore | None = None, *, levels: int | None = None) -> dict:
+    """Рабочая книга против теневой по каждому символу и медианы по всем."""
+    primary = primary or ORDERBOOK_STORE
+    shadow = shadow or ORDERBOOK_SHADOW_STORE
+    levels = int(levels or getattr(settings, "OB_DEPTH_LEVELS", 10))
+    names = sorted(set(primary.stats()["symbols"]) | set(shadow.stats()["symbols"]))
+    rows = {
+        sym: {"primary": _book_metrics(primary.snapshot(sym), levels),
+              "shadow": _book_metrics(shadow.snapshot(sym), levels)}
+        for sym in names
+    }
+
+    def _median(side: str, key: str):
+        vals = sorted(r[side][key] for r in rows.values()
+                      if r[side] and r[side].get(key) is not None)
+        if not vals:
+            return None
+        mid = len(vals) // 2
+        return round(vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2, 4)
+
+    keys = ("levels_bid", "spread_pct", "obi", "bid_wall", "ask_wall",
+            "thinness_long", "thinness_short")
+    return {
+        "levels": levels,
+        "symbols": rows,
+        "median": {side: {k: _median(side, k) for k in keys} for side in ("primary", "shadow")},
+    }

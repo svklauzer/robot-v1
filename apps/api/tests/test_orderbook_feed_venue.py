@@ -67,8 +67,8 @@ def test_okx_instrument_id_drops_the_ccxt_settlement_suffix():
 def test_dispatcher_starts_the_venue_that_matches(monkeypatch):
     started: list[str] = []
 
-    async def fake_okx(symbols, enabled_fn, store=None):
-        started.append("okx")
+    async def fake_okx(symbols, enabled_fn, store=None, *, shadow=False):
+        started.append("okx-shadow" if shadow else "okx")
 
     async def fake_htx(symbols, enabled_fn, store=None):
         started.append("htx")
@@ -76,6 +76,7 @@ def test_dispatcher_starts_the_venue_that_matches(monkeypatch):
     monkeypatch.setattr(feed, "run_okx_orderbook_feed", fake_okx)
     monkeypatch.setattr(feed, "run_htx_orderbook_feed", fake_htx)
     monkeypatch.setattr(settings, "OB_EXCHANGE", "", raising=False)
+    monkeypatch.setattr(settings, "OB_OKX_SHADOW_ENABLED", True, raising=False)
 
     monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "okx", raising=False)
     asyncio.run(feed.run_orderbook_feed(["BTC/USDT"], lambda: False))
@@ -83,7 +84,13 @@ def test_dispatcher_starts_the_venue_that_matches(monkeypatch):
     monkeypatch.setattr(settings, "ACTIVE_EXCHANGE", "htx", raising=False)
     asyncio.run(feed.run_orderbook_feed(["BTC/USDT"], lambda: False))
 
-    assert started == ["okx", "htx"]
+    # (#okx-depth-2026-09-12) Рядом с рабочим HTX идёт тень OKX для сравнения.
+    assert started == ["okx", "htx", "okx-shadow"]
+
+    started.clear()
+    monkeypatch.setattr(settings, "OB_OKX_SHADOW_ENABLED", False, raising=False)
+    asyncio.run(feed.run_orderbook_feed(["BTC/USDT"], lambda: False))
+    assert started == ["htx"]
 
 
 # ── протокольные различия, на которых легко обжечься ────────────────────────

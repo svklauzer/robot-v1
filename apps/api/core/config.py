@@ -1311,6 +1311,12 @@ class Settings(BaseSettings):
     # нужна, чтобы разбор входов не смешал две эпохи молча.
     OB_EXCHANGE: str = ""
     OB_OKX_WS_URL: str = ""
+    # (#okx-depth-2026-09-12) Полная книга OKX: канал books (до 400 уровней),
+    # потребителям — обрезанная до глубины HTX step0. Пока фид на HTX, OKX идёт
+    # в тень для сравнения метрик (/orderbook/compare); решения по тени нет.
+    OB_OKX_BOOK_CHANNEL: str = "books"
+    OB_BOOK_LEVELS: int = 150
+    OB_OKX_SHADOW_ENABLED: bool = True
     OB_WS_URL: str = ""
     OB_DEPTH_LEVELS: int = 10
     OB_MAX_SPREAD_PCT: float = 0.08       # СКАЛЬП/range: шире — скип (слиппедж съест скальп)
