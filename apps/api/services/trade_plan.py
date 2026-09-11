@@ -340,8 +340,11 @@ class TradePlanBuilder:
                 # награда = share·netTP1 + (1−share)·netTP2. Судить всю сделку по
                 # TP2 (достигается ~5% случаев) — завышать edge. Требуем, чтобы
                 # смесь платила ≥ MIN_NET_RR_BLENDED × |стоп|.
-                if bool(getattr(settings, "TP1_PARTIAL_ENABLED", True)) and net_risk > 0:
-                    share = max(0.0, min(float(getattr(settings, "TP1_PARTIAL_CLOSE_SHARE", 0.5)), 1.0))
+                # (#tp1-partial-off-2026-09-12) Гейт больше не зависит от того,
+                # фиксируется ли доля на TP1: иначе выключение фиксации молча
+                # выключило бы и отбор входов. Вес TP1 — своя настройка.
+                if net_risk > 0:
+                    share = max(0.0, min(float(getattr(settings, "MIN_NET_RR_BLENDED_TP1_SHARE", 0.5)), 1.0))
                     blended_reward = share * tp1_preview.net_pnl + (1.0 - share) * tp2_preview.net_pnl
                     net_rr_blended = blended_reward / net_risk
                     if net_rr_blended < float(getattr(settings, "MIN_NET_RR_BLENDED", 1.10)):

@@ -121,7 +121,7 @@ def snapshot(
             "failed_setup_mfe_absolute_min_pct": float(_g("FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT", 0)),
             "scalp_time_stop_min": float(_g("SCALP_TIME_STOP_MIN", 0)),
             "range_time_stop_min": float(_g("RANGE_TIME_STOP_MIN", 0)),
-            "tp1_partial_enabled": bool(_g("TP1_PARTIAL_ENABLED", True)),
+            "tp1_partial_enabled": bool(_g("TP1_PARTIAL_ENABLED", False)),
             "tp1_partial_share": float(_g("TP1_PARTIAL_CLOSE_SHARE", 0)),
             # (#progressive-tp2-2026-09-03) TP2 стал этапом: доля остатка
             # фиксируется, хвост едет под трейлом. Это меняет РАСПРЕДЕЛЕНИЕ
