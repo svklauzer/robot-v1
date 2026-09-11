@@ -435,7 +435,24 @@ async def run_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | None =
     if bool(getattr(settings, "OB_OKX_SHADOW_ENABLED", True)):
         tasks.append(run_okx_orderbook_feed(symbols, enabled_fn, ORDERBOOK_SHADOW_STORE,
                                             shadow=True))
+        tasks.append(_sample_books_loop(enabled_fn, store or ORDERBOOK_STORE,
+                                        ORDERBOOK_SHADOW_STORE))
     await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _sample_books_loop(enabled_fn, primary: OrderBookStore, shadow: OrderBookStore):
+    """(#okx-gate-compare-2026-09-12) Выборка решений гейта по обеим книгам —
+    раз в OB_COMPARE_SAMPLE_SEC, пока идёт тень. См. services/book_gate_compare.py."""
+    from services import book_gate_compare
+
+    interval = max(float(getattr(settings, "OB_COMPARE_SAMPLE_SEC", 30.0) or 30.0), 5.0)
+    while enabled_fn():
+        try:
+            book_gate_compare.sample("primary", primary)
+            book_gate_compare.sample("shadow", shadow)
+        except Exception as exc:  # noqa: BLE001 — выборка не валит фид
+            log_event(logger, 30, "ob_compare_sample_error", error=str(exc))
+        await asyncio.sleep(interval)
 
 
 def _book_metrics(snapshot: dict | None, levels: int) -> dict | None:

@@ -290,6 +290,41 @@ function BookCompare({ data }: { data: any }) {
           )}
         </div>
       )}
+      {/* (#okx-gate-compare-2026-09-12) Решения гейта, а не медианы: как часто
+          он пропускает вход на каждой книге и какие пороги дали бы OKX ту же
+          избирательность, что у HTX. */}
+      {shadow && data.gate?.books && (
+        <div className="mb-4 grid gap-2 text-xs text-cyan-100/70 md:grid-cols-3">
+          {Object.entries(data.gate.books).map(([label, b]: [string, any]) => (
+            <div key={label} className="rounded-lg border border-cyan-950 bg-black/20 p-3">
+              <div className="mb-1 font-semibold text-cyan-200">
+                Гейт на книге {label === "primary" ? primary : shadow} · выборок {b.samples}
+              </div>
+              {["position", "scalp"].map((prof) => {
+                const pr = b.pass_rate?.[prof] || {};
+                const pct = (v: any) => (v != null ? `${Math.round(v * 100)}%` : "—");
+                return (
+                  <div key={prof}>
+                    {prof === "position" ? "тренд" : "скальп"}: пропуск лонга {pct(pr.long)} · шорта {pct(pr.short)}
+                  </div>
+                );
+              })}
+              <div>стенка p25/p50/p75: {(b.wall_p25_p50_p75 || []).map((v: any) => cell(v)).join(" / ")}</div>
+              <div>OBI p25/p50/p75: {(b.obi_p25_p50_p75 || []).map((v: any) => cell(v)).join(" / ")}</div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-cyan-950 bg-black/20 p-3">
+            <div className="mb-1 font-semibold text-cyan-200">Пороги для {shadow} с той же избирательностью</div>
+            {["position", "scalp"].map((prof) => (
+              <div key={prof}>
+                {prof === "position" ? "тренд" : "скальп"}: стенка {cell(data.gate.matched_for_shadow?.[prof]?.wall_confirm)}{" "}
+                (сейчас {cell(data.gate.thresholds?.[prof]?.wall_confirm)}), OBI{" "}
+                {cell(data.gate.matched_for_shadow?.[prof]?.obi_confirm)} (сейчас {cell(data.gate.thresholds?.[prof]?.obi_confirm)})
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs text-cyan-100/50">
