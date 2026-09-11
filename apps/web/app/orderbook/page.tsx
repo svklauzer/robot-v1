@@ -277,6 +277,19 @@ function BookCompare({ data }: { data: any }) {
         OKX — когда медианы сойдутся.
       </p>
       {!shadow && <div className="text-sm text-cyan-100/50">Тень выключена или рабочий фид уже на OKX.</div>}
+      {/* (#okx-feed-stats-2026-09-12) Счётчики фида: 12.09 тень молчала, а
+          панель показывала прочерки без объяснения. */}
+      {shadow && data.feeds?.okx_shadow && (
+        <div className="mb-3 text-xs text-cyan-100/60">
+          Фид тени: подключений {data.feeds.okx_shadow.connected} · сообщений книги{" "}
+          {data.feeds.okx_shadow.book_messages} · пересборок {data.feeds.okx_shadow.resyncs}
+          {data.feeds.okx_shadow.subscribe_errors > 0 && (
+            <span className="text-red-300">
+              {" "}· ошибок подписки {data.feeds.okx_shadow.subscribe_errors} ({data.feeds.okx_shadow.last_error})
+            </span>
+          )}
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs text-cyan-100/50">

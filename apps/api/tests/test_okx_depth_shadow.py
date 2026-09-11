@@ -112,3 +112,15 @@ def test_the_orderbook_page_shows_the_comparison():
 
     assert "/orderbook/compare" in page and "function BookCompare" in page
     assert '@app.get("/orderbook/compare"' in main_src
+
+
+
+def test_the_feed_counts_what_it_receives_and_rebuilds():
+    """12.09 тень молчала, а панель показывала прочерки без объяснения."""
+    src = inspect.getsource(feed.run_okx_orderbook_feed)
+    assert 'stats["book_messages"] += 1' in src
+    assert 'stats["resyncs"] += 1' in src
+    assert 'stats["subscribe_errors"] += 1' in src
+    from pathlib import Path
+    main_src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert 'out["feeds"] = FEED_STATS' in main_src

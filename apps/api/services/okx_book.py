@@ -12,7 +12,7 @@
   * `action=update` — уровни меняются, размер "0" удаляет уровень;
   * `prevSeqId` обязан совпасть с последним `seqId`, иначе пропущено сообщение
     и книга неверна — пересборка;
-  * `checksum` — CRC32 (со знаком, 32 бита) строки из 25 лучших уровней с каждой
+  * `checksum` — если прислан ненулевым: CRC32 (со знаком, 32 бита) строки из 25 лучших уровней с каждой
     стороны, чередованием «цена:размер» бид, аск, бид, аск…; если с одной
     стороны уровней меньше, остаток другой дописывается подряд. Цены и размеры
     берутся строками РОВНО как пришли — "0.10" и "0.1" дают разные суммы.
@@ -105,7 +105,17 @@ class OkxLocalBook:
             self.seq = int(data["seqId"])
 
         expected = data.get("checksum")
-        if expected is not None and okx_checksum(self.sorted_bids(), self.sorted_asks()) != int(expected):
+        # (#okx-checksum-zero-2026-09-12) Живой поток OKX присылает checksum=0 в
+        # КАЖДОМ сообщении канала books — сумма фактически выключена. Первая
+        # версия принимала ноль за настоящую сумму, отбрасывала каждый снимок, и
+        # теневая книга не наполнилась ни разу (прочерки на панели 12.09).
+        # Ноль — «суммы нет»; целостность держат seqId/prevSeqId выше и
+        # проверка, что книга не перекрёстная, ниже.
+        if expected not in (None, 0, "0") and (
+            okx_checksum(self.sorted_bids(), self.sorted_asks()) != int(expected)
+        ):
+            return False
+        if self._bids and self._asks and max(self._bids) >= min(self._asks):
             return False
         self.ready = True
         return True

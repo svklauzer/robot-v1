@@ -108,6 +108,20 @@ ORDERBOOK_SHADOW_STORE = OrderBookStore(
 )
 
 
+# (#okx-feed-stats-2026-09-12) Счётчики фида OKX. 12.09 теневая книга молчала:
+# OKX шлёт checksum=0, каждый снимок отбрасывался, а панель показывала
+# прочерки без объяснения. Счётчики выводятся в /orderbook/compare — такой
+# сбой виден сразу, без логов.
+FEED_STATS: dict[str, dict] = {}
+
+
+def _feed_stats(label: str) -> dict:
+    return FEED_STATS.setdefault(label, {
+        "connected": 0, "book_messages": 0, "resyncs": 0,
+        "last_resync": None, "subscribe_errors": 0, "last_error": None,
+    })
+
+
 def book_levels() -> int:
     return max(int(getattr(settings, "OB_BOOK_LEVELS", 150) or 150), 10)
 
@@ -323,6 +337,7 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
     book_channel = str(getattr(settings, "OB_OKX_BOOK_CHANNEL", "books") or "books")
     levels = book_levels()
     books: dict = {}
+    stats = _feed_stats("okx_shadow" if shadow else "okx")
     backoff = 2.0
     read_timeout = float(getattr(settings, "OB_WS_READ_TIMEOUT_SEC", 30.0))
     _Closed = getattr(websockets, "ConnectionClosed", ())
@@ -337,6 +352,7 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
                     if not shadow:
                         args.append({"channel": "trades", "instId": inst})
                 await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                stats["connected"] += 1
                 log_event(logger, 20, "ob_feed_connected", url=url, exchange="okx",
                           market_type=market_type, symbols=len(inst_map),
                           channel=book_channel, levels=levels, shadow=shadow,
@@ -369,6 +385,8 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
                     # Подписка не принята — молча это не оставляем: фид будет
                     # «жив» и пуст, а гейт уйдёт в fail-open без единого следа.
                     if msg.get("event") == "error":
+                        stats["subscribe_errors"] += 1
+                        stats["last_error"] = f"{msg.get('code')}: {msg.get('msg')}"
                         log_event(logger, 40, "ob_feed_subscribe_error", exchange="okx",
                                   code=msg.get("code"), error=msg.get("msg"))
                         continue
@@ -377,7 +395,11 @@ async def run_okx_orderbook_feed(symbols, enabled_fn, store: OrderBookStore | No
 
                     # Книга, которой нельзя верить, пересобирается с нового
                     # снимка: отписка и подписка заново на этот инструмент.
+                    if str((msg.get("arg") or {}).get("channel") or "").startswith("books"):
+                        stats["book_messages"] += 1
                     for inst in handle_okx_message(msg, inst_map, books, store, levels):
+                        stats["resyncs"] += 1
+                        stats["last_resync"] = inst
                         log_event(logger, 30, "ob_feed_book_resync", exchange="okx",
                                   inst=inst, shadow=shadow)
                         sub_arg = [{"channel": book_channel, "instId": inst}]
