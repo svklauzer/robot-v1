@@ -26,6 +26,11 @@
 
 Журнал — компактный jsonl рядом с остальными. Только чтение/дозапись, на
 торговлю влияет через гейт `confirm()`.
+
+Биржа наблюдения (#okx-funding-2026-09-12). Журнал писал только внутрибиржевой
+скан HTX, и строки не несли биржу. С OKX ставки двух бирж по одному символу
+смешались бы в `stability()` и в гейте `confirm()`. Теперь строка несёт `v`;
+строки без неё — прежние, и они HTX.
 """
 from __future__ import annotations
 
@@ -44,14 +49,22 @@ def _path() -> Path:
     )
 
 
+_LEGACY_VENUE = "htx"
+
+
+def _venue(value: str | None) -> str:
+    return str(value or _LEGACY_VENUE).strip().lower()
+
+
 def record(symbol: str, *, rate_pct: float, basis_pct: float,
-           ts: float | None = None) -> None:
+           ts: float | None = None, venue: str | None = None) -> None:
     """Одно наблюдение. Пишется на каждом скане — история копится сама."""
     row = {
         "ts": round(float(ts if ts is not None else time.time()), 1),
         "s": str(symbol),
         "r": round(float(rate_pct), 6),
         "b": round(float(basis_pct), 6),
+        "v": _venue(venue),
     }
     path = _path()
     try:
@@ -62,7 +75,7 @@ def record(symbol: str, *, rate_pct: float, basis_pct: float,
         pass
 
 
-def _load(symbol: str, window_hours: float) -> list[dict]:
+def _load(symbol: str, window_hours: float, venue: str | None = None) -> list[dict]:
     path = _path()
     if not path.exists():
         return []
@@ -78,7 +91,8 @@ def _load(symbol: str, window_hours: float) -> list[dict]:
                     row = json.loads(line)
                 except Exception:  # noqa: BLE001
                     continue
-                if row.get("s") == symbol and float(row.get("ts") or 0) >= since:
+                if (row.get("s") == symbol and float(row.get("ts") or 0) >= since
+                        and _venue(row.get("v")) == _venue(venue)):
                     out.append(row)
     except Exception:  # noqa: BLE001
         return []
@@ -138,13 +152,14 @@ def _percentile(values: list[float], q: float) -> float:
     return ordered[idx]
 
 
-def stability(symbol: str, window_hours: float | None = None) -> dict[str, Any]:
+def stability(symbol: str, window_hours: float | None = None,
+              venue: str | None = None) -> dict[str, Any]:
     """Статистика ставки по окну наблюдений."""
     window_hours = float(
         window_hours if window_hours is not None
         else getattr(settings, "FUNDING_ARB_OBSERVATION_WINDOW_HOURS", 72.0)
     )
-    raw = _load(symbol, window_hours)
+    raw = _load(symbol, window_hours, venue)
     # Считаем ЗАМЕРЫ, а не записи в файл: повторы одного скана — это по-прежнему
     # один замер, и выдавать их за несколько значит обманывать собственный гейт.
     rows = _dedupe_scan_writes(raw)
@@ -195,6 +210,7 @@ def confirm(
     current_rate_pct: float,
     basis_pct: float,
     fee_round_trip_pct: float,
+    venue: str | None = None,
 ) -> dict[str, Any]:
     """Гейт открытия: подтверждена ли ставка настолько, чтобы на неё ставить.
 
@@ -212,7 +228,7 @@ def confirm(
     min_hold = int(getattr(settings, "FUNDING_ARB_CONFIRM_HOLD_PERIODS", 10))
     stress_pct = float(getattr(settings, "FUNDING_ARB_BASIS_STRESS_PCT", 0.30))
 
-    st = stability(symbol)
+    st = stability(symbol, venue=venue)
     n = int(st.get("observations") or 0)
 
     if n < min_obs:

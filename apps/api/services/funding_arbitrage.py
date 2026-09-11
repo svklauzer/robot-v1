@@ -102,10 +102,21 @@ class FundingSymbolMapper:
 
 
 class FundingMonitorService:
-    """HTX-only funding-rate arbitrage monitor."""
+    """Монитор фандинга одной биржи (по умолчанию HTX, как было).
 
-    def __init__(self, client: HTXClient | None = None):
-        self.client = client or HTXClient()
+    (#okx-funding-2026-09-12) Биржа — параметр: тот же снимок ставки и базиса
+    нужен для OKX, пока только на чтение (цикл наблюдения). Наблюдение пишется
+    в журнал с меткой биржи, иначе ставки двух бирж по одному символу смешались
+    бы в гейте подтверждения.
+    """
+
+    def __init__(self, client: HTXClient | None = None, venue: str | None = None):
+        self.venue = str(venue or "htx").strip().lower()
+        if client is None:
+            from services.exchange_factory import get_exchange_client
+
+            client = HTXClient() if self.venue == "htx" else get_exchange_client(self.venue)
+        self.client = client
 
     def _parse_next_funding_at(self, payload: dict[str, Any]) -> datetime | None:
         value = payload.get("nextFundingTimestamp") or payload.get("fundingTimestamp") or payload.get("timestamp")
@@ -200,7 +211,8 @@ class FundingMonitorService:
         try:
             from services.funding_rate_history import confirm, record
 
-            record(spot_symbol, rate_pct=funding_rate_pct, basis_pct=basis_pct)
+            record(spot_symbol, rate_pct=funding_rate_pct, basis_pct=basis_pct,
+                   venue=self.venue)
 
             # Подтверждение — последний гейт: проверяем только то, что уже
             # прошло экономику. Ставка одного замера не прогноз: она
@@ -212,6 +224,7 @@ class FundingMonitorService:
                     current_rate_pct=funding_rate_pct,
                     basis_pct=basis_pct,
                     fee_round_trip_pct=fee_round_trip_pct,
+                    venue=self.venue,
                 )
                 if not confirmation.get("ok"):
                     status = "rate_not_confirmed"
