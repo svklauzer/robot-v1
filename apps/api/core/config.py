@@ -609,7 +609,9 @@ class Settings(BaseSettings):
     # своя ликвидность: на OKX есть то, чего нет на HTX, и наоборот. Вселенная
     # следует за биржей ИСПОЛНЕНИЯ (ACTIVE_EXCHANGE) — переключение биржи само
     # переключает список. Пусто — берётся HTX_SYMBOLS, как было до ключа.
-    OKX_SYMBOLS: str = ""
+    # Список выбран владельцем 12.09 (research.okx_universe): CHIP и PI —
+    # эксперимент, их нет на HTX.
+    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""

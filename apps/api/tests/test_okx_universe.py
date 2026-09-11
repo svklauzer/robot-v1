@@ -68,3 +68,12 @@ def test_health_says_which_universe_is_live():
     page = (ROOT / "apps/web/app/health/page.tsx").read_text(encoding="utf-8")
     assert 'out["universe"]' in main_src
     assert "health?.universe?.source" in page
+
+
+
+def test_the_owner_chosen_okx_universe_is_live_in_both_places():
+    """Решение 12.09: ядро по ликвидности + DOGE, HYPE; CHIP и PI — эксперимент."""
+    chosen = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
+    blueprint = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    assert f"key: OKX_SYMBOLS\n        value: {chosen}" in blueprint
+    assert settings.OKX_SYMBOLS == chosen
