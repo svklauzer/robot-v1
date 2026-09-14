@@ -54,3 +54,58 @@ def test_known_blocking_decisions_includes_live_gate_codes():
         "symbol_policy_publish_blocked",
     ):
         assert decision in KNOWN_BLOCKING_DECISIONS, f"{decision} must be in KNOWN_BLOCKING_DECISIONS"
+
+
+def test_top_blockers_come_from_the_event_status_not_only_the_list():
+    """(#blockers-by-status-2026-09-14) 14.09 воронка назвала главным блокером
+    стакан (19 из 120), а лимит кластера (60) и условия ТЗ (29) не показывала:
+    их не было в ручном списке. Статус blocked/rejected — сам себе признак."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from core.db import Base
+    from models.bot import Bot
+    from models.intelligence_event import IntelligenceEvent
+    from models.signal import Signal
+    from models.user import User
+    from services.candidate_funnel import CandidateFunnelService
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine, tables=[
+        User.__table__, Bot.__table__, Signal.__table__, IntelligenceEvent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    for decision, status, n in (("cluster_direction_cap", "blocked", 6),
+                                ("tz_entry_conditions", "blocked", 3),
+                                ("blocked_depth_gate", "blocked", 2),
+                                ("net_rr_blended_too_low", "rejected", 1),
+                                ("position_opened", "opened", 4)):
+        for _ in range(n):
+            db.add(IntelligenceEvent(symbol="X/USDT", status=status, decision=decision))
+    db.flush()
+
+    out = CandidateFunnelService().summarize(db, limit=50)
+    blockers = [b["decision"] for b in out["events"]["top_blockers"]]
+    assert blockers[:4] == ["cluster_direction_cap", "tz_entry_conditions",
+                            "blocked_depth_gate", "net_rr_blended_too_low"]
+    assert "position_opened" not in blockers
+
+
+def test_every_exposure_guard_block_has_a_label_on_the_intelligence_page():
+    """Статусный фильтр пропускает в ленту любой blocked — значит у кодов
+    ExposureGuard обязан быть ярлык, иначе в ленте будет машинный код."""
+    import re
+    from pathlib import Path
+
+    api = Path(__file__).resolve().parents[1]
+    page = api.parent / "web" / "app" / "intelligence" / "page.tsx"
+    if not page.exists():
+        import pytest
+        pytest.skip("нет фронтенда")
+    guard = (api / "services" / "exposure_guard.py").read_text(encoding="utf-8")
+    codes = set(re.findall(r'reason="([a-z_]+)"', guard)) - {"ok"}   # ok — вход разрешён
+    ui = page.read_text(encoding="utf-8")
+    labels = ui.split("function decisionLabel", 1)[1].split("};", 1)[0]
+    missing = sorted(c for c in codes if f"{c}:" not in labels)
+    assert not missing, f"код ExposureGuard без ярлыка: {missing}"
+    assert "BLOCKING_STATUSES.has(" in ui

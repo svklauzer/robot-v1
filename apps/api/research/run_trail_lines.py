@@ -1,0 +1,349 @@
+"""Запуск стенда линий трейла после TP1 (#trail-lines-2026-09-11).
+
+    python -m research.run_trail_lines --export C:/Users/svk/robot-export [--max-hold-hours 72] [--grid]
+
+`--grid` (#post-tp1-room-2026-09-14): сетка «уровень стопа после TP1 × трейл».
+Трейлу нужно место: при стопе на самом TP1 он не срабатывает почти никогда.
+Считается по всей выборке, по текущей вселенной OKX и без трёх лучших сделок
+варианта — плюс, который держится на трёх бегунах, решением не считается.
+
+Сделки — из signals_*.json выгрузки, свечи — своп OKX 15m из кеша стенда
+(research.run_candle_replay.fetch_range). Эталон — живая схема (`live`); по
+каждому варианту — сумма нетто в п.п. номинала в обоих режимах касания, разница
+с эталоном с 95% интервалом (парная, по сделкам), по половинам периода и по
+режимам сделки. Для линий в форме ride — разбор: где линия стоит относительно
+фиксации, сколько держит, сколько отдаёт и что цена делала после выхода.
+
+Вариантов много, и лучший из них выглядит хорошо отчасти случайно. Поэтому
+верить стоит тому, что держится в ОБЕИХ половинах периода и в обоих режимах
+касания, а не максимуму таблицы.
+
+Абсолютные суммы стенда ниже факта: до TP1 он знает только начальный стоп, а
+живые выходы ТЗ и скальпа режут убыток раньше. До TP1 все варианты одинаковы,
+поэтому разницы между ними честные, а уровни — нет.
+
+Первый прогон 11.09 (485 сделок, 12.06–11.09, до TP1 дошли 186)
+---------------------------------------------------------------
+* Фиксация на самом TP1 решает 82–91% дошедших сделок за одну свечу 15m
+  (медиана удержания после TP1 — 15 мин). Линии достаётся 20–35 сделок за три
+  месяца: это потолок эффекта любого трейла при нынешней фиксации.
+* На всей выборке VWAP выглядит лучше KAMA: KAMA15 И VWAP сессии +17.8 ±17.8,
+  KAMA15 ИЛИ AVWAP от TP1 +16.1 ±15.9, KAMA15 +8.8, KAMA 1h +10.8. Плюс делают
+  три бегуна по ADA и AVAX — обе монеты выведены из вселенной OKX 11.09.
+* Текущая вселенная (274 сделки, 102 до TP1): всё в пределах ±6 п.п. при
+  интервалах ±3–11 — KAMA15 −2.1, KAMA 1h −5.8, VWAP сессии +1.5, AVWAP от TP1
+  +3.4 ±5.2, KAMA15 ИЛИ AVWAP от TP1 +3.7 ±5.3, KAMA15 И VWAP сессии −0.5.
+* Качество выхода по линии (вся выборка): у KAMA15 половина выходов ранние
+  (цена обновила пик раньше, чем вернулась к фиксации), у VWAP сессии и AVWAP от
+  TP1 — 35–38%; AVWAP от TP1 меньше всех отдаёт от пика. Хуже всех скользящий
+  VWAP-20: 73% ранних.
+* Контроль «KAMA + вторая свеча» хуже одной KAMA: задержка выхода сама по себе
+  не помогает.
+* Хвост после TP2 по линии вместо храповика: все варианты в пределах ±3.
+Вывод: включать нечего. Лучше всего устроена AVWAP от касания TP1, но разницу
++3–4 п.п. от нуля на этом объёме не отличить — перепрогон на свежей выгрузке.
+
+Сетка 14.09 (521 сделка, до TP1 дошли 202; --grid)
+--------------------------------------------------
+Владелец: «после TP1 сделки часто идут дальше» — без фиксации плюс трейл 2·ATR
+или KAMA (+21…+24 первого стенда). Те цифры — против СТАРОЙ схемы с половиной на
+TP1; основную часть дало само отключение фиксации, оно в работе с 11.09.
+* После выхода по стопу фиксации (180 из 202) цена за сутки дошла до TP2 раньше
+  возврата ко входу в 57 случаях, вернулась ко входу раньше — в 104.
+* Стоп после TP1 ниже самого TP1 вредит в любой комбинации: 0.75/0.5/0.25 от
+  TP1 — от −20 до −40 п.п. к живой схеме, за пределами шума и на текущей
+  вселенной (live@0.75 −20.6 ±10.2).
+* Стоп на TP1 + трейл вместо этапа TP2: 2·ATR +5.6 ±13.8 (текущая вселенная
+  0.0 ±8.4, без топ-3 −4.4), KAMA15 +6.4 ±18.5 (−4.6), AVWAP от TP1 +6.7 ±11.6
+  (+1.2), KAMA15 ИЛИ AVWAP от TP1 +15.6 ±16.0 (+3.3 ±5.5, без топ-3 +0.8) —
+  единственный плюс во всех разрезах, но не значимый.
+* Вне выборки (33 сделки после 11.09, 14 до TP1): все трейлы на TP1 от −0.5
+  до −4 п.п.
+Вывод: статистически проверенного улучшения нет; настройки не менять.
+Заранее названный кандидат на перепрогон 25.09 — KAMA15 ИЛИ AVWAP от TP1 при
+стопе на TP1: судить только его, на сделках после 14.09.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import statistics
+import time
+from collections import Counter
+from pathlib import Path
+
+from research.candle_replay import BAR_SEC, atr_pct, kama_pct, load_trades, net_pct, path_pct, replay
+from research.run_candle_replay import fetch_range
+from research.trail_lines import (
+    Rule, after_exit, after_lock, anchored_vwap, kama_hourly, replay_trail, rolling_vwap,
+    session_vwap, typical,
+)
+
+# Прогрев индикаторов: 5 суток. KAMA стартует с сырого закрытия и на топтании
+# сходится медленно (SC ≈ 0.004 за бар), а часовой KAMA нужны десятки часов.
+WARMUP_BARS = 480
+MIN_WARM_BARS = 200
+STOP_SLIP = 0.05          # как в run_candle_replay: проскальзывание выхода по стопу
+
+LINE_RULES: tuple[Rule, ...] = (
+    Rule("kama15", ("kama15",)),
+    Rule("kama15_2bar", ("kama15",), confirm=2),
+    Rule("kama1h", ("kama1h",)),
+    Rule("vwap_session", ("vwap_session",)),
+    Rule("vwap_roll20", ("vwap_roll20",)),
+    Rule("avwap_entry", ("avwap_entry",)),
+    Rule("avwap_tp1", ("avwap_tp1",)),
+    Rule("kama15&vwap_session", ("kama15", "vwap_session"), "and"),
+    Rule("kama15|vwap_session", ("kama15", "vwap_session"), "or"),
+    Rule("kama15&avwap_tp1", ("kama15", "avwap_tp1"), "and"),
+    Rule("kama15|avwap_tp1", ("kama15", "avwap_tp1"), "or"),
+)
+LIVE = Rule("live", (), shape="live")
+
+
+def variants() -> list[tuple[str, object]]:
+    out: list[tuple[str, object]] = [("live", LIVE)]
+    # Прежние варианты стенда (research.candle_replay.replay), без фиксации на TP1.
+    out += [("tp2_ceiling", ("current", {"partial": 0.0})),
+            ("atr_k2", ("atr_trail", {"k": 2.0, "partial": 0.0})),
+            ("atr_k3", ("atr_trail", {"k": 3.0, "partial": 0.0}))]
+    for r in LINE_RULES:
+        out.append((r.name, r))
+    for r in LINE_RULES:
+        out.append((f"{r.name}+tp2", Rule(r.name, r.lines, r.combine, r.confirm, "tp2")))
+    return out
+
+
+# Текущая вселенная OKX (решение владельца 11.09). DOGE, HYPE, CHIP и PI в
+# истории почти не представлены — фильтр по сути оставляет BTC ETH SOL XRP LTC LINK.
+CURRENT_UNIVERSE = {"BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "LINK", "LTC", "CHIP", "PI"}
+GRID_LOCKS = (1.0, 0.75, 0.5, 0.25)
+GRID_TRAILS: tuple[tuple[str, dict], ...] = (
+    ("atr2", {"lines": (), "atr_k": 2.0}),
+    ("atr3", {"lines": (), "atr_k": 3.0}),
+    ("kama15", {"lines": ("kama15",)}),
+    ("avwap_tp1", {"lines": ("avwap_tp1",)}),
+    ("kama15|avwap_tp1", {"lines": ("kama15", "avwap_tp1"), "combine": "or"}),
+)
+
+
+def grid_variants() -> list[tuple[str, object]]:
+    out: list[tuple[str, object]] = [("live", LIVE)]
+    # Живая схема с этапом TP2, но стоп после TP1 ниже: отделяет эффект места
+    # от эффекта трейла.
+    for lock in GRID_LOCKS[1:]:
+        out.append((f"live@{lock}", Rule("live", (), shape="live", lock=lock)))
+    for tname, kw in GRID_TRAILS:
+        for lock in GRID_LOCKS:
+            out.append((f"{tname}@{lock}", Rule(tname, lock=lock, **kw)))
+    return out
+
+
+def trade_lines(t, window: list[list[float]], start_i: int) -> tuple[list, list, dict, list]:
+    warm = path_pct(t, window)
+    ts = [int(c[0]) for c in window]
+    vol = [float(c[5]) if len(c) > 5 and c[5] else 0.0 for c in window]
+    typ = typical(warm)
+    full = {
+        "kama15": kama_pct(t, window),
+        "kama1h": kama_hourly(t, window),
+        "vwap_session": session_vwap(typ, vol, ts),
+        "vwap_roll20": rolling_vwap(typ, vol, 20),
+        "avwap_entry": anchored_vwap(typ, vol, start_i),
+    }
+    lines = {k: v[start_i:] for k, v in full.items()}
+    return warm[start_i:], vol[start_i:], lines, atr_pct(warm)[start_i:]
+
+
+def run(export: Path, max_hold_hours: float = 72.0, specs: list | None = None) -> dict:
+    import ccxt
+
+    trades = load_trades(sorted(export.glob("signals_*.json")))
+    ex = ccxt.okx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+    hold = max_hold_hours * 3600
+    by_symbol: dict[str, list] = {}
+    for t in trades:
+        by_symbol.setdefault(t.symbol, []).append(t)
+
+    rows, skipped = [], []
+    specs = specs or variants()
+    for symbol, items in by_symbol.items():
+        start = int((min(t.opened_ts for t in items) - WARMUP_BARS * BAR_SEC) * 1000)
+        end = int((max(t.opened_ts for t in items) + hold) * 1000)
+        try:
+            candles = fetch_range(ex, symbol, start, min(end, int(time.time() * 1000)),
+                                  export / "candles")
+        except Exception as exc:  # noqa: BLE001
+            skipped.append(f"{symbol}: {type(exc).__name__}: {exc}")
+            continue
+        for t in items:
+            entry_ms = int(t.opened_ts * 1000)
+            idx = next((i for i, c in enumerate(candles) if c[0] > entry_ms), None)
+            if idx is None or idx < MIN_WARM_BARS:
+                skipped.append(f"#{t.id} {symbol}: мало свечей до входа")
+                continue
+            last = next((i for i, c in enumerate(candles) if c[0] > entry_ms + hold * 1000),
+                        len(candles))
+            start_i = min(idx, WARMUP_BARS)
+            path, vol, lines, atr = trade_lines(t, candles[idx - start_i: last], start_i)
+            if not path:
+                continue
+            row = {"id": t.id, "symbol": symbol, "side": t.side, "mode": t.trade_mode,
+                   "opened_ts": t.opened_ts, "actual": t.actual_pct}
+            for name, spec in specs:
+                for pess in (True, False):
+                    key = f"{name}|{'pess' if pess else 'opt'}"
+                    if isinstance(spec, Rule):
+                        res = replay_trail(t, path, spec, lines=lines, vol=vol,
+                                           pessimistic=pess, stop_slip=STOP_SLIP, atr=atr)
+                        if pess and name == "live":
+                            row["live|after_lock"] = after_lock(t, path, res)
+                            row["live|reached_tp1"] = res.tp1_bar is not None
+                        if pess and spec.shape == "ride" and spec.atr_k is None and spec.lock == 1.0:
+                            row[f"{name}|diag"] = {
+                                "tp1_bar": res.tp1_bar, "exit_bar": res.exit_bar,
+                                "reason": res.reason, "peak": res.peak,
+                                "exit_pct": res.exits[-1].pct if res.exits else None,
+                                "binding": res.binding_bars, "watched": res.watched_bars,
+                                "after": after_exit(t, path, res),
+                            }
+                    else:
+                        policy, kw = spec
+                        res = replay(t, path, policy, pessimistic=pess, stop_slip=STOP_SLIP,
+                                     atr=atr, **kw)
+                    row[key] = net_pct(t, res)
+            rows.append(row)
+    return {"rows": rows, "skipped": skipped}
+
+
+def _ci(diffs: list[float]) -> tuple[float, float]:
+    """Сумма парных разниц и полуширина её 95% интервала."""
+    if len(diffs) < 2:
+        return (sum(diffs), float("nan"))
+    return (sum(diffs), 1.96 * statistics.stdev(diffs) * math.sqrt(len(diffs)))
+
+
+def summarize(rows: list[dict], specs: list | None = None) -> list[dict]:
+    if not rows:
+        return []
+    cut = statistics.median(r["opened_ts"] for r in rows)
+    out = []
+    for name, _ in (specs or variants()):
+        rec = {"variant": name}
+        for m in ("pess", "opt"):
+            vals = [r[f"{name}|{m}"] for r in rows]
+            d = [r[f"{name}|{m}"] - r[f"live|{m}"] for r in rows]
+            s, h = _ci(d)
+            rec[f"sum_{m}"] = round(sum(vals), 1)
+            rec[f"d_{m}"] = round(s, 1)
+            rec[f"ci_{m}"] = round(h, 1)
+        rec["win_pess"] = round(sum(1 for r in rows if r[f"{name}|pess"] > 0) / len(rows), 3)
+        for label, pick in (("early", lambda r: r["opened_ts"] < cut),
+                            ("late", lambda r: r["opened_ts"] >= cut),
+                            ("trend", lambda r: r["mode"] == "trend"),
+                            ("scalp", lambda r: r["mode"] != "trend")):
+            sub = [r for r in rows if pick(r)]
+            for m in ("pess", "opt"):
+                rec[f"d_{label}_{m}"] = round(sum(r[f"{name}|{m}"] - r[f"live|{m}"] for r in sub), 1)
+        out.append(rec)
+    return out
+
+
+def robust(rows: list[dict], specs: list) -> list[dict]:
+    """Разница с живой схемой (пессимистичный режим): вся выборка, текущая
+    вселенная, по половинам текущей вселенной и без трёх лучших сделок."""
+    cur = [r for r in rows if r["symbol"].split("/")[0] in CURRENT_UNIVERSE]
+    cut = statistics.median(r["opened_ts"] for r in cur) if cur else 0
+    out = []
+    for name, _ in specs:
+        rec = {"variant": name}
+        for label, sub in (("all", rows), ("cur", cur)):
+            d = [r[f"{name}|pess"] - r["live|pess"] for r in sub]
+            s, h = _ci(d)
+            rec[f"d_{label}"], rec[f"ci_{label}"] = round(s, 1), round(h, 1)
+            rec[f"d_{label}_opt"] = round(sum(r[f"{name}|opt"] - r["live|opt"] for r in sub), 1)
+            rec[f"{label}_wo_top3"] = round(sum(d) - sum(sorted(d, reverse=True)[:3]), 1)
+        rec["cur_early"] = round(sum(r[f"{name}|pess"] - r["live|pess"] for r in cur if r["opened_ts"] < cut), 1)
+        rec["cur_late"] = round(sum(r[f"{name}|pess"] - r["live|pess"] for r in cur if r["opened_ts"] >= cut), 1)
+        out.append(rec)
+    return out
+
+
+def lock_aftermath(rows: list[dict]) -> dict:
+    """Наблюдение владельца «после TP1 идут дальше»: что было после выхода по
+    стопу фиксации в живой схеме (96 свечей = сутки)."""
+    tp1 = [r for r in rows if r.get("live|reached_tp1")]
+    after = Counter(r.get("live|after_lock") for r in tp1)
+    lock_exits = sum(v for k, v in after.items() if k not in ("n/a", None))
+    return {"reached_tp1": len(tp1), "lock_exits": lock_exits, **dict(after)}
+
+
+def diagnose(rows: list[dict]) -> list[dict]:
+    """Разбор линий в форме ride (пессимистичный режим) по сделкам, дошедшим до TP1."""
+    out = []
+    for r in LINE_RULES:
+        diags = [row[f"{r.name}|diag"] for row in rows if row[f"{r.name}|diag"]["tp1_bar"] is not None]
+        if not diags:
+            continue
+        reasons = Counter(d["reason"] for d in diags)
+        line = [d for d in diags if d["reason"] == "line"]
+        after = Counter(d["after"] for d in line)
+        hold_h = [(d["exit_bar"] - d["tp1_bar"]) * BAR_SEC / 3600 for d in diags if d["exit_bar"] is not None]
+        watched = sum(d["watched"] for d in diags)
+        out.append({
+            "line": r.name, "n_tp1": len(diags),
+            "exit_line": round(reasons["line"] / len(diags), 3),
+            "exit_lock": round(reasons["lock_stop"] / len(diags), 3),
+            "exit_cap": round(reasons["time_cap"] / len(diags), 3),
+            "hold_after_tp1_h": round(statistics.median(hold_h), 2) if hold_h else None,
+            "giveback_pct": round(statistics.median(d["peak"] - d["exit_pct"] for d in line), 3) if line else None,
+            "exit_gross_pct": round(statistics.median(d["exit_pct"] for d in line), 3) if line else None,
+            "premature": round(after["premature"] / len(line), 3) if line else None,
+            "justified": round(after["justified"] / len(line), 3) if line else None,
+            "line_above_lock": round(sum(d["binding"] for d in diags) / watched, 3) if watched else None,
+        })
+    return out
+
+
+def _print(rows: list[dict], cols: list[str]) -> None:
+    widths = {c: max(len(c), *(len(str(r.get(c))) for r in rows)) for c in cols}
+    print("  ".join(c.ljust(widths[c]) for c in cols))
+    for r in rows:
+        print("  ".join(str(r.get(c)).ljust(widths[c]) for c in cols))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--export", required=True)
+    parser.add_argument("--max-hold-hours", type=float, default=72.0)
+    parser.add_argument("--grid", action="store_true")
+    args = parser.parse_args()
+    export = Path(args.export)
+    if args.grid:
+        specs = grid_variants()
+        out = run(export, args.max_hold_hours, specs)
+        rows = out["rows"]
+        print(f"сделок: {len(rows)}, пропущено: {len(out['skipped'])}")
+        print("после выхода по стопу фиксации (живая схема):", lock_aftermath(rows))
+        _print(robust(rows, specs), ["variant", "d_all", "ci_all", "d_all_opt", "all_wo_top3",
+                                     "d_cur", "ci_cur", "d_cur_opt", "cur_wo_top3", "cur_early", "cur_late"])
+        (export / "trail_grid_rows.json").write_text(json.dumps(rows), encoding="utf-8")
+        return
+    out = run(export, args.max_hold_hours)
+    rows = out["rows"]
+    print(f"сделок: {len(rows)}, пропущено: {len(out['skipped'])}")
+    print(f"ACTUAL сумма: {sum(r['actual'] for r in rows):.1f} п.п.")
+    _print(summarize(rows), ["variant", "sum_pess", "sum_opt", "d_pess", "ci_pess", "d_opt", "ci_opt",
+                             "d_early_pess", "d_late_pess", "d_early_opt", "d_late_opt",
+                             "d_trend_pess", "d_scalp_pess", "win_pess"])
+    print()
+    _print(diagnose(rows), ["line", "n_tp1", "exit_line", "exit_lock", "exit_cap", "hold_after_tp1_h",
+                            "giveback_pct", "exit_gross_pct", "premature", "justified", "line_above_lock"])
+    if out["skipped"]:
+        print("skipped:", out["skipped"][:10])
+    (export / "trail_rows.json").write_text(json.dumps(rows), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

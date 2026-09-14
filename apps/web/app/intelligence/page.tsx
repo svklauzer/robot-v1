@@ -124,6 +124,12 @@ const IMPORTANT_DECISIONS = [
   ...Object.keys(CLOSE_REASON_LABELS),
 ];
 
+// (#blockers-by-status-2026-09-14) Любое событие со статусом blocked/rejected —
+// важное само по себе: белый список выше отставал от бэкенда в четвёртый раз
+// (14.09 лимит кластера давал половину ленты и не показывался вовсе). Список
+// остаётся для решений с другими статусами — открытия, выходы, watch.
+const BLOCKING_STATUSES = new Set(["blocked", "rejected"]);
+
 // Псевдосимвол событий про весь цикл — services/loop_skip_reporter.py SYSTEM_SYMBOL.
 const SYSTEM_SYMBOL = "SYSTEM";
 
@@ -209,7 +215,10 @@ export default function IntelligencePage() {
 
   const importantEvents = useMemo(() => {
     return groupDecisionEvents(
-      events.filter((e: any) => IMPORTANT_DECISIONS.includes(e.decision))
+      events.filter((e: any) =>
+        IMPORTANT_DECISIONS.includes(e.decision) ||
+        BLOCKING_STATUSES.has(String(e.status || "").toLowerCase())
+      )
     );
   }, [events]);
 
@@ -227,7 +236,9 @@ export default function IntelligencePage() {
         e.decision === "max_active_signals_reached" ||
         e.decision === "blocked_active_signal_per_symbol" ||
         e.decision === "blocked_total_margin_limit" ||
-        e.decision === "blocked_position_margin_limit"
+        e.decision === "blocked_position_margin_limit" ||
+        e.decision === "cluster_direction_cap" ||
+        e.decision === "portfolio_direction_cap"
     ).length;
 
     return {
@@ -1058,6 +1069,9 @@ function decisionLabel(code: string | null | undefined) {
     tp2_reached_too_rarely: "TP2 достигается слишком редко",
     momentum_aligned_late_entry: "Импульс уже по тренду — поздний вход",
     net_rr_blended_too_low: "RR (смешанный) ниже минимума",
+    // ExposureGuard: однонаправленные позиции — одна ставка с плечом.
+    cluster_direction_cap: "Лимит одного направления у движка",
+    portfolio_direction_cap: "Портфельный лимит одного направления",
     entry_zone_support_too_far: "Опора слишком далеко от рынка",
 
     // стакан и дедуп
@@ -1313,6 +1327,12 @@ function decisionExplanation(e: any) {
 
   if (decision === "skip_no_trade_conditions") {
     return "Нет торговых условий: робот не видит качественного кандидата.";
+  }
+
+  if (decision === "cluster_direction_cap" || decision === "portfolio_direction_cap") {
+    const exposure = payload?.exposure;
+    const open = exposure?.cluster_same_dir_count ?? exposure?.portfolio_same_dir_count ?? exposure?.active_signals_count;
+    return `Сетап прошёл все гейты, но в ту же сторону уже открыто ${open ?? "-"} позиций${decision === "cluster_direction_cap" ? " этого движка" : " по портфелю"}: коррелированные символы в одну сторону — одна ставка с плечом. Вход откроется, когда одна из позиций закроется.`;
   }
 
   if (decision === "short_candidate_but_shorts_disabled") {
