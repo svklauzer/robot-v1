@@ -61,6 +61,14 @@ KNOWN_BLOCKING_DECISIONS = {
 }
 
 
+# (#blockers-by-status-2026-09-14) Блокером считается событие со статусом
+# blocked/rejected, а не код из ручного списка. Список выше отставал уже в
+# четвёртый раз: 14.09 воронка назвала главным блокером стакан (19 из 120), а
+# лимит кластера (60) и условия ТЗ (29) в список не входили и не показывались.
+# Список остаётся для старых кодов, которые писались с другими статусами.
+BLOCKING_STATUSES = {"blocked", "rejected"}
+
+
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
@@ -165,10 +173,15 @@ class CandidateFunnelService:
         elif latest_event and not latest_signal:
             latest_event_newer_than_signal = True
 
+        blocking_counts = Counter(
+            str(e.decision or "unknown")
+            for e in events
+            if str(e.status or "").lower() in BLOCKING_STATUSES
+            or str(e.decision or "") in KNOWN_BLOCKING_DECISIONS
+        )
         top_blockers = [
             {"decision": decision, "count": count}
-            for decision, count in decision_counts.most_common()
-            if decision in KNOWN_BLOCKING_DECISIONS
+            for decision, count in blocking_counts.most_common()
         ][:10]
 
         readonly_scan_hits = 1 if latest_event_newer_than_signal or events else 0
