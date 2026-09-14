@@ -1,6 +1,11 @@
 """Запуск стенда линий трейла после TP1 (#trail-lines-2026-09-11).
 
-    python -m research.run_trail_lines --export C:/Users/svk/robot-export [--max-hold-hours 72]
+    python -m research.run_trail_lines --export C:/Users/svk/robot-export [--max-hold-hours 72] [--grid]
+
+`--grid` (#post-tp1-room-2026-09-14): сетка «уровень стопа после TP1 × трейл».
+Трейлу нужно место: при стопе на самом TP1 он не срабатывает почти никогда.
+Считается по всей выборке, по текущей вселенной OKX и без трёх лучших сделок
+варианта — плюс, который держится на трёх бегунах, решением не считается.
 
 Сделки — из signals_*.json выгрузки, свечи — своп OKX 15m из кеша стенда
 (research.run_candle_replay.fetch_range). Эталон — живая схема (`live`); по
@@ -51,7 +56,7 @@ from pathlib import Path
 from research.candle_replay import BAR_SEC, atr_pct, kama_pct, load_trades, net_pct, path_pct, replay
 from research.run_candle_replay import fetch_range
 from research.trail_lines import (
-    Rule, after_exit, anchored_vwap, kama_hourly, replay_trail, rolling_vwap,
+    Rule, after_exit, after_lock, anchored_vwap, kama_hourly, replay_trail, rolling_vwap,
     session_vwap, typical,
 )
 
@@ -90,6 +95,31 @@ def variants() -> list[tuple[str, object]]:
     return out
 
 
+# Текущая вселенная OKX (решение владельца 11.09). DOGE, HYPE, CHIP и PI в
+# истории почти не представлены — фильтр по сути оставляет BTC ETH SOL XRP LTC LINK.
+CURRENT_UNIVERSE = {"BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "LINK", "LTC", "CHIP", "PI"}
+GRID_LOCKS = (1.0, 0.75, 0.5, 0.25)
+GRID_TRAILS: tuple[tuple[str, dict], ...] = (
+    ("atr2", {"lines": (), "atr_k": 2.0}),
+    ("atr3", {"lines": (), "atr_k": 3.0}),
+    ("kama15", {"lines": ("kama15",)}),
+    ("avwap_tp1", {"lines": ("avwap_tp1",)}),
+    ("kama15|avwap_tp1", {"lines": ("kama15", "avwap_tp1"), "combine": "or"}),
+)
+
+
+def grid_variants() -> list[tuple[str, object]]:
+    out: list[tuple[str, object]] = [("live", LIVE)]
+    # Живая схема с этапом TP2, но стоп после TP1 ниже: отделяет эффект места
+    # от эффекта трейла.
+    for lock in GRID_LOCKS[1:]:
+        out.append((f"live@{lock}", Rule("live", (), shape="live", lock=lock)))
+    for tname, kw in GRID_TRAILS:
+        for lock in GRID_LOCKS:
+            out.append((f"{tname}@{lock}", Rule(tname, lock=lock, **kw)))
+    return out
+
+
 def trade_lines(t, window: list[list[float]], start_i: int) -> tuple[list, list, dict, list]:
     warm = path_pct(t, window)
     ts = [int(c[0]) for c in window]
@@ -106,7 +136,7 @@ def trade_lines(t, window: list[list[float]], start_i: int) -> tuple[list, list,
     return warm[start_i:], vol[start_i:], lines, atr_pct(warm)[start_i:]
 
 
-def run(export: Path, max_hold_hours: float = 72.0) -> dict:
+def run(export: Path, max_hold_hours: float = 72.0, specs: list | None = None) -> dict:
     import ccxt
 
     trades = load_trades(sorted(export.glob("signals_*.json")))
@@ -117,7 +147,7 @@ def run(export: Path, max_hold_hours: float = 72.0) -> dict:
         by_symbol.setdefault(t.symbol, []).append(t)
 
     rows, skipped = [], []
-    specs = variants()
+    specs = specs or variants()
     for symbol, items in by_symbol.items():
         start = int((min(t.opened_ts for t in items) - WARMUP_BARS * BAR_SEC) * 1000)
         end = int((max(t.opened_ts for t in items) + hold) * 1000)
@@ -146,8 +176,11 @@ def run(export: Path, max_hold_hours: float = 72.0) -> dict:
                     key = f"{name}|{'pess' if pess else 'opt'}"
                     if isinstance(spec, Rule):
                         res = replay_trail(t, path, spec, lines=lines, vol=vol,
-                                           pessimistic=pess, stop_slip=STOP_SLIP)
-                        if pess and spec.shape == "ride":
+                                           pessimistic=pess, stop_slip=STOP_SLIP, atr=atr)
+                        if pess and name == "live":
+                            row["live|after_lock"] = after_lock(t, path, res)
+                            row["live|reached_tp1"] = res.tp1_bar is not None
+                        if pess and spec.shape == "ride" and spec.atr_k is None and spec.lock == 1.0:
                             row[f"{name}|diag"] = {
                                 "tp1_bar": res.tp1_bar, "exit_bar": res.exit_bar,
                                 "reason": res.reason, "peak": res.peak,
@@ -171,12 +204,12 @@ def _ci(diffs: list[float]) -> tuple[float, float]:
     return (sum(diffs), 1.96 * statistics.stdev(diffs) * math.sqrt(len(diffs)))
 
 
-def summarize(rows: list[dict]) -> list[dict]:
+def summarize(rows: list[dict], specs: list | None = None) -> list[dict]:
     if not rows:
         return []
     cut = statistics.median(r["opened_ts"] for r in rows)
     out = []
-    for name, _ in variants():
+    for name, _ in (specs or variants()):
         rec = {"variant": name}
         for m in ("pess", "opt"):
             vals = [r[f"{name}|{m}"] for r in rows]
@@ -195,6 +228,35 @@ def summarize(rows: list[dict]) -> list[dict]:
                 rec[f"d_{label}_{m}"] = round(sum(r[f"{name}|{m}"] - r[f"live|{m}"] for r in sub), 1)
         out.append(rec)
     return out
+
+
+def robust(rows: list[dict], specs: list) -> list[dict]:
+    """Разница с живой схемой (пессимистичный режим): вся выборка, текущая
+    вселенная, по половинам текущей вселенной и без трёх лучших сделок."""
+    cur = [r for r in rows if r["symbol"].split("/")[0] in CURRENT_UNIVERSE]
+    cut = statistics.median(r["opened_ts"] for r in cur) if cur else 0
+    out = []
+    for name, _ in specs:
+        rec = {"variant": name}
+        for label, sub in (("all", rows), ("cur", cur)):
+            d = [r[f"{name}|pess"] - r["live|pess"] for r in sub]
+            s, h = _ci(d)
+            rec[f"d_{label}"], rec[f"ci_{label}"] = round(s, 1), round(h, 1)
+            rec[f"d_{label}_opt"] = round(sum(r[f"{name}|opt"] - r["live|opt"] for r in sub), 1)
+            rec[f"{label}_wo_top3"] = round(sum(d) - sum(sorted(d, reverse=True)[:3]), 1)
+        rec["cur_early"] = round(sum(r[f"{name}|pess"] - r["live|pess"] for r in cur if r["opened_ts"] < cut), 1)
+        rec["cur_late"] = round(sum(r[f"{name}|pess"] - r["live|pess"] for r in cur if r["opened_ts"] >= cut), 1)
+        out.append(rec)
+    return out
+
+
+def lock_aftermath(rows: list[dict]) -> dict:
+    """Наблюдение владельца «после TP1 идут дальше»: что было после выхода по
+    стопу фиксации в живой схеме (96 свечей = сутки)."""
+    tp1 = [r for r in rows if r.get("live|reached_tp1")]
+    after = Counter(r.get("live|after_lock") for r in tp1)
+    lock_exits = sum(v for k, v in after.items() if k not in ("n/a", None))
+    return {"reached_tp1": len(tp1), "lock_exits": lock_exits, **dict(after)}
 
 
 def diagnose(rows: list[dict]) -> list[dict]:
@@ -235,8 +297,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--export", required=True)
     parser.add_argument("--max-hold-hours", type=float, default=72.0)
+    parser.add_argument("--grid", action="store_true")
     args = parser.parse_args()
     export = Path(args.export)
+    if args.grid:
+        specs = grid_variants()
+        out = run(export, args.max_hold_hours, specs)
+        rows = out["rows"]
+        print(f"сделок: {len(rows)}, пропущено: {len(out['skipped'])}")
+        print("после выхода по стопу фиксации (живая схема):", lock_aftermath(rows))
+        _print(robust(rows, specs), ["variant", "d_all", "ci_all", "d_all_opt", "all_wo_top3",
+                                     "d_cur", "ci_cur", "d_cur_opt", "cur_wo_top3", "cur_early", "cur_late"])
+        (export / "trail_grid_rows.json").write_text(json.dumps(rows), encoding="utf-8")
+        return
     out = run(export, args.max_hold_hours)
     rows = out["rows"]
     print(f"сделок: {len(rows)}, пропущено: {len(out['skipped'])}")

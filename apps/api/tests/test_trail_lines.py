@@ -144,3 +144,50 @@ def test_hourly_kama_uses_only_closed_hours():
     # Значение внутри часа не меняется от свечи к свече — меняется на границе.
     i0 = next(i for i, c in enumerate(candles) if c[0] % hour == 0 and i > 60)
     assert base[i0] == base[i0 + 1] == base[i0 + 3]
+
+
+# ── место для трейла после TP1 (#post-tp1-room-2026-09-14) ──────────────────
+
+def test_a_lower_lock_lets_the_trade_breathe_after_tp1():
+    """Стоп на половине TP1: возврат к 0.6 не закрывает, трейл ведёт дальше."""
+    path = [_bar(1.1, 0.2, 1.05), _bar(1.2, 0.6, 0.9), _bar(2.5, 1.0, 2.4), _bar(2.4, 1.9, 2.0)]
+    lines = {"x": [None, 0.3, 1.5, 2.2]}
+    tight = replay_trail(_trade(), path, Rule("x", ("x",)), lines=lines)
+    roomy = replay_trail(_trade(), path, Rule("x", ("x",), lock=0.5), lines=lines)
+    assert tight.reason == "lock_stop"
+    assert roomy.reason == "line" and roomy.gross_pct() == pytest.approx(2.0)
+
+
+def test_atr_trail_ratchets_from_the_peak_close_and_never_below_the_lock():
+    path = [_bar(1.1, 0.2, 1.05), _bar(1.6, 1.1, 1.5), _bar(2.3, 1.6, 2.2), _bar(2.2, 1.5, 1.6)]
+    atr = [0.3] * 4
+    res = replay_trail(_trade(), path, Rule("a", (), atr_k=2.0, lock=0.5), atr=atr)
+    # После свечи 2 стоп = 2.2 − 0.6 = 1.6; свеча 3 касается 1.5 → выход по 1.6.
+    assert res.reason == "lock_stop"
+    assert res.gross_pct() == pytest.approx(1.6)
+
+
+def test_the_new_atr_trail_matches_the_old_stand_at_the_tp1_lock():
+    """При стопе на самом TP1 новый проигрыватель обязан давать то же, что
+    прежний `atr_trail` без фиксации: иначе сетка сравнивает несравнимое."""
+    from research.candle_replay import replay
+
+    path = [_bar(0.3, -0.1, 0.2) for _ in range(3)] + [_bar(1.1, 0.5, 1.0)]
+    path += [_bar(1.0 + 0.4 * i + 0.2, 1.0 + 0.4 * i - 0.2, 1.0 + 0.4 * i) for i in range(1, 7)]
+    path += [_bar(3.2, 1.4, 1.5)]
+    atr = [0.4] * len(path)
+    old = replay(_trade(tp2=9.0), path, "atr_trail", k=2.0, partial=0.0, atr=atr)
+    new = replay_trail(_trade(tp2=9.0), path, Rule("a", (), atr_k=2.0), atr=atr)
+    assert new.gross_pct() == pytest.approx(old.gross_pct())
+
+
+def test_after_a_lock_exit_the_stand_says_whether_price_went_on():
+    from research.trail_lines import after_lock
+
+    t = _trade(tp1=1.0, tp2=2.0)
+    path = [_bar(1.1, 0.2, 1.05), _bar(1.2, 0.9, 1.0), _bar(2.1, 1.0, 2.0)]
+    res = replay_trail(t, path, Rule("live", (), shape="live"))
+    assert res.reason == "lock_stop" and after_lock(t, path, res) == "tp2_first"
+    path2 = [_bar(1.1, 0.2, 1.05), _bar(1.2, 0.9, 1.0), _bar(1.1, -0.1, 0.0)]
+    res2 = replay_trail(t, path2, Rule("live", (), shape="live"))
+    assert after_lock(t, path2, res2) == "entry_first"

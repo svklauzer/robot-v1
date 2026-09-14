@@ -148,6 +148,12 @@ class Rule:
     combine: str = "single"           # single | and | or
     confirm: int = 1                  # закрытий подряд за линией
     shape: str = "ride"               # ride | tp2 | live
+    # (#post-tp1-room-2026-09-14) Стоп после TP1 — на доле `lock` дистанции TP1
+    # (1.0 — на самом TP1, как в живой схеме; 0.5 — на половине). Трейлу нужно
+    # место: при стопе на самом TP1 он не успевает сработать ни разу.
+    lock: float = 1.0
+    # Трейл k·ATR от максимума закрытия вместо линии (не ниже стопа фиксации).
+    atr_k: float | None = None
 
 
 @dataclass
@@ -172,9 +178,10 @@ def _broken(rule: Rule, values: list[float | None], close: float) -> bool:
 def replay_trail(trade: Trade, path: list[tuple[float, float, float, float]], rule: Rule, *,
                  lines: dict[str, list[float | None]] | None = None,
                  vol: list[float] | None = None, pessimistic: bool = True,
-                 stop_slip: float = 0.0) -> TrailResult:
+                 stop_slip: float = 0.0, atr: list[float | None] | None = None) -> TrailResult:
     """Проигрыш по пути сделки. До TP1 — начальный стоп; на TP1 стоп всей позиции
-    переносится на TP1 (фиксации на TP1 нет — как в живой схеме с 11.09)."""
+    переносится на долю `rule.lock` дистанции TP1 (фиксации на TP1 нет — как в
+    живой схеме с 11.09, где `lock` = 1.0)."""
     lines = lines or {}
     vol = vol if vol is not None else [1.0] * len(path)
     typ = typical(path)
@@ -184,6 +191,8 @@ def replay_trail(trade: Trade, path: list[tuple[float, float, float, float]], ru
     stage = "pre"
     buffer = max(LIVE_MIN_BUFFER, LIVE_LEG_SHARE * (trade.tp2_pct - trade.tp1_pct))
     tail_peak = 0.0
+    peak_close = 0.0
+    lock_level = rule.lock * trade.tp1_pct
     streak = 0
     av_pv = av_v = 0.0
 
@@ -198,7 +207,8 @@ def replay_trail(trade: Trade, path: list[tuple[float, float, float, float]], ru
             if touch == "stop":
                 return close_rest(stop - stop_slip, "stop", i)
             if touch == "target":
-                stage, stop, res.tp1_bar, res.peak = "locked", trade.tp1_pct, i, fav
+                stage, res.tp1_bar, res.peak = "locked", i, fav
+                stop, peak_close = max(stop, lock_level), c
                 av_pv, av_v = typ[i] * vol[i], vol[i]
                 # TP2 в той же свече — по порядку не узнать: только в оптимистичном.
                 if rule.shape in ("tp2", "live") and not pessimistic and fav >= trade.tp2_pct:
@@ -237,6 +247,14 @@ def replay_trail(trade: Trade, path: list[tuple[float, float, float, float]], ru
             continue
 
         if (rule.shape == "ride" and stage == "locked") or (rule.shape == "tp2" and stage == "tail"):
+            if rule.atr_k is not None:
+                res.watched_bars += 1
+                peak_close = max(peak_close, c)
+                if atr is not None and atr[i]:
+                    stop = max(stop, peak_close - rule.atr_k * atr[i])
+                if stop > lock_level:
+                    res.binding_bars += 1
+                continue
             values = [avwap_tp1 if key == "avwap_tp1" else lines[key][i] for key in rule.lines]
             res.watched_bars += 1
             if any(v is not None and v > stop for v in values):
@@ -264,5 +282,24 @@ def after_exit(trade: Trade, path: list[tuple[float, float, float, float]],
             return "premature"
         if back:
             return "justified"
+    return "open"
+
+
+def after_lock(trade: Trade, path: list[tuple[float, float, float, float]],
+               res: TrailResult, horizon: int = 96) -> str:
+    """Выход по стопу фиксации — что было дальше за `horizon` свечей: цена дошла
+    до TP2 раньше, чем вернулась ко входу (tp2_first), вернулась ко входу раньше
+    (entry_first), или ни то ни другое (open). Отвечает на наблюдение «после
+    TP1 сделки часто идут дальше и прилично»."""
+    if res.reason != "lock_stop" or res.exit_bar is None:
+        return "n/a"
+    for _, fav, adv, _ in path[res.exit_bar + 1: res.exit_bar + 1 + horizon]:
+        up, back = fav >= trade.tp2_pct, adv <= 0.0
+        if up and back:
+            return "ambiguous"
+        if up:
+            return "tp2_first"
+        if back:
+            return "entry_first"
     return "open"
 
