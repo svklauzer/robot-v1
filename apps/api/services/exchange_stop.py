@@ -230,6 +230,13 @@ class ExchangeStopService:
                 return await self.cancel_all(db, signal, alert=alert, reason="position_closed")
             return {"action": "no_position"}
 
+        # (#manual-orders-2026-09-16) Настоящий стоп — только позиции, которую
+        # робот сам открыл на бирже. Позиция из paper, дожившая до включения
+        # live, на бирже не существует, а reduce-only стоп по её объёму закрыл
+        # бы ручную позицию владельца по тому же символу.
+        if mode == "live" and ((signal.plan_json or {}).get("execution") or {}).get("mode") != "live":
+            return {"action": "not_opened_live"}
+
         try:
             want = self.desired(signal, position)
         except ValueError as exc:
