@@ -20,6 +20,10 @@ export default function HealthPage() {
   const [egressHours, setEgressHours] = useState<string>("24");
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [diagLoading, setDiagLoading] = useState(false);
+  // (#live-preflight-2026-09-16) Проверка счёта перед live — только по кнопке:
+  // приватные запросы к бирже не должны идти с автообновлением страницы.
+  const [preflight, setPreflight] = useState<any>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const loadingRef = useRef(false);
 
   async function loadAll() {
@@ -59,6 +63,15 @@ export default function HealthPage() {
       setDiagnostics(await apiGet("/system/exchange-diagnostics-all").catch(() => null));
     } finally {
       setDiagLoading(false);
+    }
+  }
+
+  async function runPreflight() {
+    setPreflightLoading(true);
+    try {
+      setPreflight(await apiGet("/live/preflight").catch((e: any) => ({ error: String(e?.message || e) })));
+    } finally {
+      setPreflightLoading(false);
     }
   }
 
@@ -340,6 +353,43 @@ export default function HealthPage() {
             <InfoRow key={idx} label="Breaker" value={blocker} danger />
           ))}
           {exchangeReconciliation?.error && <InfoRow label="Error" value={exchangeReconciliation.error} danger />}
+        </Panel>
+      </section>
+
+      {/* (#live-preflight-2026-09-16) Пуск live = выбрать биржу и переключить
+          рубильники. Панель показывает, что этому мешает на счёте и в системе,
+          и какие рубильники осталось переключить. Только чтение. */}
+      <section className="mt-6">
+        <Panel title="Live preflight">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-emerald-100/70">
+            <button
+              onClick={runPreflight}
+              className="flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2 font-semibold hover:bg-emerald-700"
+            >
+              <ShieldCheck size={16} />
+              {preflightLoading ? "Проверка..." : "Проверить счёт"}
+            </button>
+            <span>ключи, режим счёта, капитал, ручные ордера на символах робота, гейты — ничего не меняет</span>
+          </div>
+          {preflight?.error && <InfoRow label="Error" value={preflight.error} danger />}
+          {preflight?.checks && (
+            <>
+              <InfoRow label="Биржа" value={String(preflight.exchange || "-").toUpperCase()} />
+              <InfoRow label="Счёт и система" value={preflight.ready ? "готовы" : "есть блокеры"} danger={!preflight.ready} />
+              <InfoRow
+                label="Осталось переключить"
+                value={(preflight.switches_to_flip || []).length ? preflight.switches_to_flip.join(", ") : "ничего"}
+              />
+              {(preflight.checks || []).map((check: any) => (
+                <InfoRow
+                  key={check.id}
+                  label={`${PREFLIGHT_MARK[check.status] || ""} ${check.title}`}
+                  value={check.detail || check.status}
+                  danger={check.status === "fail"}
+                />
+              ))}
+            </>
+          )}
         </Panel>
       </section>
 
@@ -824,6 +874,9 @@ function InfoRow({ label, value, danger }: { label: string; value: any; danger?:
 function Empty({ text }: { text: string }) {
   return <div className="rounded-xl border border-emerald-950 bg-black/20 p-6 text-center text-emerald-100/50">{text}</div>;
 }
+
+// (#live-preflight-2026-09-16) Статусы из services/live_preflight.py.
+const PREFLIGHT_MARK: Record<string, string> = { ok: "✓", info: "·", warn: "!", fail: "✗" };
 
 // (#exchange-reconciliation-2026-09-16) Типы из services/exchange_reconciliation.py.
 const RECONCILIATION_LABELS: Record<string, string> = {
