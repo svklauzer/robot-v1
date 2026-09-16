@@ -385,7 +385,10 @@ def test_unknown_margin_mode_is_refused_not_defaulted_to_cross(monkeypatch):
     assert client.orders == [] and client.leverage_calls == []
 
 
-def test_leverage_is_set_once_per_mode_and_value(monkeypatch):
+def test_leverage_is_set_before_every_entry(monkeypatch):
+    """(#leverage-every-entry-2026-09-16) Владелец мог поменять плечо на бирже
+    руками после первой сделки — регулятор плеча конфиг, и он применяется к
+    каждому входу, а не раз за жизнь процесса."""
     client = _Client()
     ex = _executor(monkeypatch, client)
 
@@ -393,17 +396,21 @@ def test_leverage_is_set_once_per_mode_and_value(monkeypatch):
     _open(ex)
     _open(ex, leverage=2)
 
-    assert client.leverage_calls == [(SYMBOL, 1, "isolated", None), (SYMBOL, 2, "isolated", None)]
+    assert client.leverage_calls == [(SYMBOL, 1, "isolated", None), (SYMBOL, 1, "isolated", None),
+                                     (SYMBOL, 2, "isolated", None)]
 
 
-def test_leverage_is_capped(monkeypatch):
+def test_leverage_above_the_cap_refuses_the_entry(monkeypatch):
+    """Сайзинг считает маржу под плечо сделки; обрезать его молча на бирже
+    значит держать позицию не с той маржой, что в учёте."""
     client = _Client()
     ex = _executor(monkeypatch, client)
     monkeypatch.setattr(settings, "LIVE_MAX_LEVERAGE", 3.0)
 
-    _open(ex, leverage=20)
+    res = _open(ex, leverage=5)
 
-    assert client.leverage_calls == [(SYMBOL, 3, "isolated", None)]
+    assert not res.ok and res.error == "leverage_above_cap:5>3"
+    assert client.leverage_calls == [] and client.orders == []
 
 
 def test_position_mode_fetch_failure_falls_back_to_one_way(monkeypatch):
