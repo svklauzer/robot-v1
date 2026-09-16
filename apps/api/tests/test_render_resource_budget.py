@@ -297,3 +297,22 @@ def test_the_blueprint_gives_the_web_service_the_internal_api_address():
     assert ("- key: API_INTERNAL_HOSTPORT\n        fromService:\n          type: web\n"
             "          name: robot-api\n          property: hostport") in web
     assert "- key: API_BASE_URL" in web
+
+
+# ── надпись о правиле на TP1 (#tp1-rule-label-2026-09-16) ────────────────────
+
+def test_the_trade_card_reads_the_tp1_rule_from_the_trade_snapshot():
+    """С 11.09 фиксации на TP1 нет, а карточка сделки писала «на TP1
+    фиксируется 50%» для всех. Надпись обязана идти из снимка конфига сделки,
+    а снимок — содержать поля, которые она читает."""
+    from services.decision_config import snapshot
+
+    exit_cfg = snapshot(market_type="swap", fee_rate=0.0005, leverage=1)["exit"]
+    for key in ("tp1_partial_enabled", "tp1_partial_share", "post_tp1_lock_frac"):
+        assert key in exit_cfg, key
+
+    page = _web("app/signals/page.tsx")
+    label = page.split("function tp1RuleLabel", 1)[1].split("\nfunction ", 1)[0]
+    for key in ("tp1_partial_enabled", "tp1_partial_share", "post_tp1_lock_frac"):
+        assert f"exit.{key}" in label, key
+    assert "$ = вся позиция · на TP1 фиксируется 50%</span>" not in page
