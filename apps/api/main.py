@@ -1272,6 +1272,9 @@ def orderbook_volume_profile(symbol: str = "BTC/USDT", timeframe: str = "1h",
                                   limit=int(limit), bins=int(bins))
 
 
+_OUTCOME_STATS_CACHE: dict = {}
+
+
 @app.get("/ml/outcomes/stats", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_stats():
     """Статистика ML-датасета (trade_outcomes.jsonl на персистентном диске):
@@ -1282,6 +1285,15 @@ def ml_outcomes_stats():
     p = MLTradeLogger().path
     if not p.exists():
         return {"path": str(p), "exists": False, "count": 0, "last_logged_at": None}
+
+    # (#memory-probe-2026-09-16) Страница стакана зовёт это раз в 5 с, а файл
+    # меняется только при закрытии сделки. Разбор всего датасета на каждый вызов
+    # держал GIL в процессе, где идёт торговый цикл. Пересчёт — только когда у
+    # файла сменились размер или время изменения.
+    stat = p.stat()
+    signature = (str(p), stat.st_size, stat.st_mtime_ns)
+    if _OUTCOME_STATS_CACHE.get("signature") == signature:
+        return _OUTCOME_STATS_CACHE["payload"]
 
     count = wins = losses = with_depth = with_regime = 0
     last_logged_at = last_symbol = last_reason = None
@@ -1307,7 +1319,7 @@ def ml_outcomes_stats():
         last_symbol = d.get("symbol") or last_symbol
         last_reason = d.get("closed_reason") or last_reason
 
-    return {
+    payload = {
         "path": str(p),
         "exists": True,
         "count": count,
@@ -1319,9 +1331,11 @@ def ml_outcomes_stats():
         "last_logged_at": last_logged_at,
         "last_symbol": last_symbol,
         "last_reason": last_reason,
-        "size_bytes": p.stat().st_size,
+        "size_bytes": stat.st_size,
         "target_for_training": 200,
     }
+    _OUTCOME_STATS_CACHE.update(signature=signature, payload=payload)
+    return payload
 
 
 @app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])

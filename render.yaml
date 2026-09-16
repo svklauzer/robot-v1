@@ -576,6 +576,14 @@ services:
     envVars:
       - key: API_BASE_URL
         value: https://robot-api-1rgi.onrender.com
+      # (#private-network-2026-09-16) Внутренний адрес robot-api: прокси ходит
+      # по частной сети Render, её трафик не тарифицируется. Публичный адрес
+      # выше остаётся запасным при сбое частной сети.
+      - key: API_INTERNAL_HOSTPORT
+        fromService:
+          type: web
+          name: robot-api
+          property: hostport
       - key: OWNER_API_TOKEN
         sync: false
       - key: BASIC_AUTH_USER

@@ -252,6 +252,26 @@ export default function HealthPage() {
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
         </Panel>
 
+        {/* (#memory-probe-2026-09-16) Лимит Render считается по контейнеру; при
+            его превышении процесс убивает ядро, и в логах приложения пусто. */}
+        <Panel title="Память">
+          <InfoRow
+            label="Контейнер"
+            value={health?.memory?.container_used_mb != null
+              ? `${health.memory.container_used_mb} из ${health.memory.container_limit_mb ?? "?"} МБ`
+              : "-"}
+          />
+          <InfoRow
+            label="Доля лимита"
+            value={health?.memory?.container_used_share != null
+              ? `${Math.round(health.memory.container_used_share * 100)}%`
+              : "-"}
+          />
+          <InfoRow label="Пик контейнера, МБ" value={health?.memory?.container_peak_mb ?? "-"} />
+          <InfoRow label="Процесс (RSS), МБ" value={health?.memory?.rss_mb ?? "-"} />
+          <InfoRow label="Пик процесса, МБ" value={health?.memory?.rss_peak_mb ?? "-"} />
+        </Panel>
+
         {/* (#okx-universe-2026-09-12) Вселенная следует за биржей исполнения. */}
         <Panel title="Вселенная">
           <InfoRow label="Биржа исполнения" value={String(health?.universe?.exchange || "-").toUpperCase()} />

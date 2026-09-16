@@ -304,7 +304,14 @@ export default function IntelligencePage() {
             </div>
 
             <div className="flex flex-col gap-2 text-xs text-emerald-100/60 sm:flex-row sm:items-center">
-              <span>автообновление каждые 10 секунд</span>
+              <span>
+                автообновление каждые 10 секунд
+                {/* (#scan-cache-2026-09-16) Живой скан пересчитывается не чаще
+                    INTEL_SCAN_CACHE_SEC — между пересчётами отдаётся кеш. */}
+                {scanData?.cache?.ttl_sec
+                  ? ` · скан ${scanData.cache.hit ? `${Math.round(scanData.cache.age_sec)} с назад` : "свежий"}, пересчёт раз в ${Math.round(scanData.cache.ttl_sec)} с`
+                  : ""}
+              </span>
               <select
                 value={scanStatusFilter}
                 onChange={(e) => setScanStatusFilter(e.target.value)}

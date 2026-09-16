@@ -1292,6 +1292,9 @@ class Settings(BaseSettings):
     # лимита контейнера.
     MEMORY_LOG_INTERVAL_SEC: float = 600.0
     MEMORY_WARN_SHARE: float = 0.85
+    # Потолок журнала egress-монитора на постоянном диске: строка раз в минуту с
+    # 26.07, Render диск не чистит. При превышении остаётся хвост в половину.
+    EGRESS_MONITOR_MAX_BYTES: int = 20 * 1024 * 1024
 
     # (#audit-traj) Компактная траектория сделки [age_sec, current_pct] в
     # lifecycle — сырьё для offline A/B exit-параметров (/ml/exit-replay).
