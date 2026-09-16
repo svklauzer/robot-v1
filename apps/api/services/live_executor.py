@@ -75,7 +75,7 @@ class LiveExecutor:
         self.client = get_exchange_client()
         self._leverage_set: set[tuple] = set()  # (symbol, margin_mode, leverage, position_side)
         self._bal_cache: dict[str, tuple[float, float]] = {}  # market_type -> (free_usdt, ts)
-        self._position_mode: tuple[bool, float] | None = None  # (hedged, ts)
+        self._account_state: tuple[dict, float] | None = None  # (режим счёта, ts)
 
     # ── режим ─────────────────────────────────────────────────────────────────
     @staticmethod
@@ -106,7 +106,8 @@ class LiveExecutor:
         def _match(orders):
             for o in orders or []:
                 cid = o.get("clientOrderId") or (o.get("info", {}) or {}).get("client_order_id")
-                if cid == client_id:
+                # HTX отдаёт номер то строкой, то числом — сравниваем как строки.
+                if cid is not None and str(cid) == str(client_id):
                     return o
             return None
         try:
@@ -138,33 +139,59 @@ class LiveExecutor:
             raise ValueError(f"margin_mode_invalid:{value or 'empty'}")
         return value
 
-    def position_hedged(self) -> bool | None:
-        """Режим позиций деривативного счёта. (#live-margin-posmode-2026-09-16)
+    def derivatives_account(self) -> dict:
+        """Режим деривативного счёта. (#live-margin-posmode-2026-09-16)
 
-        True — Long/Short mode (OKX long_short_mode): у каждого ордера обязана
-        быть сторона позиции, reduceOnly не применяется. False — One-way (net).
-        None — биржа не отдаёт режим (у HTX в ccxt метода нет) или запрос не
-        прошёл: ордер уходит как для One-way. Ошибка здесь безопасна — биржа
-        отклонит ордер без стороны позиции, и отказ остановит робота; позицию
-        не того размера или направления она не откроет.
+        {"hedged": bool | None, "blocker": str | None}
+
+        hedged: True — Long/Short mode (OKX long_short_mode, HTX dual_side): у
+        каждого ордера обязана быть сторона позиции, reduceOnly не применяется.
+        False — One-way. None — режим неизвестен (нет метода или запрос не
+        прошёл): ордер уходит как для One-way. Ошибка здесь безопасна — биржа
+        отклонит ордер, и отказ остановит робота; позицию не того размера или
+        направления она не откроет.
+
+        blocker: счёт в режиме, где свопы через наш API не торгуются (OKX
+        «только спот», HTX старый одновалютный залог при ccxt на API v5).
+        Открытие в таком режиме не отправляется — владелец получает причину,
+        а не отказ биржи без объяснений.
         """
-        cached = getattr(self, "_position_mode", None)
+        empty = {"hedged": None, "blocker": None}
+        cached = getattr(self, "_account_state", None)
         if cached and (time.time() - cached[1]) < _POSITION_MODE_TTL_SEC:
             return cached[0]
-        fetch = getattr(self.client, "fetch_position_mode", None)
+        fetch = getattr(self.client, "fetch_derivatives_account", None)
         if not callable(fetch):
-            return None
+            return empty
         try:
-            hedged = bool((fetch() or {}).get("hedged"))
+            raw = fetch() or {}
+            hedged = raw.get("hedged")
+            state = {
+                "hedged": None if hedged is None else bool(hedged),
+                "blocker": raw.get("blocker") or None,
+            }
         except Exception as exc:  # noqa: BLE001
-            log_event(logger, logging.WARNING, "live_position_mode_fetch_failed",
+            log_event(logger, logging.WARNING, "live_account_mode_fetch_failed",
                       error=f"{type(exc).__name__}: {exc}")
-            return cached[0] if cached else None
-        if not cached or cached[0] != hedged:
-            log_event(logger, logging.INFO, "live_position_mode",
-                      hedged=hedged, mode="long_short" if hedged else "one_way")
-        self._position_mode = (hedged, time.time())
-        return hedged
+            return cached[0] if cached else empty
+        if not cached or cached[0] != state:
+            log_event(logger, logging.WARNING if state["blocker"] else logging.INFO,
+                      "live_account_mode", hedged=state["hedged"], blocker=state["blocker"],
+                      mode=("long_short" if state["hedged"] else
+                            "one_way" if state["hedged"] is False else "unknown"))
+        self._account_state = (state, time.time())
+        return state
+
+    def position_hedged(self) -> bool | None:
+        return self.derivatives_account()["hedged"]
+
+    def _client_order_id(self, purpose: str) -> str:
+        """Номер ордера в формате биржи: у OKX буквы и цифры до 32 символов,
+        у HTX-свопа только целое число — буквенный ccxt htx не передаёт вовсе."""
+        maker = getattr(getattr(self, "client", None), "make_client_order_id", None)
+        if callable(maker):
+            return str(maker(purpose))
+        return self._make_client_id(purpose)
 
     @staticmethod
     def _position_side(side: str, reduce_only: bool) -> str:
@@ -177,7 +204,8 @@ class LiveExecutor:
     @classmethod
     def order_params(cls, *, client_id: str, market_type: str | None, side: str,
                      reduce_only: bool, margin_mode: str | None,
-                     hedged: bool | None) -> dict[str, Any]:
+                     hedged: bool | None,
+                     position_side_key: str = "positionSide") -> dict[str, Any]:
         """Параметры ордера для ccxt — одинаковые для любого этапа сделки.
 
         Без `marginMode` ccxt подставляет cross: у OKX tdMode=cross, у HTX
@@ -186,6 +214,10 @@ class LiveExecutor:
         рисковала всем счётом. Закрытие обязано идти в том же режиме, что и
         открытие: у OKX reduce-only в cross не закрывает isolated-позицию.
 
+        Сторона позиции у бирж называется по-разному: ccxt okx разбирает
+        `positionSide`, ccxt htx для v5 такого ключа не знает и передаёт бирже
+        родной `position_side` как есть (ключ задаёт клиент биржи).
+
         `defaultType` не передаём: рынок ccxt определяет по символу, а ключ
         ccxt okx/htx не разбирает и отправляет бирже в теле ордера как есть.
         """
@@ -193,7 +225,7 @@ class LiveExecutor:
         if cls._is_derivative(market_type):
             params["marginMode"] = margin_mode
             if hedged:
-                params["positionSide"] = cls._position_side(side, reduce_only)
+                params[position_side_key] = cls._position_side(side, reduce_only)
                 return params
         if reduce_only:
             params["reduceOnly"] = True
@@ -499,7 +531,7 @@ class LiveExecutor:
             return OrderResult(ok=False, mode=mode, sent=False, status="error",
                                error=f"notional>{cap}", **base)
 
-        client_id = self._make_client_id(purpose)
+        client_id = self._client_order_id(purpose)
 
         # DRY-RUN: проходим всю логику, но НЕ отправляем. Возвращаем синтетический ack.
         if mode == "dry_run":
@@ -528,7 +560,16 @@ class LiveExecutor:
                           symbol=symbol, error=str(exc))
                 return OrderResult(ok=False, mode=mode, sent=False, status="error",
                                    client_order_id=client_id, error=str(exc), **base)
-            hedged = self.position_hedged()
+            account = self.derivatives_account()
+            hedged = account["hedged"]
+            # Режим счёта, в котором свопы не торгуются, блокирует только
+            # открытие: закрытие отправляется всегда — ошибочная блокировка
+            # выхода опаснее отказа биржи.
+            if account["blocker"] and not reduce_only:
+                log_event(logger, logging.ERROR, "live_order_account_mode_blocked",
+                          symbol=symbol, blocker=account["blocker"])
+                return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                                   client_order_id=client_id, error=account["blocker"], **base)
 
         # Плечо — только для открытия: закрытие риск не добавляет, и сбой
         # настройки плеча не должен мешать выйти из позиции.
@@ -566,7 +607,9 @@ class LiveExecutor:
 
         params = self.order_params(client_id=client_id, market_type=market_type, side=side,
                                    reduce_only=reduce_only, margin_mode=margin_mode,
-                                   hedged=hedged)
+                                   hedged=hedged,
+                                   position_side_key=getattr(self.client, "POSITION_SIDE_PARAM",
+                                                             "positionSide"))
 
         try:
             order = self.client.create_order_once(symbol, "market", side, send_amount, None, params)
@@ -575,9 +618,9 @@ class LiveExecutor:
                       client_order_id=client_id, error=str(exc))
             found = self._find_by_client_id(symbol, client_id)
             if not found:
-                # Отказ мог быть из-за смены режима позиций на аккаунте —
-                # следующий ордер спросит биржу заново, а не возьмёт кеш.
-                self._position_mode = None
+                # Отказ мог быть из-за смены режима счёта — следующий ордер
+                # спросит биржу заново, а не возьмёт кеш.
+                self._account_state = None
                 return OrderResult(ok=False, mode="live", sent=False, status="error",
                                    client_order_id=client_id, error=f"create_failed:{exc}", **base)
             order = found  # ордер на самом деле ушёл — НЕ повторяем

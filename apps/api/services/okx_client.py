@@ -2,6 +2,7 @@ import logging
 import math
 import random
 import time
+import uuid
 
 import ccxt
 from core.config import settings
@@ -303,9 +304,31 @@ class OKXClient:
             params["posSide"] = position_side
         return self._retry(self.exchange.set_leverage, leverage, symbol, params)
 
-    def fetch_position_mode(self) -> dict:
-        """{'hedged': True} — аккаунт в Long/Short mode, False — One-way."""
-        return self._retry(self.exchange.fetch_position_mode)
+    def fetch_derivatives_account(self) -> dict:
+        """Режим счёта для свопов: {'hedged', 'blocker', 'info'}.
+
+        Один запрос account/config: posMode — режим позиций (long_short_mode →
+        нужна сторона позиции в ордере), acctLv — режим счёта. В режиме
+        «Spot mode» (acctLv=1) свопы не торгуются вовсе.
+        """
+        res = self._retry(self.exchange.fetch_position_mode) or {}
+        info = res.get("info") or {}
+        acct_lv = str(info.get("acctLv") or "")
+        blocker = None
+        if acct_lv == "1":
+            blocker = ("okx_account_mode_spot_only: счёт OKX в режиме Spot mode, свопы не "
+                       "торгуются — переключить Trading mode на Spot and futures")
+        return {"hedged": bool(res.get("hedged")), "blocker": blocker,
+                "info": {"posMode": info.get("posMode"), "acctLv": acct_lv or None}}
+
+    # ccxt okx разбирает сторону позиции из этого ключа (posSide в запросе).
+    POSITION_SIDE_PARAM = "positionSide"
+
+    @staticmethod
+    def make_client_order_id(purpose: str) -> str:
+        """clOrdId OKX: буквы и цифры, до 32 символов."""
+        tag = "".join(ch for ch in str(purpose) if ch.isalnum())[:8] or "ord"
+        return f"{tag}{uuid.uuid4().hex}"[:32]
 
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         if hasattr(self.exchange, "set_margin_mode"):
