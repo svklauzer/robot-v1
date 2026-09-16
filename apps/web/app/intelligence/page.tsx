@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { CLOSE_REASON_LABELS } from "../../lib/closeReasons";
 import { RefreshCw } from "lucide-react";
@@ -190,11 +191,7 @@ export default function IntelligencePage() {
     }
   }
 
-  useEffect(() => {
-    loadScan();
-    const timer = setInterval(loadScan, 10000);
-    return () => clearInterval(timer);
-  }, []);
+  useVisiblePolling(loadScan, 10000);
 
   const results = Array.isArray(scanData?.results) ? scanData.results : [];
 
@@ -307,7 +304,14 @@ export default function IntelligencePage() {
             </div>
 
             <div className="flex flex-col gap-2 text-xs text-emerald-100/60 sm:flex-row sm:items-center">
-              <span>автообновление каждые 10 секунд</span>
+              <span>
+                автообновление каждые 10 секунд
+                {/* (#scan-cache-2026-09-16) Живой скан пересчитывается не чаще
+                    INTEL_SCAN_CACHE_SEC — между пересчётами отдаётся кеш. */}
+                {scanData?.cache?.ttl_sec
+                  ? ` · скан ${scanData.cache.hit ? `${Math.round(scanData.cache.age_sec)} с назад` : "свежий"}, пересчёт раз в ${Math.round(scanData.cache.ttl_sec)} с`
+                  : ""}
+              </span>
               <select
                 value={scanStatusFilter}
                 onChange={(e) => setScanStatusFilter(e.target.value)}

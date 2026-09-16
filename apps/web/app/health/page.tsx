@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { Activity, Bot, Database, RefreshCw, Radio, ShieldAlert, ShieldCheck, Wifi } from "lucide-react";
 
 export default function HealthPage() {
@@ -84,17 +85,8 @@ export default function HealthPage() {
     await loadAll();
   }
 
-  useEffect(() => {
-    loadAll();
-    const timer = setInterval(loadAll, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    loadEgress();
-    const timer = setInterval(loadEgress, 60000);
-    return () => clearInterval(timer);
-  }, [egressHours]);
+  useVisiblePolling(loadAll, 5000);
+  useVisiblePolling(loadEgress, 60000, {}, [egressHours]);
 
   const bot = health?.bot;
   const market = readiness?.market_connectivity || health?.market;
@@ -258,6 +250,26 @@ export default function HealthPage() {
           <InfoRow label="Retryable" value={delivery?.retryable ?? 0} danger={(delivery?.retryable ?? 0) > 0} />
           <InfoRow label="Failed" value={delivery?.failed ?? 0} danger={(delivery?.failed ?? 0) > 0} />
           {delivery?.last_error && <InfoRow label="Last error" value={delivery.last_error} danger />}
+        </Panel>
+
+        {/* (#memory-probe-2026-09-16) Лимит Render считается по контейнеру; при
+            его превышении процесс убивает ядро, и в логах приложения пусто. */}
+        <Panel title="Память">
+          <InfoRow
+            label="Контейнер"
+            value={health?.memory?.container_used_mb != null
+              ? `${health.memory.container_used_mb} из ${health.memory.container_limit_mb ?? "?"} МБ`
+              : "-"}
+          />
+          <InfoRow
+            label="Доля лимита"
+            value={health?.memory?.container_used_share != null
+              ? `${Math.round(health.memory.container_used_share * 100)}%`
+              : "-"}
+          />
+          <InfoRow label="Пик контейнера, МБ" value={health?.memory?.container_peak_mb ?? "-"} />
+          <InfoRow label="Процесс (RSS), МБ" value={health?.memory?.rss_mb ?? "-"} />
+          <InfoRow label="Пик процесса, МБ" value={health?.memory?.rss_peak_mb ?? "-"} />
         </Panel>
 
         {/* (#okx-universe-2026-09-12) Вселенная следует за биржей исполнения. */}

@@ -134,34 +134,85 @@ def log_snapshot(snapshot: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _trim(path)
     except Exception:  # noqa: BLE001 — журнал не должен ронять воркер
         pass
 
 
-def _load(limit: int = 20000) -> list[dict]:
+def _trim(path: Path) -> None:
+    """(#memory-probe-2026-09-16) Потолок размера журнала.
+
+    Строка пишется раз в минуту с 26.07 и не удалялась никогда: постоянный диск
+    Render сам ничего не чистит. При превышении EGRESS_MONITOR_MAX_BYTES журнал
+    переписывается хвостом в половину потолка — это недели истории, а сводка
+    для тикета смотрит сутки.
+    """
+    cap = int(getattr(settings, "EGRESS_MONITOR_MAX_BYTES", 20 * 1024 * 1024))
+    if cap <= 0 or path.stat().st_size <= cap:
+        return
+    with path.open("rb") as f:
+        f.seek(-(cap // 2), 2)
+        tail = f.read()
+    tail = tail[tail.find(b"\n") + 1:]                  # первая строка обрезана
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(tail)
+    tmp.replace(path)
+
+
+def _load(limit: int = 20000, since_ts: float | None = None) -> list[dict]:
+    """Строки журнала по порядку времени — читаются С КОНЦА файла.
+
+    (#memory-probe-2026-09-16) Прежняя версия разбирала в память весь журнал
+    (десятки тысяч строк с 26.07), а страница здоровья вызывает сводку раз в
+    минуту — ради последних суток. Теперь чтение идёт кусками от конца и
+    останавливается на первой строке старше `since_ts` или на `limit` строк.
+    """
     path = _path()
     if not path.exists():
         return []
-    rows: list[dict] = []
+    newest_first: list[dict] = []
+    chunk = 256 * 1024
+
+    def take(raw: bytes) -> bool:
+        """False — пора остановиться."""
+        raw = raw.strip()
+        if not raw:
+            return True
+        try:
+            row = json.loads(raw)
+        except Exception:  # noqa: BLE001 — битая строка не валит историю
+            return True
+        if since_ts is not None and float(row.get("ts") or 0) < since_ts:
+            return False
+        newest_first.append(row)
+        return len(newest_first) < int(limit)
+
     try:
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except Exception:  # noqa: BLE001 — битая строка не валит историю
-                    continue
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            pos, rest, going = f.tell(), b"", True
+            while pos > 0 and going:
+                step = min(chunk, pos)
+                pos -= step
+                f.seek(pos)
+                lines = (f.read(step) + rest).split(b"\n")
+                rest = lines[0]                          # может быть обрезана слева
+                for raw in reversed(lines[1:]):
+                    if not take(raw):
+                        going = False
+                        break
+            if going and pos == 0:
+                take(rest)
     except Exception:  # noqa: BLE001
         return []
-    return rows[-int(limit):]
+    newest_first.reverse()
+    return newest_first
 
 
 def history(hours: float = 24.0) -> dict[str, Any]:
     """Сводка для тикета: сколько времени сеть была недоступна и в какие окна."""
     since = time.time() - float(hours) * 3600
-    rows = [r for r in _load() if float(r.get("ts") or 0) >= since]
+    rows = [r for r in _load(since_ts=since) if float(r.get("ts") or 0) >= since]
     if not rows:
         return {
             "status": "no_data",

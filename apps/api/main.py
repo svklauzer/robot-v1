@@ -365,6 +365,36 @@ async def background_ml_retrain_loop():
         await asyncio.sleep(int(getattr(settings, "ML_RETRAIN_INTERVAL_SEC", 86400)))
 
 
+async def background_memory_log_loop():
+    """Строка в лог о памяти раз в MEMORY_LOG_INTERVAL_SEC (#memory-probe-2026-09-16).
+
+    16.09 Render перезапустил robot-api за превышение памяти, а в логах было
+    чисто: процесс убивает ядро, приложение не успевает ничего записать. С этой
+    строкой рост виден ДО падения, и по ней отличается утечка (плавный рост) от
+    разового пика. Чтение пары файлов /proc и cgroup — микросекунды, в event
+    loop без потока. Сбой замера не трогает ничего.
+    """
+    await asyncio.sleep(30)
+
+    while True:
+        try:
+            from services.memory_probe import read_memory
+
+            mem = read_memory()
+            share = mem.get("container_used_share")
+            warn_share = float(getattr(settings, "MEMORY_WARN_SHARE", 0.85))
+            log_event(
+                logger,
+                logging.WARNING if (share is not None and share >= warn_share) else logging.INFO,
+                "memory_usage",
+                **mem,
+            )
+        except Exception as e:  # noqa: BLE001 — замер не имеет права мешать работе
+            log_event(logger, logging.INFO, "memory_usage_probe_failed", error=str(e))
+
+        await asyncio.sleep(max(60.0, float(getattr(settings, "MEMORY_LOG_INTERVAL_SEC", 600.0))))
+
+
 async def background_egress_monitor_loop():
     """Непрерывный замер исходящей сети (#egress-monitor-2026-07-26).
 
@@ -792,6 +822,7 @@ async def lifespan(app: FastAPI):
     funding_observe_loop_enabled = True
     funding_observe_task = asyncio.create_task(background_funding_observe_loop())
     egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
+    memory_log_task = asyncio.create_task(background_memory_log_loop())  # noqa: F841
     walkforward_task = asyncio.create_task(background_walkforward_loop())
 
     yield
@@ -1241,6 +1272,9 @@ def orderbook_volume_profile(symbol: str = "BTC/USDT", timeframe: str = "1h",
                                   limit=int(limit), bins=int(bins))
 
 
+_OUTCOME_STATS_CACHE: dict = {}
+
+
 @app.get("/ml/outcomes/stats", dependencies=[Depends(require_owner_action)])
 def ml_outcomes_stats():
     """Статистика ML-датасета (trade_outcomes.jsonl на персистентном диске):
@@ -1251,6 +1285,15 @@ def ml_outcomes_stats():
     p = MLTradeLogger().path
     if not p.exists():
         return {"path": str(p), "exists": False, "count": 0, "last_logged_at": None}
+
+    # (#memory-probe-2026-09-16) Страница стакана зовёт это раз в 5 с, а файл
+    # меняется только при закрытии сделки. Разбор всего датасета на каждый вызов
+    # держал GIL в процессе, где идёт торговый цикл. Пересчёт — только когда у
+    # файла сменились размер или время изменения.
+    stat = p.stat()
+    signature = (str(p), stat.st_size, stat.st_mtime_ns)
+    if _OUTCOME_STATS_CACHE.get("signature") == signature:
+        return _OUTCOME_STATS_CACHE["payload"]
 
     count = wins = losses = with_depth = with_regime = 0
     last_logged_at = last_symbol = last_reason = None
@@ -1276,7 +1319,7 @@ def ml_outcomes_stats():
         last_symbol = d.get("symbol") or last_symbol
         last_reason = d.get("closed_reason") or last_reason
 
-    return {
+    payload = {
         "path": str(p),
         "exists": True,
         "count": count,
@@ -1288,9 +1331,11 @@ def ml_outcomes_stats():
         "last_logged_at": last_logged_at,
         "last_symbol": last_symbol,
         "last_reason": last_reason,
-        "size_bytes": p.stat().st_size,
+        "size_bytes": stat.st_size,
         "target_for_training": 200,
     }
+    _OUTCOME_STATS_CACHE.update(signature=signature, payload=payload)
+    return payload
 
 
 @app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])
@@ -2158,6 +2203,11 @@ def system_health():
             "source": settings.universe_source,
             "symbols": settings.symbols,
         }
+        # (#memory-probe-2026-09-16) Память процесса и контейнера: лимит Render
+        # считается по контейнеру, и перезапуск по нему в логах не виден.
+        from services.memory_probe import read_memory
+
+        out["memory"] = read_memory()
         return out
 
     finally:
@@ -2849,8 +2899,54 @@ def _intelligence_effective_confidence(result) -> float:
         setup_decision=setup_quality.get("decision") or result.setup_decision or "",
     ).effective
 
+# (#scan-cache-2026-09-16) Последний результат readonly-скана и замок от
+# наложения. Эндпоинт синхронный — FastAPI исполняет его в пуле потоков, поэтому
+# замок потоковый.
+_SCAN_CACHE: dict = {"at": 0.0, "payload": None}
+_SCAN_CACHE_LOCK = Lock()
+
+
 @app.get("/intelligence/scan", dependencies=[Depends(require_owner_action)])
 def intelligence_scan_readonly():
+    """Readonly-скан для UI с кешем (#scan-cache-2026-09-16).
+
+    Скан — ~50 запросов свечей к бирже и полный анализ по каждому символу на
+    КАЖДЫЙ вызов, а страница Intelligence вызывает его раз в 10 с. Без кеша
+    открытая вкладка (или две, на телефоне и компьютере) накладывала сканы
+    друг на друга в памяти поверх торгового цикла и отнимала у него лимиты
+    биржи. 16.09 Render перезапустил robot-api за превышение памяти.
+
+    Свежий результат (моложе INTEL_SCAN_CACHE_SEC) отдаётся из кеша. Идёт скан
+    в другом потоке — второй не запускается: отдаётся прошлый результат, а без
+    него `busy` (страница тогда держит прежнюю картину).
+    """
+    ttl = max(0.0, float(getattr(settings, "INTEL_SCAN_CACHE_SEC", 60.0)))
+    cached, cached_at = _SCAN_CACHE["payload"], float(_SCAN_CACHE["at"])
+
+    def from_cache(refreshing: bool) -> dict:
+        age = round(time.time() - cached_at, 1)
+        return {**cached, "cache": {"hit": True, "age_sec": age, "ttl_sec": ttl,
+                                    "refreshing": refreshing}}
+
+    if cached is not None and ttl > 0 and time.time() - cached_at < ttl:
+        return from_cache(False)
+
+    if not _SCAN_CACHE_LOCK.acquire(blocking=False):
+        if cached is not None:
+            return from_cache(True)
+        return {"status": "busy", "mode": "readonly_live", "symbols": [], "results": []}
+
+    try:
+        payload = _intelligence_scan_compute()
+        if payload.get("status") == "ok":
+            _SCAN_CACHE["payload"], _SCAN_CACHE["at"] = payload, time.time()
+        return {**payload, "cache": {"hit": False, "age_sec": 0.0, "ttl_sec": ttl,
+                                     "refreshing": False}}
+    finally:
+        _SCAN_CACHE_LOCK.release()
+
+
+def _intelligence_scan_compute():
     """
     READONLY live scan.
 
