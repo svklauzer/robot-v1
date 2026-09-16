@@ -541,3 +541,19 @@ async def test_flat_after_the_exchange_stop_fired_books_the_trigger(world, cance
     assert out["status"] == "closed" and out["exit_price"] == 1.5075
     assert cancels == ["stop_loss"]
     assert world.sent == [], "позиции на бирже нет — ордер не отправляется"
+
+
+def test_signal_card_reads_the_fields_the_service_writes():
+    """Фронт показывает стоп на бирже из plan_json.exchange_stop — те же ключи,
+    что пишет ExchangeStopService._record/_on_place_failed."""
+    from pathlib import Path
+    import inspect
+
+    page = (Path(__file__).resolve().parents[2] / "web" / "app" / "signals" / "page.tsx").read_text(encoding="utf-8")
+    assert "exchangeStop={plan.exchange_stop}" in page
+    component = page.split("function StopValue", 1)[1].split("\nfunction ", 1)[0]
+    source = inspect.getsource(es)
+    for key in ("order_id", "trigger", "failures"):
+        assert f"exchangeStop?.{key}" in component or f"exchangeStop.{key}" in component, key
+        assert f'"{key}"' in source, key
+    assert es.STATE_KEY == "exchange_stop"
