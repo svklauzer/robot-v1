@@ -31,19 +31,21 @@ CONTRACT_SIZES = {
 
 
 class _FakeClient:
-    """Биржа, принимающая своп только целыми контрактами."""
+    """Биржа, принимающая своп только целыми контрактами.
+
+    (#okx-live-double-conversion-2026-09-16) Семантика — как у НАСТОЯЩИХ
+    HTXClient/OKXClient: на входе и выходе МОНЕТЫ, округление вниз до целого
+    контракта. Прежний двойник принимал контракты — и закреплял ту самую
+    ошибку, из-за которой live делил объём на размер контракта дважды.
+    """
 
     def contract_size(self, symbol):
         return CONTRACT_SIZES.get(symbol)
 
     def amount_to_precision(self, symbol, amount):
-        if symbol in CONTRACT_SIZES:
-            if float(amount) < 1:
-                raise ValueError(
-                    f"htx amount of {symbol} must be greater than "
-                    f"minimum amount precision of 1"
-                )
-            return float(int(float(amount)))
+        size = CONTRACT_SIZES.get(symbol)
+        if size:
+            return float(int(float(amount) / size + 1e-9) * size)
         return round(float(amount), 6)
 
 

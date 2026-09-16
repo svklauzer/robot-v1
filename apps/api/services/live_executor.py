@@ -235,7 +235,20 @@ class LiveExecutor:
 
         contracts = amount / float(size)
         try:
-            contracts = float(self.client.amount_to_precision(symbol, contracts))
+            # (#okx-live-double-conversion-2026-09-16) Клиент биржи округляет ОБЪЁМ
+            # В МОНЕТАХ по шагу лота своего рынка и монеты же возвращает. Прежде
+            # сюда передавались КОНТРАКТЫ, и клиент делил их на размер контракта
+            # второй раз. При размере контракта больше монеты ордер раздувался:
+            # на OKX план 100 XRP уходил как 100 контрактов = 10 000 XRP
+            # (~14 000 USDT), 3000 DOGE — как 1000 контрактов = 1 000 000 DOGE.
+            # Кэп нотионала проверяется до перевода, на плановом объёме, и этого
+            # не ловил.
+            base_q = float(self.client.amount_to_precision(symbol, amount))
+            if base_q > amount * (1 + 1e-9):
+                # Клиент вернул больше плана — не верим ему: на биржу никогда
+                # не уходит больше, чем рассчитано.
+                raise ValueError(f"precision_above_plan:{base_q}>{amount}")
+            contracts = round(base_q / float(size), 8)
         except Exception:  # noqa: BLE001
             # (#contract-quantize-2026-08-03) Прежде здесь стояло `pass`, и
             # дробное число контрактов уходило на биржу как есть. Биржа их не

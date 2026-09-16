@@ -399,9 +399,10 @@ class HTXClient:
                 contracts = amount / contract_size
                 # Округляем вниз до целого числа контрактов
                 contracts_int = int(contracts)
-                # Минимум 1 контракт если amount > 0
-                if contracts_int < 1 and amount > 0:
-                    contracts_int = 1
+                # (#okx-lot-step-2026-09-16) Меньше одного контракта — 0, а не
+                # 1: подъём до контракта выводил позицию за риск и кэп
+                # нотионала (на OKX BTC 250 USDT становились 760). Тот же
+                # инвариант, что у OKXClient: объём никогда не больше плана.
                 # Конвертируем обратно → монеты
                 return float(contracts_int * contract_size)
             
