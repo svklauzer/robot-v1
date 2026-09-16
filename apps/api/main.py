@@ -140,20 +140,35 @@ position_manage_lock = asyncio.Lock()
 logger = get_logger(__name__)
 
 
-def effective_equity_usdt() -> float:
+def effective_equity_usdt(robot_margin_usdt: float = 0.0) -> float:
     """Единственный источник эквити для сайзинга и риск-лимитов.
 
-    В paper/dry_run — RISK_EQUITY_USDT, в live — реальный свободный баланс
-    счёта исполнения (TTL-кэш 30 с). До этого сайзинг и дневной стоп-лосс
-    считались от захардкоженной 1000, экспозиция — от настоящего баланса:
-    на счёте, отличном от 1000, план и предохранитель расходились с реальностью.
+    В paper/dry_run — RISK_EQUITY_USDT, в live — свободный баланс счёта
+    исполнения (TTL-кэш 30 с) плюс маржа собственных позиций робота
+    (#manual-orders-2026-09-16): маржа ручных позиций и ордеров владельца
+    остаётся вычтенной биржей. До этого сайзинг и дневной стоп-лосс считались
+    от захардкоженной 1000, экспозиция — от настоящего баланса: на счёте,
+    отличном от 1000, план и предохранитель расходились с реальностью.
     """
     try:
         from services.live_executor import LIVE_EXECUTOR
 
-        return float(LIVE_EXECUTOR.effective_equity_usdt())
+        return float(LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin_usdt))
     except Exception:  # noqa: BLE001 — эквити не должно ронять цикл
         return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+
+
+def robot_live_margin_usdt(db, bot) -> float:
+    """Маржа открытых на бирже позиций робота — из учёта, без запросов к бирже."""
+    try:
+        from services.exposure_guard import ExposureGuard
+        from services.live_executor import LIVE_EXECUTOR
+
+        if bot is None or not LIVE_EXECUTOR.is_live():
+            return 0.0
+        return float(ExposureGuard().live_position_margin(db, bot.id))
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 async def background_robot_loop():
@@ -211,7 +226,7 @@ async def background_robot_loop():
                     )
                     db.commit()
                 else:
-                    equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+                    equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
                     safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
 
                     if safety.get("blocked"):
@@ -1568,7 +1583,7 @@ async def run_robot_once():
         if validation_gates.get("live_blockers"):
             return {"status": "skipped", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
 
-        equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+        equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
         safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
         if safety.get("blocked"):
             db.commit()

@@ -329,36 +329,58 @@ class LiveExecutor:
         """Свободный USDT счёта исполнения (для /live/state)."""
         return self.free_usdt(getattr(settings, "execution_market_type", "spot"))
 
-    def effective_equity_usdt(self, market_type: str | None = None) -> float:
-        """Эквити для сайзинга и экспозиции.
+    def execution_accounts(self) -> list[str]:
+        """Счета, с которых торгует робот.
+
+        (#manual-orders-2026-09-16) При ENABLE_FUTURES_EXECUTION все сделки идут
+        через своп (market_routing.resolve) — деньги спотового счёта HTX роботу
+        недоступны. У OKX спот и своп — один торговый счёт: ccxt отдаёт его на
+        оба типа, и сумма «спот + своп» считала те же деньги дважды.
+        """
+        futures = bool(getattr(settings, "ENABLE_FUTURES", False))
+        if futures and bool(getattr(settings, "ENABLE_FUTURES_EXECUTION", False)):
+            accounts = ["swap"]
+        elif futures:
+            accounts = ["spot", "swap"]
+        else:
+            accounts = ["spot"]
+        if getattr(getattr(self, "client", None), "UNIFIED_TRADING_ACCOUNT", False):
+            accounts = accounts[-1:]
+        return accounts
+
+    def effective_equity_usdt(self, market_type: str | None = None,
+                              robot_margin_usdt: float = 0.0) -> float:
+        """Капитал робота для сайзинга и экспозиции.
 
         paper/dry_run/off → RISK_EQUITY_USDT: бумажный капитал не меняется.
 
-        live → реальные свободные USDT. Счёт зависит от рынка: лонги живут на
-        споте, шорты на деривативе, и это РАЗНЫЕ счета HTX. Когда market_type
-        не задан, считаем общий капитал робота — сумму обоих счетов, иначе
-        половина денег невидима для сайзинга и система занижает размер.
-        Fallback на RISK_EQUITY_USDT, если баланс недоступен.
+        live → свободные USDT счёта исполнения + маржа собственных позиций
+        робота (robot_margin_usdt, из учёта). (#manual-orders-2026-09-16)
+        Владелец торгует на том же счёте руками: биржа уже вычла из свободного
+        баланса маржу его позиций и ордеров — роботу она недоступна и остаётся
+        вычтенной. Маржа позиций самого робота вычтена тоже, но это его капитал:
+        без возврата экспозиция вычитала бы её второй раз, и каждая открытая
+        сделка ужимала бы и лимит, и базу дневного убытка. Размер позиции из
+        капитала строит плечо из конфига (FUTURES_LEVERAGE, потолок
+        LIVE_MAX_LEVERAGE). Fallback на RISK_EQUITY_USDT, если баланс недоступен.
         """
         fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
             return fallback
 
+        own = max(0.0, float(robot_margin_usdt or 0.0))
         if market_type:
             free = self.free_usdt(market_type)
-            return float(free) if free is not None and free > 0 else fallback
+            return float(free) + own if free is not None and free + own > 0 else fallback
 
         total = 0.0
         seen = False
-        accounts = ["spot"]
-        if bool(getattr(settings, "ENABLE_FUTURES", False)):
-            accounts.append("swap")
-        for account in accounts:
+        for account in self.execution_accounts():
             free = self.free_usdt(account)
             if free is not None:
                 total += float(free)
                 seen = True
-        return total if seen and total > 0 else fallback
+        return total + own if seen and total + own > 0 else fallback
 
     # ── единицы объёма ──────────────────────────────────────────────────────────
     def _to_exchange_amount(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:
@@ -830,6 +852,9 @@ class LiveExecutor:
             order = found  # ордер на самом деле ушёл — НЕ повторяем
 
         order = self._await_fill(symbol, order, client_id)
+        # Ордер изменил свободный баланс: следующий сайзинг не должен взять
+        # кешированный — к нему уже прибавлена маржа новой позиции из учёта.
+        getattr(self, "_bal_cache", {}).clear()
         status = (order or {}).get("status", "open")
         filled_raw = float((order or {}).get("filled") or 0.0)
         avg = (order or {}).get("average") or (order or {}).get("price") or reference_price

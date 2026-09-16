@@ -324,6 +324,10 @@ class OKXClient:
     # ccxt okx разбирает сторону позиции из этого ключа (posSide в запросе).
     POSITION_SIDE_PARAM = "positionSide"
 
+    # (#manual-orders-2026-09-16) Спот и своп OKX — один торговый счёт: ccxt
+    # fetch_balance отдаёт его и на type=spot, и на type=swap.
+    UNIFIED_TRADING_ACCOUNT = True
+
     # ── стоп на бирже (#exchange-stop-2026-09-16) ─────────────────────────────
     def create_stop_loss_order(self, symbol: str, side: str, amount: float,
                                trigger_price: float, params: dict | None = None):
