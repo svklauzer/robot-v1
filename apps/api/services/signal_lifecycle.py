@@ -1012,7 +1012,8 @@ class SignalLifecycleManager:
         plan["tp2_partial"] = {
             "closed_qty": partial.get("closed_qty"),
             "remaining_qty": partial.get("remaining_qty"),
-            "exit_price": float(exit_price),
+            # В live — реальный филл биржи (#live-close-safety-2026-09-16).
+            "exit_price": float(partial.get("exit_price") or exit_price),
             "net_pnl": partial.get("net_pnl"),
             "total_cost": partial.get("total_cost"),
             # Пик хвоста стартует ровно с TP2: всё, что выше, — заработок этапа.
@@ -1490,6 +1491,17 @@ class SignalLifecycleManager:
             exit_price=exit_price,
             reason=reason,
         )
+
+        # (#live-close-safety-2026-09-16) Биржа не закрыла позицию — сделка
+        # остаётся открытой: следующий проход сопровождения повторит закрытие.
+        # Закрыть её здесь значило бы бросить позицию на бирже без присмотра.
+        if close_result and close_result.get("status") == "live_close_failed":
+            db.flush()
+            return
+
+        # В live цена закрытия — реальный филл биржи, а не расчётный уровень.
+        if close_result and close_result.get("exit_price"):
+            exit_price = float(close_result["exit_price"])
 
         if close_result:
             result_pct = close_result["net_pnl_pct"]
