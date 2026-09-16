@@ -219,7 +219,7 @@ def live(monkeypatch):
     executor._account_state = None
 
     signal = SimpleNamespace(id=7, bot_id=1, symbol="XRP/USDT", side="short", stop_price=1.50,
-                             plan_json={"routing": dict(ROUTING)})
+                             plan_json={"routing": dict(ROUTING), "execution": {"mode": "live"}})
     position = SimpleNamespace(symbol="XRP/USDT", side="short", qty=150.0, status="open", mark_price=1.42)
     alerts, kills = [], []
 
@@ -456,9 +456,24 @@ async def test_already_executed_stop_counts_as_cancelled(live):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("opened_as", ["paper", "dry_run", None])
+async def test_no_real_stop_for_a_position_not_opened_live(live, opened_as):
+    """(#manual-orders-2026-09-16) Позиция из paper на бирже не существует —
+    reduce-only стоп по её объёму закрыл бы ручную позицию владельца."""
+    if opened_as is None:
+        live.signal.plan_json.pop("execution")
+    else:
+        live.signal.plan_json["execution"] = {"mode": opened_as}
+
+    out = await _sync(live)
+
+    assert out["action"] == "not_opened_live" and live.exchange.log == []
+
+
+@pytest.mark.anyio
 async def test_spot_route_gets_no_exchange_stop(live):
     live.signal.plan_json = {"routing": {**ROUTING, "market_type": "spot", "exchange_symbol": "XRP/USDT",
-                                         "side": "long"}}
+                                         "side": "long"}, "execution": {"mode": "live"}}
     live.signal.side = live.position.side = "long"
     live.signal.stop_price = 1.30
     out = await _sync(live)
