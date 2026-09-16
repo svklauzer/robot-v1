@@ -565,6 +565,21 @@ class LiveExecutor:
             return None
         return [s for s in (self._normalize_stop(o) for o in raw) if s]
 
+    def stop_order_params(self, position_side: str, margin_mode: str | None, *,
+                          hedged: bool | None, market_type: str) -> tuple[str, str, dict]:
+        """(сторона, номер, параметры) стоп-ордера — одни для live и dry_run.
+        ValueError — неизвестный режим маржи."""
+        close_side = self._close_side(position_side)
+        mm = self.resolve_margin_mode(margin_mode)
+        client_id = self._client_order_id("slexch")
+        params = self.order_params(
+            client_id=client_id, market_type=market_type, side=close_side,
+            reduce_only=True, margin_mode=mm, hedged=hedged,
+            position_side_key=getattr(getattr(self, "client", None), "POSITION_SIDE_PARAM",
+                                      "positionSide"),
+        )
+        return close_side, client_id, params
+
     def place_stop_order(self, symbol: str, position_side: str, contracts: float,
                          trigger_price: float, *, market_type: str,
                          margin_mode: str | None) -> dict:
@@ -578,16 +593,11 @@ class LiveExecutor:
         if contracts <= 0:
             return {**base, "ok": False, "error": "amount_below_min_contract"}
         try:
-            mm = self.resolve_margin_mode(margin_mode)
+            close_side, client_id, params = self.stop_order_params(
+                position_side, margin_mode, hedged=self.derivatives_account()["hedged"],
+                market_type=market_type)
         except ValueError as exc:
             return {**base, "ok": False, "error": str(exc)}
-        hedged = self.derivatives_account()["hedged"]
-        client_id = self._client_order_id("slexch")
-        params = self.order_params(
-            client_id=client_id, market_type=market_type, side=close_side,
-            reduce_only=True, margin_mode=mm, hedged=hedged,
-            position_side_key=getattr(self.client, "POSITION_SIDE_PARAM", "positionSide"),
-        )
         try:
             order = create(symbol, close_side, float(contracts), float(trigger_price), params) or {}
         except Exception as exc:  # noqa: BLE001

@@ -24,13 +24,17 @@
 Новый стоп ставится ДО снятия старого — позиция не остаётся без защиты между
 вызовами.
 
-Режимы: работает только в live. В off и dry_run ничего не делает — бумажная
-торговля не меняется.
+Режимы. live — настоящие ордера. dry_run — тот же путь сверки, но «биржа» —
+запись в сделке, а постановка и снятие только пишутся в лог
+`live_dry_run_exchange_stop` (#dry-run-parity-2026-09-16): в paper видно, какой
+стоп, когда и почему встал бы на бирже, без единого запроса к ней. off — ничего.
+Бумажная торговля не меняется ни в одном режиме.
 """
 from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -54,12 +58,61 @@ def _executor():
     return LIVE_EXECUTOR
 
 
-def live_stops_active() -> bool:
-    """Стоп на бирже ведётся: live и настройка включена."""
+def stops_mode(executor=None) -> str | None:
+    """Как ведётся стоп на бирже: "live", "dry_run" или None (off/выключено)."""
     try:
-        return _enabled() and bool(_executor().is_live())
+        if not _enabled():
+            return None
+        mode = (executor or _executor()).effective_mode()
     except Exception:  # noqa: BLE001
-        return False
+        return None
+    return mode if mode in ("live", "dry_run") else None
+
+
+class _DryRunStops:
+    """Биржа для dry_run: стоп «стоит» в записи сделки, ордера только в лог.
+
+    Сверка идёт тем же путём, что в live, поэтому в paper видно ровно то, что
+    делал бы live: постановку, перенос вслед за программным стопом, пересчёт
+    после частичного закрытия, снятие при закрытии.
+    """
+
+    def __init__(self, executor, signal):
+        self.executor = executor
+        self.signal = signal
+
+    def open_stop_orders(self, symbol: str, market_type: str) -> list[dict]:
+        state = (self.signal.plan_json or {}).get(STATE_KEY) or {}
+        if state.get("mode") != "dry_run" or not state.get("order_id"):
+            return []
+        return [{"order_id": str(state["order_id"]), "side": state.get("side"),
+                 "trigger": state.get("trigger"), "contracts": float(state.get("contracts") or 0.0)}]
+
+    def place_stop_order(self, symbol: str, position_side: str, contracts: float,
+                         trigger_price: float, *, market_type: str, margin_mode: str | None) -> dict:
+        order_id = f"dry{uuid.uuid4().hex[:12]}"
+        try:
+            close_side, _client_id, params = self.executor.stop_order_params(
+                position_side, margin_mode, hedged=None, market_type=market_type)
+        except ValueError as exc:
+            log_event(logger, logging.WARNING, "live_dry_run_exchange_stop", action="place",
+                      signal_id=getattr(self.signal, "id", None), symbol=symbol,
+                      would_reject=str(exc))
+            return {"ok": True, "order_id": order_id}
+        log_event(logger, logging.INFO, "live_dry_run_exchange_stop", action="place",
+                  signal_id=getattr(self.signal, "id", None), symbol=symbol, side=close_side,
+                  trigger=trigger_price, contracts=contracts, params=params, order_id=order_id)
+        return {"ok": True, "order_id": order_id}
+
+    def cancel_stop_order(self, symbol: str, order_id: str, market_type: str) -> bool:
+        log_event(logger, logging.INFO, "live_dry_run_exchange_stop", action="cancel",
+                  signal_id=getattr(self.signal, "id", None), symbol=symbol, order_id=order_id)
+        return True
+
+
+# Сделки, по которым уже предупредили, что объём в контрактах не считается, —
+# чтобы не повторять одно и то же каждые 10 секунд.
+_UNIT_WARNED: set[tuple] = set()
 
 
 def _save_state(signal, state: dict | None) -> None:
@@ -160,9 +213,14 @@ class ExchangeStopService:
                       signal_id=getattr(signal, "id", None), error=f"{type(exc).__name__}: {exc}")
             return {"action": "error", "error": f"{type(exc).__name__}: {exc}"}
 
+    def _ops(self, mode: str, signal):
+        return self.executor if mode == "live" else _DryRunStops(self.executor, signal)
+
     async def _sync(self, db, signal, position, *, price, alert) -> dict:
-        if not _enabled() or not self.executor.is_live():
+        mode = stops_mode(self.executor)
+        if mode is None:
             return {"action": "inactive"}
+        ops = self._ops(mode, signal)
         state = dict((signal.plan_json or {}).get(STATE_KEY) or {})
 
         if position is None or str(getattr(position, "status", "open")) != "open":
@@ -170,7 +228,17 @@ class ExchangeStopService:
                 return await self.cancel_all(db, signal, alert=alert, reason="position_closed")
             return {"action": "no_position"}
 
-        want = self.desired(signal, position)
+        try:
+            want = self.desired(signal, position)
+        except ValueError as exc:
+            # Размер контракта неизвестен (рынки не загружены): стоп не из чего
+            # считать. Предупреждаем один раз на сделку, а не каждый проход.
+            key = (getattr(signal, "id", None), str(exc))
+            if key not in _UNIT_WARNED:
+                _UNIT_WARNED.add(key)
+                log_event(logger, logging.WARNING, "exchange_stop_unit_unresolved",
+                          signal_id=key[0], mode=mode, error=str(exc))
+            return {"action": "unit_unresolved", "error": str(exc)}
         if want is None:
             return {"action": "not_applicable"}
         if want["contracts"] <= 0:
@@ -184,6 +252,9 @@ class ExchangeStopService:
 
         move_pct = float(getattr(settings, "LIVE_EXCHANGE_STOP_MIN_MOVE_PCT", 0.1))
         verify_sec = float(getattr(settings, "LIVE_EXCHANGE_STOP_VERIFY_SEC", 60.0))
+        if mode == "dry_run":
+            # Сверять запись саму с собой незачем — только лишние записи в БД.
+            verify_sec = float("inf")
         now = time.time()
         if (
             state.get("order_id")
@@ -193,11 +264,12 @@ class ExchangeStopService:
         ):
             return {"action": "unchanged"}
 
-        existing = self.executor.open_stop_orders(want["symbol"], want["market_type"])
+        existing = ops.open_stop_orders(want["symbol"], want["market_type"])
         if existing is None:
             return {"action": "fetch_failed"}
-        foreign = _foreign_order_ids(db, signal)
-        existing = [s for s in existing if s["order_id"] not in foreign]
+        if mode == "live":
+            foreign = _foreign_order_ids(db, signal)
+            existing = [s for s in existing if s["order_id"] not in foreign]
 
         matching = [
             s for s in existing
@@ -208,11 +280,11 @@ class ExchangeStopService:
         if matching:
             keep = next((s for s in matching if s["order_id"] == state.get("order_id")), matching[0])
             extra = [s for s in existing if s["order_id"] != keep["order_id"]]
-            self._cancel_many(want, extra)
-            self._record(signal, want, keep["order_id"], keep["trigger"], keep["contracts"], state, now)
-            return {"action": "verified", "order_id": keep["order_id"], "cancelled": len(extra)}
+            self._cancel_many(ops, want, extra)
+            self._record(signal, want, keep["order_id"], keep["trigger"], keep["contracts"], state, now, mode)
+            return {"action": "verified", "order_id": keep["order_id"], "cancelled": len(extra), "mode": mode}
 
-        placed = self.executor.place_stop_order(
+        placed = ops.place_stop_order(
             want["symbol"], want["position_side"], want["contracts"], want["trigger"],
             market_type=want["market_type"], margin_mode=want["margin_mode"],
         )
@@ -221,10 +293,10 @@ class ExchangeStopService:
             return {"action": "place_failed", "error": placed.get("error")}
 
         # Новый стоп стоит — только теперь снимаем прежние.
-        cancelled = self._cancel_many(want, existing)
-        self._record(signal, want, placed["order_id"], want["trigger"], want["contracts"], state, now)
+        cancelled = self._cancel_many(ops, want, existing)
+        self._record(signal, want, placed["order_id"], want["trigger"], want["contracts"], state, now, mode)
         return {"action": "replaced" if existing else "placed",
-                "order_id": placed["order_id"], "cancelled": cancelled}
+                "order_id": placed["order_id"], "cancelled": cancelled, "mode": mode}
 
     @staticmethod
     def _beyond_trigger(position_side: str, price: float, trigger: float) -> bool:
@@ -232,17 +304,20 @@ class ExchangeStopService:
             return price <= trigger
         return price >= trigger
 
-    def _cancel_many(self, want: dict, orders: list[dict]) -> int:
+    @staticmethod
+    def _cancel_many(ops, want: dict, orders: list[dict]) -> int:
         done = 0
         for order in orders:
-            if self.executor.cancel_stop_order(want["symbol"], order["order_id"], want["market_type"]):
+            if ops.cancel_stop_order(want["symbol"], order["order_id"], want["market_type"]):
                 done += 1
         return done
 
     @staticmethod
-    def _record(signal, want: dict, order_id: str, trigger, contracts, state: dict, now: float) -> None:
+    def _record(signal, want: dict, order_id: str, trigger, contracts, state: dict, now: float,
+                mode: str = "live") -> None:
         changed = state.get("order_id") != order_id
         new_state = {
+            "mode": mode,
             "order_id": order_id,
             "symbol": want["symbol"],
             "side": want["side"],
@@ -255,7 +330,7 @@ class ExchangeStopService:
             "failures": 0,
         }
         if changed or any(state.get(k) != new_state[k] for k in ("trigger", "contracts", "failures")):
-            log_event(logger, logging.INFO, "exchange_stop_state", signal_id=signal.id,
+            log_event(logger, logging.INFO, "exchange_stop_state", signal_id=signal.id, mode=mode,
                       order_id=order_id, trigger=new_state["trigger"],
                       contracts=new_state["contracts"], software_stop=want["software_stop"])
         _save_state(signal, new_state)
@@ -318,8 +393,10 @@ class ExchangeStopService:
         доходит до владельца.
         """
         try:
-            if not _enabled() or not self.executor.is_live():
+            mode = stops_mode(self.executor)
+            if mode is None:
                 return {"action": "inactive"}
+            ops = self._ops(mode, signal)
             state = dict((signal.plan_json or {}).get(STATE_KEY) or {})
             if route is None:
                 route = route_from_payload(signal.plan_json, signal.symbol, signal.side)
@@ -327,13 +404,14 @@ class ExchangeStopService:
                 return {"action": "not_applicable"}
             want = {"symbol": route.exchange_symbol, "market_type": route.market_type}
 
-            existing = self.executor.open_stop_orders(want["symbol"], want["market_type"])
+            existing = ops.open_stop_orders(want["symbol"], want["market_type"])
             if existing is None:
                 existing = [{"order_id": state["order_id"]}] if state.get("order_id") else []
-            foreign = _foreign_order_ids(db, signal)
-            existing = [o for o in existing if o["order_id"] not in foreign]
+            if mode == "live":
+                foreign = _foreign_order_ids(db, signal)
+                existing = [o for o in existing if o["order_id"] not in foreign]
             left = [o for o in existing
-                    if not self.executor.cancel_stop_order(want["symbol"], o["order_id"], want["market_type"])]
+                    if not ops.cancel_stop_order(want["symbol"], o["order_id"], want["market_type"])]
             if not left:
                 if state:
                     _save_state(signal, {**state, "order_id": None, "cancelled_at":
