@@ -6,7 +6,7 @@
   • какие запросы получает биржа (настоящий ccxt без сети);
   • сверка: постановка, перенос вслед за программным стопом, частичное
     закрытие, лишние стопы, отказы, снятие при закрытии;
-  • что в paper и dry_run ничего не происходит.
+  • что в off ничего не происходит, а dry_run проходит ту же сверку без биржи.
 """
 from __future__ import annotations
 
@@ -440,12 +440,98 @@ async def test_spot_route_gets_no_exchange_stop(live):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("mode", ["off", "dry_run"])
-async def test_paper_and_dry_run_do_nothing(live, monkeypatch, mode):
-    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: mode))
+async def test_off_does_nothing(live, monkeypatch):
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "off"))
     assert (await _sync(live))["action"] == "inactive"
     assert (await live.service.cancel_all(live.db, live.signal))["action"] == "inactive"
-    assert live.exchange.log == []
+    assert live.exchange.log == [] and "exchange_stop" not in live.signal.plan_json
+
+
+# ── dry_run: та же сверка без биржи (#dry-run-parity-2026-09-16) ───────────────
+@pytest.fixture
+def dry(live, monkeypatch):
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "dry_run"))
+    events = []
+    monkeypatch.setattr(es, "log_event", lambda _l, _lvl, event, **kw: events.append((event, kw)))
+    live.events = events
+    return live
+
+
+def _dry_events(w, action):
+    return [kw for event, kw in w.events if event == "live_dry_run_exchange_stop" and kw.get("action") == action]
+
+
+@pytest.mark.anyio
+async def test_dry_run_walks_the_live_path_without_the_exchange(dry):
+    out = await _sync(dry)
+
+    assert out["action"] == "placed" and out["mode"] == "dry_run"
+    assert dry.exchange.log == [], "в dry_run к бирже не обращаемся"
+    state = _state(dry)
+    assert state["mode"] == "dry_run" and state["order_id"].startswith("dry")
+    assert state["trigger"] == 1.5075 and state["contracts"] == pytest.approx(1.5)
+    (placed,) = _dry_events(dry, "place")
+    assert placed["side"] == "buy" and placed["params"]["marginMode"] == "isolated"
+    assert placed["params"]["reduceOnly"] is True
+
+
+@pytest.mark.anyio
+async def test_dry_run_follows_the_software_stop_and_partial_close(dry):
+    first = (await _sync(dry))["order_id"]
+    dry.signal.stop_price = 1.42
+    moved = await _sync(dry, price=1.38)
+    dry.position.qty = 75.0
+    resized = await _sync(dry, price=1.38)
+
+    assert moved["action"] == "replaced" and resized["action"] == "replaced"
+    assert [kw["order_id"] for kw in _dry_events(dry, "cancel")] == [first, moved["order_id"]]
+    assert _state(dry)["contracts"] == pytest.approx(0.75)
+    assert dry.exchange.log == []
+
+
+@pytest.mark.anyio
+async def test_dry_run_does_not_rewrite_an_unchanged_stop(dry):
+    await _sync(dry)
+    _state(dry)["checked_ts"] = 0          # в live это запустило бы сверку с биржей
+    before = dict(_state(dry))
+
+    out = await _sync(dry)
+
+    assert out["action"] == "unchanged" and _state(dry) == before
+
+
+@pytest.mark.anyio
+async def test_dry_run_close_cancels_the_simulated_stop(dry):
+    order_id = (await _sync(dry))["order_id"]
+
+    out = await dry.service.cancel_all(dry.db, dry.signal, reason="stop_loss")
+
+    assert out["action"] == "cancelled" and _state(dry)["order_id"] is None
+    assert [kw["order_id"] for kw in _dry_events(dry, "cancel")] == [order_id]
+
+
+@pytest.mark.anyio
+async def test_switching_to_live_replaces_the_simulated_stop_with_a_real_one(dry, monkeypatch):
+    await _sync(dry)
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    _state(dry)["checked_ts"] = 0
+
+    out = await _sync(dry)
+
+    assert out["action"] == "placed" and out["mode"] == "live"
+    assert list(dry.exchange.stops) == [out["order_id"]]
+    assert _state(dry)["mode"] == "live"
+
+
+@pytest.mark.anyio
+async def test_unknown_contract_size_warns_once(dry, monkeypatch):
+    monkeypatch.setattr(_Exchange, "contract_size", lambda self, _s: None)
+    es._UNIT_WARNED.clear()
+
+    for _ in range(3):
+        assert (await _sync(dry))["action"] == "unit_unresolved"
+
+    assert [e for e, _ in dry.events].count("exchange_stop_unit_unresolved") == 1
 
 
 @pytest.mark.anyio
@@ -466,17 +552,43 @@ async def test_a_crash_inside_never_reaches_the_lifecycle(live, monkeypatch):
 
 # ── сопровождение и закрытие ───────────────────────────────────────────────────
 @pytest.mark.anyio
-async def test_lifecycle_hook_does_not_touch_the_db_outside_live(monkeypatch):
+async def test_lifecycle_hook_does_not_touch_the_db_when_off(monkeypatch):
     from services.signal_lifecycle import SignalLifecycleManager
 
-    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "dry_run"))
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "off"))
     lifecycle = SignalLifecycleManager.__new__(SignalLifecycleManager)
+    calls = []
+    monkeypatch.setattr(SignalLifecycleManager, "_get_open_position_for_signal",
+                        lambda self, db, signal: calls.append(signal.id))
 
-    def no_db(*_a, **_k):
-        raise AssertionError("запрос к БД в paper/dry_run")
+    await lifecycle._sync_exchange_stop(SimpleNamespace(), SimpleNamespace(id=1, plan_json={}))
 
-    monkeypatch.setattr(SignalLifecycleManager, "_get_open_position_for_signal", no_db)
-    await lifecycle._sync_exchange_stop(SimpleNamespace(query=no_db), SimpleNamespace(id=1, plan_json={}))
+    assert calls == [], "запрос позиции при LIVE_EXECUTION_MODE=off"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["dry_run", "live"])
+async def test_lifecycle_hook_syncs_in_dry_run_and_live(monkeypatch, mode):
+    from services.signal_lifecycle import SignalLifecycleManager
+
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: mode))
+    lifecycle = SignalLifecycleManager.__new__(SignalLifecycleManager)
+    lifecycle.router = SimpleNamespace(owner_alert=None)
+    position = SimpleNamespace(status="open", mark_price=1.42)
+    monkeypatch.setattr(SignalLifecycleManager, "_get_open_position_for_signal",
+                        lambda self, db, signal: position)
+    seen = []
+
+    async def fake_sync(self, db, signal, pos, *, price=None, alert=None):
+        seen.append((pos, price))
+        return {"action": "placed"}
+
+    monkeypatch.setattr(ExchangeStopService, "sync", fake_sync)
+    monkeypatch.setattr(ExchangeStopService, "__init__", lambda self, executor=None: None)
+
+    await lifecycle._sync_exchange_stop(SimpleNamespace(), SimpleNamespace(id=1, plan_json={}))
+
+    assert seen == [(position, 1.42)]
 
 
 def test_flat_position_past_the_trigger_books_the_trigger_price():
@@ -553,7 +665,8 @@ def test_signal_card_reads_the_fields_the_service_writes():
     assert "exchangeStop={plan.exchange_stop}" in page
     component = page.split("function StopValue", 1)[1].split("\nfunction ", 1)[0]
     source = inspect.getsource(es)
-    for key in ("order_id", "trigger", "failures"):
+    for key in ("order_id", "trigger", "failures", "mode"):
         assert f"exchangeStop?.{key}" in component or f"exchangeStop.{key}" in component, key
         assert f'"{key}"' in source, key
     assert es.STATE_KEY == "exchange_stop"
+    assert 'exchangeStop?.mode === "dry_run"' in component
