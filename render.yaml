@@ -122,6 +122,11 @@ services:
         value: paper_trade
       - key: ENABLE_LIVE_ORDERS
         value: "false"
+      # (#live-preflight-2026-09-16) Четвёртый рубильник live. Без "live" при
+      # ENABLE_LIVE_ORDERS=true гейты live включатся, а ордера останутся dry_run.
+      # Полный список и проверка счёта: GET /live/preflight (страница Health).
+      - key: LIVE_EXECUTION_MODE
+        value: dry_run
 
       # ── Рынок исполнения ──────────────────────────────────────────────────
       - key: ENABLE_FUTURES_EXECUTION

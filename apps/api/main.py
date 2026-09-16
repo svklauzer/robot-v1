@@ -1278,6 +1278,25 @@ def liquidity_state():
     }
 
 
+@app.get("/live/preflight", dependencies=[Depends(require_owner_action)])
+async def live_preflight():
+    """Проверка счёта перед включением live (#live-preflight-2026-09-16): ключи,
+    доступ, режим счёта, капитал, рынки, ручная торговля на символах робота,
+    остатки прошлого live, позиции из paper, гейты и рубильники. Только чтение,
+    приватные запросы — только по этому вызову."""
+    from services.live_preflight import LivePreflight
+
+    def _run():
+        db = SessionLocal()
+        try:
+            bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+            return LivePreflight().run(db, bot)
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(_run)
+
+
 @app.get("/live/state", dependencies=[Depends(require_owner_action)])
 def live_state():
     """Готовность к Live: режим исполнения, предохранители, баланс. Показывает,

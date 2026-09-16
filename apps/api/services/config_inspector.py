@@ -114,6 +114,7 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
     # Реальные деньги: значение по умолчанию не должно решать за нас
     "ENABLE_LIVE_ORDERS", "ROBOT_MODE", "TRADING_MODE", "ENABLE_FUTURES",
+    "LIVE_EXECUTION_MODE",
     # (#okx-affiliate-2026-09-08) Сколько бесплатных месяцев раздаётся: один на
     # человека или по одному на площадку. Совпадение с дефолтом сегодня не
     # делает запись лишней — сменится дефолт, и раздача удвоится молча.
