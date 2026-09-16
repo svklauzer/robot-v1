@@ -96,7 +96,10 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_",
                          "SCAN_SILENCE")),
     ("Телеграм и отчёты", ("TELEGRAM_", "REPORT_", "DIGEST_", "SUBSCRIPTION_", "BILLING_", "PAYMENT_")),
-    ("Инфраструктура", ("APP_", "DB_", "CORS_", "JWT_", "OWNER_", "PORT", "REDIS_", "DATABASE_")),
+    # (#memory-probe-2026-09-16) Бюджет Render: замер памяти, потолок журнала
+    # egress, кеш readonly-скана дашборда.
+    ("Инфраструктура", ("APP_", "DB_", "CORS_", "JWT_", "OWNER_", "PORT", "REDIS_", "DATABASE_",
+                        "MEMORY_", "EGRESS_MONITOR", "INTEL_SCAN_CACHE")),
 )
 
 
