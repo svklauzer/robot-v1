@@ -180,7 +180,7 @@ export default function HealthPage() {
           status={health?.exchange_switch?.safe === false ? "bad" : "good"}
           subtitle={
             health?.exchange_switch?.safe === false
-              ? `${health.exchange_switch.inactive_exchange}: есть открытое!`
+              ? `${health.exchange_switch.inactive_exchange}: открыты ордера робота!`
               : "переключение только вручную"
           }
         />
