@@ -93,7 +93,7 @@ def test_okx_lists_and_cancels_algo_stops(direct_retry):
     calls = {}
     ex.privateGetTradeOrdersAlgoPending = lambda req: calls.setdefault("fetch", req) and {
         "code": "0", "data": [{"algoId": "777", "instId": "XRP-USDT-SWAP", "ordType": "conditional",
-                               "side": "buy", "sz": "1.5", "slTriggerPx": "1.5075", "slOrdPx": "-1",
+                               "clOrdId": "rbtslexch0a1b2c3d", "side": "buy", "sz": "1.5", "slTriggerPx": "1.5075", "slOrdPx": "-1",
                                "state": "live", "reduceOnly": "true", "cTime": "1"}]}
     ex.privatePostTradeCancelAlgos = lambda req: calls.setdefault("cancel", req) and {
         "code": "0", "data": [{"algoId": "777", "sCode": "0"}]}
@@ -102,7 +102,8 @@ def test_okx_lists_and_cancels_algo_stops(direct_retry):
     client.cancel_stop_order("777", SYMBOL)
 
     assert calls["fetch"] == {"instId": "XRP-USDT-SWAP", "ordType": "conditional"}
-    assert stops == [{"order_id": "777", "side": "buy", "trigger": 1.5075, "contracts": 1.5}]
+    assert stops == [{"order_id": "777", "client_order_id": "rbtslexch0a1b2c3d", "side": "buy",
+                      "trigger": 1.5075, "contracts": 1.5}]
     assert calls["cancel"] == [{"algoId": "777", "instId": "XRP-USDT-SWAP"}]
 
 
@@ -128,7 +129,8 @@ def test_htx_lists_and_cancels_sl_stops(direct_retry):
     client, ex = _htx(direct_retry)
     calls = {}
     ex.contractPrivateGetV5AlgoOrderOpens = lambda req: calls.setdefault("fetch", req) and {
-        "code": 200, "data": [{"algo_id": "15", "contract_code": "XRP-USDT", "side": "buy", "type": "sl",
+        "code": 200, "data": [{"algo_id": "15", "algo_client_order_id": "770123456789012",
+                               "contract_code": "XRP-USDT", "side": "buy", "type": "sl",
                                "volume": "2", "sl_trigger_price": "1.5075", "state": "new",
                                "created_time": "1"}]}
     ex.contractPrivatePostV5AlgoCancelOrders = lambda req: calls.setdefault("cancel", req) and {
@@ -138,7 +140,8 @@ def test_htx_lists_and_cancels_sl_stops(direct_retry):
     client.cancel_stop_order("15", SYMBOL)
 
     assert calls["fetch"] == {"contract_code": "XRP-USDT", "type": "sl"}
-    assert stops == [{"order_id": "15", "side": "buy", "trigger": 1.5075, "contracts": 2.0}]
+    assert stops == [{"order_id": "15", "client_order_id": "770123456789012", "side": "buy",
+                      "trigger": 1.5075, "contracts": 2.0}]
     assert calls["cancel"] == [{"contract_code": "XRP-USDT", "algo_id": "15"}]
 
 
@@ -170,7 +173,9 @@ class _Exchange:
 
     @staticmethod
     def make_client_order_id(purpose):
-        return f"id{purpose}"
+        from services.robot_orders import alnum_client_id
+
+        return alnum_client_id(purpose)
 
     def create_stop_loss_order(self, symbol, side, amount, trigger_price, params=None):
         self.log.append(("place", trigger_price, amount))
@@ -186,7 +191,8 @@ class _Exchange:
         self.log.append(("fetch",))
         if self.fetch_error:
             raise self.fetch_error
-        return [dict(o) for o in self.stops.values() if o["symbol"] == symbol]
+        return [{**o, "clientOrderId": o.get("clientOrderId") or (o.get("params") or {}).get("clientOrderId")}
+                for o in self.stops.values() if o["symbol"] == symbol]
 
     def cancel_stop_order(self, order_id, symbol):
         self.log.append(("cancel", order_id))
@@ -323,10 +329,10 @@ async def test_partial_close_resizes_the_stop(live):
 
 
 @pytest.mark.anyio
-async def test_stray_stops_on_the_symbol_are_cancelled(live):
+async def test_stray_robot_stops_on_the_symbol_are_cancelled(live):
     await _sync(live)
     live.exchange.stops["old"] = {"id": "old", "symbol": SYMBOL, "side": "buy", "amount": 3.0,
-                                  "stopLossPrice": 1.60}
+                                  "stopLossPrice": 1.60, "clientOrderId": "rbtslexchdeadbeef"}
     _state(live)["checked_ts"] = 0
 
     out = await _sync(live)
@@ -336,9 +342,29 @@ async def test_stray_stops_on_the_symbol_are_cancelled(live):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("manual_client_id", [None, "", "e847386590ce4dBC67a0fe4c", "123456"])
+async def test_manual_stops_are_never_touched(live, manual_client_id):
+    """(#manual-orders-2026-09-16) Владелец торгует руками на той же бирже: его
+    стоп по тому же символу и в ту же сторону робот не снимает ни при сверке, ни
+    при закрытии, и не принимает за свой."""
+    live.exchange.stops["manual"] = {"id": "manual", "symbol": SYMBOL, "side": "buy", "amount": 1.5,
+                                     "stopLossPrice": 1.5075, "clientOrderId": manual_client_id}
+
+    out = await _sync(live)
+    assert out["action"] == "placed", "ручной стоп с той же ценой принят за стоп робота"
+    _state(live)["checked_ts"] = 0
+    await _sync(live)
+    await live.service.cancel_all(live.db, live.signal, alert=live.alert)
+
+    assert list(live.exchange.stops) == ["manual"]
+    assert ("cancel", "manual") not in live.exchange.log
+
+
+@pytest.mark.anyio
 async def test_other_open_trades_stops_are_kept(live, monkeypatch):
     live.exchange.stops["neighbour"] = {"id": "neighbour", "symbol": SYMBOL, "side": "buy",
-                                        "amount": 1.0, "stopLossPrice": 1.70}
+                                        "amount": 1.0, "stopLossPrice": 1.70,
+                                        "clientOrderId": "rbtslexchneighbour"}
     monkeypatch.setattr(es, "_foreign_order_ids", lambda db, signal: {"neighbour"})
 
     await _sync(live)

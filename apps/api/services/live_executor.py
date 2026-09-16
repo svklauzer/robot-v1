@@ -97,9 +97,10 @@ class LiveExecutor:
     # ── идемпотентность ────────────────────────────────────────────────────────
     @staticmethod
     def _make_client_id(purpose: str) -> str:
-        # ≤32 симв., детерминированный префикс назначения + uuid-хвост
-        tag = "".join(ch for ch in purpose if ch.isalnum())[:8] or "ord"
-        return f"{tag}{uuid.uuid4().hex}"[:32]
+        # ≤32 симв., префикс робота + назначение + uuid-хвост
+        from services.robot_orders import alnum_client_id
+
+        return alnum_client_id(purpose)
 
     def _find_by_client_id(self, symbol: str, client_id: str) -> dict | None:
         """Сверка: ушёл ли ордер с этим clientOrderId (open ИЛИ closed). best-effort."""
@@ -535,10 +536,13 @@ class LiveExecutor:
     def _normalize_stop(order: dict) -> dict | None:
         if not isinstance(order, dict) or not order.get("id"):
             return None
+        from services.robot_orders import order_client_id
+
         trigger = order.get("stopLossPrice") or order.get("triggerPrice") or order.get("stopPrice")
         try:
             return {
                 "order_id": str(order["id"]),
+                "client_order_id": order_client_id(order),
                 "side": str(order.get("side") or "").lower(),
                 "trigger": float(trigger) if trigger is not None else None,
                 "contracts": float(order.get("amount") or 0.0),
@@ -547,11 +551,14 @@ class LiveExecutor:
             return None
 
     def open_stop_orders(self, symbol: str, market_type: str) -> list[dict] | None:
-        """Стоп-ордера на бирже по символу. None — узнать не удалось.
+        """Стоп-ордера РОБОТА на бирже по символу. None — узнать не удалось.
 
-        Все условные стопы символа считаются робота: на торговом счёте не
-        держим ручных позиций и ордеров по символам робота.
+        (#manual-orders-2026-09-16) Владелец торгует на тех же биржах руками:
+        ручной стоп по тому же символу роботу чужой — он его не видит, не
+        переставляет и не снимает. Свои робот узнаёт по префиксу номера
+        клиента (services/robot_orders.py).
         """
+        from services.robot_orders import is_robot_order
         if not self._is_derivative(market_type):
             return []
         fetch = getattr(self.client, "fetch_open_stop_orders", None)
@@ -563,7 +570,7 @@ class LiveExecutor:
             log_event(logger, logging.WARNING, "live_stop_fetch_failed", symbol=symbol,
                       error=f"{type(exc).__name__}: {exc}")
             return None
-        return [s for s in (self._normalize_stop(o) for o in raw) if s]
+        return [s for s in (self._normalize_stop(o) for o in raw if is_robot_order(o)) if s]
 
     def stop_order_params(self, position_side: str, margin_mode: str | None, *,
                           hedged: bool | None, market_type: str) -> tuple[str, str, dict]:

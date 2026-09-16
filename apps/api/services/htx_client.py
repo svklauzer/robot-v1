@@ -427,8 +427,12 @@ class HTXClient:
         после обрыва связи не находила бы ордер). Не больше 52 бит: ccxt
         переводит число через float, и 62-битный номер уходил бы на биржу
         искажённым (594284936468578360 → …304) — сверка снова не нашла бы ордер.
-        Спот HTX принимает строку до 64 символов, цифры подходят и ему."""
-        return str((uuid.uuid4().int & ((1 << 52) - 1)) or 1)
+        Спот HTX принимает строку до 64 символов, цифры подходят и ему.
+        Номер начинается с префикса робота — по нему ордера робота отличаются
+        от ручных (services/robot_orders.py)."""
+        from services.robot_orders import numeric_client_id
+
+        return numeric_client_id()
 
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         """cross/isolated для символа (swap). best-effort."""

@@ -137,7 +137,7 @@ def test_client_order_id_formats():
         htx_id = HTXClient.make_client_order_id("trend_open")
         assert htx_id.isdigit() and 0 < int(htx_id) < 2 ** 53
         okx_id = OKXClient.make_client_order_id("trend_open")
-        assert okx_id.isalnum() and len(okx_id) <= 32 and okx_id.startswith("trendope")
+        assert okx_id.isalnum() and len(okx_id) <= 32 and okx_id.startswith("rbttrendo")
 
 
 def test_spot_order_has_no_margin_fields():
