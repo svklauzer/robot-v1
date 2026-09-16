@@ -316,7 +316,7 @@ function SignalCard({
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <InfoBox title="Entry" value={`${fmt(s.entry_zone?.from, 4)} - ${fmt(s.entry_zone?.to, 4)}`} />
-        <InfoBox title="Stop" value={fmt(s.stop_price, 4)} />
+        <InfoBox title="Stop" value={<StopValue stop={s.stop_price} exchangeStop={plan.exchange_stop} />} />
         <InfoBox title="TP1" value={fmt(s.tp?.tp1, 4)} />
         <InfoBox title="TP2" value={fmt(s.tp?.tp2, 4)} />
       </div>
@@ -562,6 +562,25 @@ function FilterSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+// (#exchange-stop-2026-09-16) В live у позиции свопа на бирже стоит страховочный
+// стоп дальше программного — на случай рестарта робота
+// (services/exchange_stop.py → plan_json.exchange_stop). В paper записи нет.
+function StopValue({ stop, exchangeStop }: { stop: any; exchangeStop: any }) {
+  const placed = exchangeStop?.order_id ? exchangeStop.trigger : null;
+  const failures = Number(exchangeStop?.failures ?? 0);
+  return (
+    <>
+      {fmt(stop, 4)}
+      {placed != null && (
+        <div className="mt-0.5 text-[11px] font-normal text-emerald-100/50">на бирже {fmt(placed, 4)}</div>
+      )}
+      {failures > 0 && (
+        <div className="mt-0.5 text-[11px] font-normal text-red-300">биржа отклонила стоп ×{failures}</div>
+      )}
+    </>
   );
 }
 

@@ -243,6 +243,29 @@ class SignalLifecycleManager:
 
         for signal in signals:
             await self.process_signal(db, bot, signal)
+            await self._sync_exchange_stop(db, signal)
+
+    async def _sync_exchange_stop(self, db, signal: Signal) -> None:
+        """(#exchange-stop-2026-09-16) После прохода — привести стоп на бирже к
+        итогу прохода: вход, перенос стопа, частичное закрытие, закрытие. Только
+        live; в paper и dry_run выходит до запросов к БД и бирже."""
+        try:
+            from services.exchange_stop import ExchangeStopService, live_stops_active
+
+            if not live_stops_active():
+                return
+            position = self._get_open_position_for_signal(db, signal)
+            state = (signal.plan_json or {}).get("exchange_stop") or {}
+            if position is None and not state.get("order_id"):
+                return
+            price = None
+            if position is not None and getattr(position, "mark_price", None):
+                price = float(position.mark_price)
+            await ExchangeStopService().sync(db, signal, position, price=price,
+                                             alert=self.router.owner_alert)
+        except Exception as exc:  # noqa: BLE001 — ведение позиций важнее страховки
+            print(f"[EXCHANGE STOP] sync skipped for #{getattr(signal, 'id', '?')}: "
+                  f"{type(exc).__name__}: {exc}")
 
     async def process_signal(self, db, bot: Bot, signal: Signal):
         """Боевой путь: цена из живого снэпшота рынка.

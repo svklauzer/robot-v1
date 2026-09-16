@@ -516,11 +516,16 @@ class ExecutionEngine:
             # сопровождения — для системы сделка была закрыта.
             exch_qty = self._exchange_position_base(route, position)
             if exch_qty is not None and exch_qty <= 0:
-                # Биржа уже пуста (закрыто вручную, ликвидация) — ордер не нужен,
-                # но расхождение обязано дойти до владельца.
+                # Биржа уже пуста (сработал стоп на бирже, закрыто вручную,
+                # ликвидация) — ордер не нужен, но расхождение обязано дойти до
+                # владельца.
                 live = {"mode": "live", "ok": True, "status": "already_flat",
                         "filled_qty": 0.0, "avg_price": None}
-                await self._alert_live_already_flat(signal=signal, position=position)
+                exchange_stop_fill = self._exchange_stop_exit(signal, position, exit_fill)
+                if exchange_stop_fill is not None:
+                    exit_fill = exchange_stop_fill
+                await self._alert_live_already_flat(signal=signal, position=position,
+                                                    exchange_stop_fill=exchange_stop_fill)
             else:
                 # Закрываем то, что РЕАЛЬНО стоит на бирже: после частичных
                 # закрытий учёт и биржа могут разойтись на остаток лота, и
@@ -583,6 +588,11 @@ class ExecutionEngine:
 
         self.db.add(close_order)
         self.db.flush()
+
+        if self._live_mode():
+            # (#exchange-stop-2026-09-16) Позиция закрыта — стоп на бирже снимаем
+            # после закрытия, а не до: выход не ждёт лишнего запроса.
+            await self._cancel_exchange_stops(signal, route, reason)
 
         if not self._live_mode():
             # off/dry_run: бумага уже учла закрытие, ядро только логирует.
@@ -698,16 +708,52 @@ class ExecutionEngine:
             except Exception as exc:  # noqa: BLE001
                 print(f"[LIVE CLOSE] owner alert failed: {type(exc).__name__}: {exc}")
 
-    async def _alert_live_already_flat(self, *, signal: Signal, position) -> None:
-        """На бирже позиции уже нет, а в учёте она открыта: закрыли вручную,
-        ликвидировали или разошлись раньше. Учёт закрывается, владелец узнаёт."""
+    @staticmethod
+    def _exchange_stop_exit(signal: Signal, position, exit_price: float) -> float | None:
+        """Цена выхода, если позицию, по всей видимости, закрыл стоп на бирже.
+
+        Биржевой стоп стоит дальше программного и срабатывает, когда робот не
+        успел (рестарт, деплой, резкий ход). Цена, по которой робот увидел
+        пустую позицию, уже за точкой срабатывания — книжить выход по ней
+        значило бы занизить результат; ближе к правде цена срабатывания.
+        """
+        state = (signal.plan_json or {}).get("exchange_stop") or {}
+        trigger = state.get("trigger")
+        if not state.get("order_id") or not trigger:
+            return None
+        trigger = float(trigger)
+        is_long = str(position.side).lower() in ("long", "buy")
+        crossed = float(exit_price) <= trigger if is_long else float(exit_price) >= trigger
+        return trigger if crossed else None
+
+    async def _cancel_exchange_stops(self, signal: Signal, route, reason: str) -> None:
+        try:
+            from services.exchange_stop import ExchangeStopService
+
+            await ExchangeStopService().cancel_all(
+                self.db, signal, alert=self.telegram.owner_alert, reason=reason, route=route,
+            )
+        except Exception as exc:  # noqa: BLE001 — закрытие уже состоялось
+            print(f"[EXCHANGE STOP] cancel skipped: {type(exc).__name__}: {exc}")
+
+    async def _alert_live_already_flat(self, *, signal: Signal, position,
+                                       exchange_stop_fill: float | None = None) -> None:
+        """На бирже позиции уже нет, а в учёте она открыта: сработал стоп на
+        бирже, закрыли вручную, ликвидировали или разошлись раньше. Учёт
+        закрывается, владелец узнаёт."""
         from core.logging import get_logger, log_event
         import logging as _logging
 
         log_event(
             get_logger(__name__), _logging.WARNING, "live_position_already_flat",
             signal_id=signal.id, symbol=signal.symbol, side=signal.side,
-            book_qty=float(position.qty),
+            book_qty=float(position.qty), exchange_stop_fill=exchange_stop_fill,
+        )
+        cause = (
+            f"Цена прошла стоп на бирже ({exchange_stop_fill}) — скорее всего, сработал он; "
+            f"выход записан по цене срабатывания.\n"
+            if exchange_stop_fill is not None else
+            "Сделка закрыта в учёте без ордера.\n"
         )
         try:
             await self.telegram.owner_alert(
@@ -715,7 +761,7 @@ class ExecutionEngine:
                 (
                     f"Signal #{signal.id} · {signal.symbol} {signal.side}\n"
                     f"В учёте открыто {float(position.qty)}, на бирже — пусто.\n"
-                    f"Сделка закрыта в учёте без ордера. Проверьте историю ордеров на бирже."
+                    f"{cause}Проверьте историю ордеров на бирже."
                 ),
             )
         except Exception as exc:  # noqa: BLE001

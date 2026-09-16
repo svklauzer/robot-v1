@@ -499,6 +499,127 @@ class LiveExecutor:
             total += contracts * size
         return round(total, 12)
 
+    # ── стоп на бирже (#exchange-stop-2026-09-16) ───────────────────────────────
+    @staticmethod
+    def _close_side(position_side: str) -> str:
+        return "sell" if str(position_side).lower() in ("long", "buy") else "buy"
+
+    def exchange_stop_trigger(self, symbol: str, position_side: str, stop_price: float) -> float:
+        """Цена срабатывания биржевого стопа: программный стоп, отодвинутый на
+        LIVE_EXCHANGE_STOP_BUFFER_PCT дальше от входа.
+
+        Биржевой стоп — страховка на время, когда робот не работает. Пока робот
+        жив, первым должен срабатывать программный стоп со всей своей логикой
+        (цена выхода, учёт, алерты); стоп на той же цене гонялся бы с ним за
+        одну и ту же позицию.
+        """
+        buffer = max(0.0, float(getattr(settings, "LIVE_EXCHANGE_STOP_BUFFER_PCT", 0.5))) / 100.0
+        stop = float(stop_price)
+        raw = stop * (1 - buffer) if str(position_side).lower() in ("long", "buy") else stop * (1 + buffer)
+        getter = getattr(self.client, "price_to_precision", None)
+        try:
+            return float(getter(symbol, raw)) if callable(getter) else raw
+        except Exception:  # noqa: BLE001
+            return raw
+
+    def contracts_for(self, symbol: str, base_qty: float, market_type: str) -> float:
+        """Объём позиции в единицах биржевого ордера (контракты для свопа)."""
+        amount, _meta = self._to_exchange_amount(symbol, float(base_qty), market_type)
+        return float(amount)
+
+    @staticmethod
+    def _normalize_stop(order: dict) -> dict | None:
+        if not isinstance(order, dict) or not order.get("id"):
+            return None
+        trigger = order.get("stopLossPrice") or order.get("triggerPrice") or order.get("stopPrice")
+        try:
+            return {
+                "order_id": str(order["id"]),
+                "side": str(order.get("side") or "").lower(),
+                "trigger": float(trigger) if trigger is not None else None,
+                "contracts": float(order.get("amount") or 0.0),
+            }
+        except (TypeError, ValueError):
+            return None
+
+    def open_stop_orders(self, symbol: str, market_type: str) -> list[dict] | None:
+        """Стоп-ордера на бирже по символу. None — узнать не удалось.
+
+        Все условные стопы символа считаются робота: на торговом счёте не
+        держим ручных позиций и ордеров по символам робота.
+        """
+        if not self._is_derivative(market_type):
+            return []
+        fetch = getattr(self.client, "fetch_open_stop_orders", None)
+        if not callable(fetch):
+            return None
+        try:
+            raw = fetch(symbol) or []
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, logging.WARNING, "live_stop_fetch_failed", symbol=symbol,
+                      error=f"{type(exc).__name__}: {exc}")
+            return None
+        return [s for s in (self._normalize_stop(o) for o in raw) if s]
+
+    def place_stop_order(self, symbol: str, position_side: str, contracts: float,
+                         trigger_price: float, *, market_type: str,
+                         margin_mode: str | None) -> dict:
+        """Поставить стоп-лосс на бирже. {'ok', 'order_id', 'error', ...}"""
+        close_side = self._close_side(position_side)
+        base = {"symbol": symbol, "side": close_side, "trigger": float(trigger_price),
+                "contracts": float(contracts)}
+        create = getattr(self.client, "create_stop_loss_order", None)
+        if not callable(create):
+            return {**base, "ok": False, "error": "exchange_stop_not_supported"}
+        if contracts <= 0:
+            return {**base, "ok": False, "error": "amount_below_min_contract"}
+        try:
+            mm = self.resolve_margin_mode(margin_mode)
+        except ValueError as exc:
+            return {**base, "ok": False, "error": str(exc)}
+        hedged = self.derivatives_account()["hedged"]
+        client_id = self._client_order_id("slexch")
+        params = self.order_params(
+            client_id=client_id, market_type=market_type, side=close_side,
+            reduce_only=True, margin_mode=mm, hedged=hedged,
+            position_side_key=getattr(self.client, "POSITION_SIDE_PARAM", "positionSide"),
+        )
+        try:
+            order = create(symbol, close_side, float(contracts), float(trigger_price), params) or {}
+        except Exception as exc:  # noqa: BLE001
+            # Неоднозначно: стоп мог встать. Следующая сверка увидит его в
+            # открытых стопах и примет, а не поставит второй.
+            log_event(logger, logging.ERROR, "live_stop_place_failed", symbol=symbol,
+                      side=close_side, trigger=trigger_price, contracts=contracts,
+                      error=f"{type(exc).__name__}: {exc}")
+            return {**base, "ok": False, "client_order_id": client_id,
+                    "error": f"{type(exc).__name__}: {exc}"}
+        order_id = order.get("id")
+        if not order_id:
+            return {**base, "ok": False, "client_order_id": client_id, "error": "no_order_id"}
+        log_event(logger, logging.INFO, "live_stop_placed", symbol=symbol, side=close_side,
+                  trigger=trigger_price, contracts=contracts, order_id=order_id)
+        return {**base, "ok": True, "order_id": str(order_id), "client_order_id": client_id}
+
+    def cancel_stop_order(self, symbol: str, order_id: str, market_type: str) -> bool:
+        cancel = getattr(self.client, "cancel_stop_order", None)
+        if not callable(cancel) or not self._is_derivative(market_type):
+            return False
+        try:
+            cancel(order_id, symbol)
+        except Exception as exc:  # noqa: BLE001
+            text = f"{type(exc).__name__}: {exc}"
+            # Уже исполнен или снят — цель достигнута, стопа больше нет.
+            if type(exc).__name__ == "OrderNotFound":
+                log_event(logger, logging.INFO, "live_stop_already_gone", symbol=symbol,
+                          order_id=order_id)
+                return True
+            log_event(logger, logging.WARNING, "live_stop_cancel_failed", symbol=symbol,
+                      order_id=order_id, error=text)
+            return False
+        log_event(logger, logging.INFO, "live_stop_cancelled", symbol=symbol, order_id=order_id)
+        return True
+
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
                      reduce_only: bool = False, leverage: float | None = None,

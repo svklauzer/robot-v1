@@ -353,6 +353,28 @@ class HTXClient:
     # ccxt htx для v5 стороны позиции не разбирает — родной ключ уходит бирже как есть.
     POSITION_SIDE_PARAM = "position_side"
 
+    # ── стоп на бирже (#exchange-stop-2026-09-16) ─────────────────────────────
+    def create_stop_loss_order(self, symbol: str, side: str, amount: float,
+                               trigger_price: float, params: dict | None = None):
+        """Стоп-лосс linear-свопа: POST /v5/algo/order, type=sl, без цены ордера.
+
+        Путь ccxt для `triggerPrice` у linear-свопа непригоден: тип `trigger`
+        затирается типом ордера `market`. Тип `sl` ccxt собирает целиком. На
+        живом API HTX не проверено, что sl без sl_order_price исполняется по
+        рынку и только закрывает позицию — отказ биржи здесь безопасен: стоп
+        не встанет, владелец получит алерт, программный стоп продолжит работу.
+        ОДНА попытка: повтор при таймауте поставил бы второй стоп.
+        """
+        query = dict(params or {})
+        query["stopLossPrice"] = trigger_price
+        return self.exchange.create_order(symbol, "market", side, amount, None, query)
+
+    def fetch_open_stop_orders(self, symbol: str):
+        return self._retry(self.exchange.fetch_open_orders, symbol, None, None, {"stopLoss": True})
+
+    def cancel_stop_order(self, order_id: str, symbol: str):
+        return self._retry(self.exchange.cancel_order, order_id, symbol, {"stopLoss": True})
+
     # Режимы залога USDT-M (GET /v5/account/asset_mode): 0 — одновалютный
     # (старый), 1 — мультивалютный, 2 — одновалютный (новый).
     _ASSET_MODE_SINGLE_OLD = 0

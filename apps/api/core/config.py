@@ -720,6 +720,17 @@ class Settings(BaseSettings):
     # прибылью. RISK_EQUITY_USDT остаётся дефолтом для paper/dry_run и fallback.
     LIVE_SIZE_FROM_BALANCE: bool = True
     LIVE_BALANCE_CACHE_SEC: float = 30.0      # TTL кэша баланса (не дёргать API на каждый сайзинг)
+    # (#exchange-stop-2026-09-16) Стоп-лосс на бирже для live-позиций свопа —
+    # страховка на время, когда робот не работает (рестарт, деплой, OOM).
+    # Программный стоп остаётся главным: биржевой стоит дальше на BUFFER_PCT,
+    # чтобы пока робот жив, первым срабатывал программный. Переставляется вслед
+    # за программным при расхождении больше MIN_MOVE_PCT и после частичных
+    # закрытий; снимается при полном закрытии. Только live — paper не меняется.
+    LIVE_EXCHANGE_STOP_ENABLED: bool = True
+    LIVE_EXCHANGE_STOP_BUFFER_PCT: float = 0.5
+    LIVE_EXCHANGE_STOP_MIN_MOVE_PCT: float = 0.1
+    LIVE_EXCHANGE_STOP_VERIFY_SEC: float = 60.0      # как часто сверять стоп с биржей без изменений
+    LIVE_EXCHANGE_STOP_HALT_AFTER_FAILURES: int = 3  # подряд отказов постановки → kill switch
 
     # ── Плечо ПО ДВИЖКУ (разный риск-профиль → разное плечо) ──────────────────
     # Жёсткий потолок: ни один движок не выставит плечо выше (предохранитель).
