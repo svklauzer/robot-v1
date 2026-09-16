@@ -338,8 +338,10 @@ function SignalCard({
         <div className="mb-2 flex items-center justify-between text-xs">
           <span className="font-semibold text-emerald-300">Trade Plan</span>
           {/* (#conv-pnl-rescale-2026-07-11) Числа плана = ВСЯ позиция при закрытии
-              на уровне; на TP1 реально фиксируется 50% (строка ниже). */}
-          <span className="text-emerald-100/40">$ = вся позиция · на TP1 фиксируется 50%</span>
+              на уровне. (#tp1-rule-label-2026-09-16) Что происходит на TP1 — из
+              снимка конфига САМОЙ сделки: с 11.09 фиксации нет, стоп всей позиции
+              переносится на TP1, а жёсткая надпись «фиксируется 50%» врала. */}
+          <span className="text-emerald-100/40">$ = вся позиция · {tp1RuleLabel(plan)}</span>
         </div>
 
         <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
@@ -607,6 +609,22 @@ function MlBadge({ ml }: { ml?: any }) {
       ML {score.toFixed(2)}
     </span>
   );
+}
+
+// (#tp1-rule-label-2026-09-16) Правило на TP1 из снимка конфига сделки
+// (services/decision_config.py → exit.tp1_partial_enabled / post_tp1_lock_frac).
+// Сделки без снимка открывались при фиксации 50% — для них прежний текст.
+function tp1RuleLabel(plan: any): string {
+  const exit = plan?.config?.exit;
+  if (!exit || exit.tp1_partial_enabled == null) return "на TP1 фиксируется 50%";
+  if (exit.tp1_partial_enabled) {
+    const share = Number(exit.tp1_partial_share ?? 0.5);
+    return `на TP1 фиксируется ${Math.round(share * 100)}%`;
+  }
+  const frac = Number(exit.post_tp1_lock_frac ?? 0);
+  if (frac >= 1) return "без фиксации на TP1 · после TP1 стоп всей позиции на TP1";
+  if (frac > 0) return `без фиксации на TP1 · после TP1 стоп на ${Math.round(frac * 100)}% пути до TP1`;
+  return "без фиксации на TP1";
 }
 
 function TradeDiagnostics({ plan }: { plan: any }) {
