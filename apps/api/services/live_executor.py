@@ -97,9 +97,10 @@ class LiveExecutor:
     # ── идемпотентность ────────────────────────────────────────────────────────
     @staticmethod
     def _make_client_id(purpose: str) -> str:
-        # ≤32 симв., детерминированный префикс назначения + uuid-хвост
-        tag = "".join(ch for ch in purpose if ch.isalnum())[:8] or "ord"
-        return f"{tag}{uuid.uuid4().hex}"[:32]
+        # ≤32 симв., префикс робота + назначение + uuid-хвост
+        from services.robot_orders import alnum_client_id
+
+        return alnum_client_id(purpose)
 
     def _find_by_client_id(self, symbol: str, client_id: str) -> dict | None:
         """Сверка: ушёл ли ордер с этим clientOrderId (open ИЛИ closed). best-effort."""
@@ -328,36 +329,58 @@ class LiveExecutor:
         """Свободный USDT счёта исполнения (для /live/state)."""
         return self.free_usdt(getattr(settings, "execution_market_type", "spot"))
 
-    def effective_equity_usdt(self, market_type: str | None = None) -> float:
-        """Эквити для сайзинга и экспозиции.
+    def execution_accounts(self) -> list[str]:
+        """Счета, с которых торгует робот.
+
+        (#manual-orders-2026-09-16) При ENABLE_FUTURES_EXECUTION все сделки идут
+        через своп (market_routing.resolve) — деньги спотового счёта HTX роботу
+        недоступны. У OKX спот и своп — один торговый счёт: ccxt отдаёт его на
+        оба типа, и сумма «спот + своп» считала те же деньги дважды.
+        """
+        futures = bool(getattr(settings, "ENABLE_FUTURES", False))
+        if futures and bool(getattr(settings, "ENABLE_FUTURES_EXECUTION", False)):
+            accounts = ["swap"]
+        elif futures:
+            accounts = ["spot", "swap"]
+        else:
+            accounts = ["spot"]
+        if getattr(getattr(self, "client", None), "UNIFIED_TRADING_ACCOUNT", False):
+            accounts = accounts[-1:]
+        return accounts
+
+    def effective_equity_usdt(self, market_type: str | None = None,
+                              robot_margin_usdt: float = 0.0) -> float:
+        """Капитал робота для сайзинга и экспозиции.
 
         paper/dry_run/off → RISK_EQUITY_USDT: бумажный капитал не меняется.
 
-        live → реальные свободные USDT. Счёт зависит от рынка: лонги живут на
-        споте, шорты на деривативе, и это РАЗНЫЕ счета HTX. Когда market_type
-        не задан, считаем общий капитал робота — сумму обоих счетов, иначе
-        половина денег невидима для сайзинга и система занижает размер.
-        Fallback на RISK_EQUITY_USDT, если баланс недоступен.
+        live → свободные USDT счёта исполнения + маржа собственных позиций
+        робота (robot_margin_usdt, из учёта). (#manual-orders-2026-09-16)
+        Владелец торгует на том же счёте руками: биржа уже вычла из свободного
+        баланса маржу его позиций и ордеров — роботу она недоступна и остаётся
+        вычтенной. Маржа позиций самого робота вычтена тоже, но это его капитал:
+        без возврата экспозиция вычитала бы её второй раз, и каждая открытая
+        сделка ужимала бы и лимит, и базу дневного убытка. Размер позиции из
+        капитала строит плечо из конфига (FUTURES_LEVERAGE, потолок
+        LIVE_MAX_LEVERAGE). Fallback на RISK_EQUITY_USDT, если баланс недоступен.
         """
         fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
             return fallback
 
+        own = max(0.0, float(robot_margin_usdt or 0.0))
         if market_type:
             free = self.free_usdt(market_type)
-            return float(free) if free is not None and free > 0 else fallback
+            return float(free) + own if free is not None and free + own > 0 else fallback
 
         total = 0.0
         seen = False
-        accounts = ["spot"]
-        if bool(getattr(settings, "ENABLE_FUTURES", False)):
-            accounts.append("swap")
-        for account in accounts:
+        for account in self.execution_accounts():
             free = self.free_usdt(account)
             if free is not None:
                 total += float(free)
                 seen = True
-        return total if seen and total > 0 else fallback
+        return total + own if seen and total + own > 0 else fallback
 
     # ── единицы объёма ──────────────────────────────────────────────────────────
     def _to_exchange_amount(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:
@@ -468,10 +491,6 @@ class LiveExecutor:
         """
         if not self._is_derivative(market_type):
             return None
-        try:
-            want_margin = self.resolve_margin_mode(margin_mode)
-        except ValueError:
-            want_margin = None
         fetch = getattr(self.client, "fetch_positions", None)
         if not callable(fetch):
             return None
@@ -481,7 +500,16 @@ class LiveExecutor:
             log_event(logger, logging.WARNING, "live_position_fetch_failed",
                       symbol=symbol, error=f"{type(exc).__name__}: {exc}")
             return None
+        return self.position_base_from(positions, symbol, side, margin_mode)
 
+    def position_base_from(self, positions: list, symbol: str, side: str,
+                           margin_mode: str | None = None) -> float:
+        """Сумма позиций символа, стороны и режима маржи сделки в базовой монете
+        из уже полученного списка ccxt — одна выборка на всю сверку."""
+        try:
+            want_margin = self.resolve_margin_mode(margin_mode)
+        except ValueError:
+            want_margin = None
         getter = getattr(self.client, "contract_size", None)
         default_size = getter(symbol) if callable(getter) else None
         want_side = str(side or "").lower()
@@ -535,10 +563,13 @@ class LiveExecutor:
     def _normalize_stop(order: dict) -> dict | None:
         if not isinstance(order, dict) or not order.get("id"):
             return None
+        from services.robot_orders import order_client_id
+
         trigger = order.get("stopLossPrice") or order.get("triggerPrice") or order.get("stopPrice")
         try:
             return {
                 "order_id": str(order["id"]),
+                "client_order_id": order_client_id(order),
                 "side": str(order.get("side") or "").lower(),
                 "trigger": float(trigger) if trigger is not None else None,
                 "contracts": float(order.get("amount") or 0.0),
@@ -547,11 +578,14 @@ class LiveExecutor:
             return None
 
     def open_stop_orders(self, symbol: str, market_type: str) -> list[dict] | None:
-        """Стоп-ордера на бирже по символу. None — узнать не удалось.
+        """Стоп-ордера РОБОТА на бирже по символу. None — узнать не удалось.
 
-        Все условные стопы символа считаются робота: на торговом счёте не
-        держим ручных позиций и ордеров по символам робота.
+        (#manual-orders-2026-09-16) Владелец торгует на тех же биржах руками:
+        ручной стоп по тому же символу роботу чужой — он его не видит, не
+        переставляет и не снимает. Свои робот узнаёт по префиксу номера
+        клиента (services/robot_orders.py).
         """
+        from services.robot_orders import is_robot_order
         if not self._is_derivative(market_type):
             return []
         fetch = getattr(self.client, "fetch_open_stop_orders", None)
@@ -563,7 +597,7 @@ class LiveExecutor:
             log_event(logger, logging.WARNING, "live_stop_fetch_failed", symbol=symbol,
                       error=f"{type(exc).__name__}: {exc}")
             return None
-        return [s for s in (self._normalize_stop(o) for o in raw) if s]
+        return [s for s in (self._normalize_stop(o) for o in raw if is_robot_order(o)) if s]
 
     def stop_order_params(self, position_side: str, margin_mode: str | None, *,
                           hedged: bool | None, market_type: str) -> tuple[str, str, dict]:
@@ -823,6 +857,9 @@ class LiveExecutor:
             order = found  # ордер на самом деле ушёл — НЕ повторяем
 
         order = self._await_fill(symbol, order, client_id)
+        # Ордер изменил свободный баланс: следующий сайзинг не должен взять
+        # кешированный — к нему уже прибавлена маржа новой позиции из учёта.
+        getattr(self, "_bal_cache", {}).clear()
         status = (order or {}).get("status", "open")
         filled_raw = float((order or {}).get("filled") or 0.0)
         avg = (order or {}).get("average") or (order or {}).get("price") or reference_price

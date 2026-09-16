@@ -520,8 +520,10 @@ services:
         value: "0.10"
 
       # ── Сверка с биржей ───────────────────────────────────────────────────
+      # (#exchange-reconciliation-2026-09-16) Только live, только чтение, только
+      # ордера и позиции робота. В paper/dry_run к бирже не обращается.
       - key: EXCHANGE_RECONCILIATION_ENABLED
-        value: "false"
+        value: "true"
 
       # ── Validation thresholds ─────────────────────────────────────────────
       - key: VALIDATION_MIN_CLOSED_SIGNALS

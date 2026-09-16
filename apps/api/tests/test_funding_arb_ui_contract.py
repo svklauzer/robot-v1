@@ -120,8 +120,10 @@ def test_health_page_surfaces_exchange_reconciliation_contract():
 
     assert "Exchange reconciliation" in page
     assert "exchange_reconciliation" in page
-    assert "local_open_orders" in page
+    # (#exchange-reconciliation-2026-09-16) Сверка считает только объекты робота.
+    assert "robot_live_positions" in page
     assert "exchange_positions" in page
+    assert "mismatches" in page and "warnings" in page
 
 
 def test_health_page_exposes_kill_switch_smoke_contract():

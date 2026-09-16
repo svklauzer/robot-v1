@@ -736,7 +736,10 @@ function SystemEventBody({ decision, payload }: { decision: string; payload: any
         {decision === "loop_skip_exchange_switch" && (
           <>
             <Metric label="Неактивная биржа" value={String(payload.inactive_exchange || "-").toUpperCase()} />
-            <Metric label="Ордеров / позиций" value={`${payload.open_orders ?? 0} / ${payload.open_positions ?? 0}`} danger />
+            {/* (#manual-orders-2026-09-16) Блокируют только ордера робота; ручные
+                ордера и позиции владельца — для справки. */}
+            <Metric label="Ордеров робота" value={`${payload.open_orders ?? 0}`} danger />
+            <Metric label="Ручных ордеров / позиций" value={`${payload.manual_orders ?? 0} / ${payload.open_positions ?? 0}`} />
           </>
         )}
       </div>
@@ -755,7 +758,7 @@ function SystemEventBody({ decision, payload }: { decision: string; payload: any
       {found.length > 0 && (
         <div className="rounded-xl border border-yellow-900/60 bg-black/20 p-3">
           <div className="mb-1 text-emerald-100/50">
-            Открыто на {String(payload.inactive_exchange || "неактивной бирже").toUpperCase()} — разобрать руками
+            Ордера робота на {String(payload.inactive_exchange || "неактивной бирже").toUpperCase()} — разобрать руками
           </div>
           <ul className="space-y-1 text-yellow-200">
             {found.map((f, i) => (
@@ -1362,7 +1365,7 @@ function decisionExplanation(e: any) {
   }
 
   if (decision === "loop_skip_exchange_switch") {
-    return `На неактивной бирже ${String(payload?.inactive_exchange || "").toUpperCase()} есть открытые ордера или позиции — новые входы на ${String(payload?.active_exchange || "активной").toUpperCase()} стоят, пока их не разберут руками.`;
+    return `На неактивной бирже ${String(payload?.inactive_exchange || "").toUpperCase()} есть открытые ордера робота — новые входы на ${String(payload?.active_exchange || "активной").toUpperCase()} стоят, пока их не разберут руками. Ручные ордера и позиции владельца вход не держат.`;
   }
 
   if (decision === "loop_skip_live_safety") {

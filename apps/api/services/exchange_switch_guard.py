@@ -172,14 +172,28 @@ def check(*, force: bool = False) -> dict:
             positions = []
         open_positions = [p for p in positions if _position_is_open(p)]
 
+        # (#manual-orders-2026-09-16) Владелец торгует на обеих биржах руками.
+        # Гейт держит входы только из-за ордеров РОБОТА (префикс номера клиента,
+        # services/robot_orders.py): ручные ордера и позиции — не осиротевшие
+        # сделки робота, а работа владельца, и остановка торговли из-за них
+        # повторила бы простой 04.09. Позиции номера не несут и отличить ручную
+        # от робота на бирже нельзя — свои позиции робот знает по учёту, и они
+        # ведутся на своей бирже (Signal.exchange) при любом ACTIVE_EXCHANGE.
+        from services.robot_orders import is_robot_order
+
+        robot_orders = [o for o in orders if is_robot_order(o)]
         result["reachable"] = True
-        result["open_orders"] = len(orders)
+        result["open_orders"] = len(robot_orders)
+        result["manual_orders"] = len(orders) - len(robot_orders)
         result["open_positions"] = len(open_positions)
-        result["found"] = (
-            [_describe(o, "order") for o in orders[:10]]
+        result["positions_block"] = False
+        result["found"] = [_describe(o, "order") for o in robot_orders[:10]]
+        # Видимость без блокировки: что владелец держит на неактивной бирже.
+        result["manual"] = (
+            [_describe(o, "order") for o in orders if not is_robot_order(o)][:10]
             + [_describe(p, "position") for p in open_positions[:10]]
         )
-        result["safe"] = not (orders or open_positions)
+        result["safe"] = not robot_orders
 
         if not result["safe"]:
             log_event(

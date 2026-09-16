@@ -140,20 +140,35 @@ position_manage_lock = asyncio.Lock()
 logger = get_logger(__name__)
 
 
-def effective_equity_usdt() -> float:
+def effective_equity_usdt(robot_margin_usdt: float = 0.0) -> float:
     """Единственный источник эквити для сайзинга и риск-лимитов.
 
-    В paper/dry_run — RISK_EQUITY_USDT, в live — реальный свободный баланс
-    счёта исполнения (TTL-кэш 30 с). До этого сайзинг и дневной стоп-лосс
-    считались от захардкоженной 1000, экспозиция — от настоящего баланса:
-    на счёте, отличном от 1000, план и предохранитель расходились с реальностью.
+    В paper/dry_run — RISK_EQUITY_USDT, в live — свободный баланс счёта
+    исполнения (TTL-кэш 30 с) плюс маржа собственных позиций робота
+    (#manual-orders-2026-09-16): маржа ручных позиций и ордеров владельца
+    остаётся вычтенной биржей. До этого сайзинг и дневной стоп-лосс считались
+    от захардкоженной 1000, экспозиция — от настоящего баланса: на счёте,
+    отличном от 1000, план и предохранитель расходились с реальностью.
     """
     try:
         from services.live_executor import LIVE_EXECUTOR
 
-        return float(LIVE_EXECUTOR.effective_equity_usdt())
+        return float(LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin_usdt))
     except Exception:  # noqa: BLE001 — эквити не должно ронять цикл
         return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+
+
+def robot_live_margin_usdt(db, bot) -> float:
+    """Маржа открытых на бирже позиций робота — из учёта, без запросов к бирже."""
+    try:
+        from services.exposure_guard import ExposureGuard
+        from services.live_executor import LIVE_EXECUTOR
+
+        if bot is None or not LIVE_EXECUTOR.is_live():
+            return 0.0
+        return float(ExposureGuard().live_position_margin(db, bot.id))
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 async def background_robot_loop():
@@ -211,7 +226,7 @@ async def background_robot_loop():
                     )
                     db.commit()
                 else:
-                    equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+                    equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
                     safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
 
                     if safety.get("blocked"):
@@ -393,6 +408,59 @@ async def background_memory_log_loop():
             log_event(logger, logging.INFO, "memory_usage_probe_failed", error=str(e))
 
         await asyncio.sleep(max(60.0, float(getattr(settings, "MEMORY_LOG_INTERVAL_SEC", 600.0))))
+
+
+_RECON_ALERTED: set[str] = set()
+
+
+async def background_exchange_reconciliation_loop():
+    """Сверка робота с биржей (#exchange-reconciliation-2026-09-16) — только live.
+
+    Читает биржу раз в EXCHANGE_RECONCILIATION_INTERVAL_SEC и кладёт итог в кеш,
+    который отдаёт /system/health. Владелец узнаёт о каждом НОВОМ расхождении
+    один раз; исчезнувшее расхождение снимается с учёта и при повторе снова
+    дойдёт до владельца. Ничего на бирже не меняет.
+    """
+    await asyncio.sleep(90)
+
+    while True:
+        interval = max(60.0, float(getattr(settings, "EXCHANGE_RECONCILIATION_INTERVAL_SEC", 300.0)))
+        try:
+            from services.exchange_reconciliation import ExchangeReconciliationService, mismatch_key
+            from services.live_executor import LIVE_EXECUTOR
+
+            if bool(getattr(settings, "EXCHANGE_RECONCILIATION_ENABLED", True)) and LIVE_EXECUTOR.is_live():
+                def _run():
+                    db = SessionLocal()
+                    try:
+                        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+                        return ExchangeReconciliationService().reconcile(db, bot.id if bot else None)
+                    finally:
+                        db.close()
+
+                result = await asyncio.to_thread(_run)
+                keys = {mismatch_key(m): m for m in result.get("mismatches") or []}
+                fresh = [m for k, m in keys.items() if k not in _RECON_ALERTED]
+                _RECON_ALERTED.intersection_update(keys)
+                log_event(logger, logging.WARNING if keys else logging.INFO, "exchange_reconciliation",
+                          status=result.get("status"), mismatches=len(keys),
+                          warnings=len(result.get("warnings") or []), error=result.get("error"))
+                if fresh:
+                    lines = "\n".join(
+                        f"• {m.get('type')} {m.get('symbol')} {m.get('side') or ''} "
+                        f"учёт {m.get('book_qty', '-')} / биржа {m.get('exchange_qty', '-')}"
+                        for m in fresh[:10]
+                    )
+                    await TelegramRouter().owner_alert(
+                        "LIVE: РАСХОЖДЕНИЕ С БИРЖЕЙ",
+                        f"{lines}\n\nСверка только читает — ничего не закрыто и не снято. "
+                        f"Ручные ордера и позиции владельца не учитываются. Подробности: /system/health.",
+                    )
+                    _RECON_ALERTED.update(mismatch_key(m) for m in fresh)
+        except Exception as e:  # noqa: BLE001 — сверка не имеет права мешать торговле
+            log_event(logger, logging.WARNING, "exchange_reconciliation_loop_failed", error=str(e))
+
+        await asyncio.sleep(interval)
 
 
 async def background_egress_monitor_loop():
@@ -823,6 +891,7 @@ async def lifespan(app: FastAPI):
     funding_observe_task = asyncio.create_task(background_funding_observe_loop())
     egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
     memory_log_task = asyncio.create_task(background_memory_log_loop())  # noqa: F841
+    reconciliation_task = asyncio.create_task(background_exchange_reconciliation_loop())  # noqa: F841
     walkforward_task = asyncio.create_task(background_walkforward_loop())
 
     yield
@@ -1568,7 +1637,7 @@ async def run_robot_once():
         if validation_gates.get("live_blockers"):
             return {"status": "skipped", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
 
-        equity_usdt = await asyncio.to_thread(effective_equity_usdt)
+        equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
         safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
         if safety.get("blocked"):
             db.commit()

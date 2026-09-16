@@ -80,12 +80,19 @@ class SignalLifecycleManager:
         """Рынок ЭТОЙ сделки, зафиксированный при входе."""
         return route_from_payload(signal.plan_json, signal.symbol, signal.side).market_type
 
-    def _equity_usdt(self) -> float:
-        """Тот же источник эквити, что у сайзинга в robot_loop и у риск-лимитов."""
+    def _equity_usdt(self, db=None, bot=None) -> float:
+        """Тот же источник эквити, что у сайзинга в robot_loop и у риск-лимитов:
+        в live — свободный баланс плюс маржа собственных позиций робота
+        (#manual-orders-2026-09-16)."""
         try:
             from services.live_executor import LIVE_EXECUTOR
 
-            return float(LIVE_EXECUTOR.effective_equity_usdt())
+            robot_margin = 0.0
+            if db is not None and bot is not None and LIVE_EXECUTOR.is_live():
+                from services.exposure_guard import ExposureGuard
+
+                robot_margin = ExposureGuard().live_position_margin(db, bot.id)
+            return float(LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin))
         except Exception:  # noqa: BLE001
             return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
 
@@ -422,7 +429,7 @@ class SignalLifecycleManager:
                     bot=bot,
                     signal=signal,
                     entry_price=price,
-                    balance_usdt=self._equity_usdt(),
+                    balance_usdt=self._equity_usdt(db, bot),
                 )
 
                 plan = result.get("plan")

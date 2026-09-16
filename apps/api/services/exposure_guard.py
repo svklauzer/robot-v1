@@ -132,6 +132,27 @@ class ExposureGuard:
 
         return round(margin, 6)
 
+    def live_position_margin(self, db: Session, bot_id: int) -> float:
+        """Маржа, которую позиции робота реально держат на бирже.
+        (#manual-orders-2026-09-16)
+
+        Свободный баланс биржи уже за вычетом маржи ВСЕХ позиций и ордеров —
+        ручных владельца и робота. Ручные роботу не принадлежат и остаются
+        вычтенными; свою маржу робот возвращает в капитал отсюда, иначе
+        экспозиция вычитала бы её второй раз (через used_margin). Считаются
+        только открытые на бирже сделки: опубликованные ещё не держат маржи,
+        позиции из paper на бирже не существуют.
+        """
+        total = 0.0
+        for signal in self.active_signals(db, bot_id):
+            if str(getattr(signal, "status", "")) not in ("opened", "tp1", "breakeven"):
+                continue
+            plan_json = getattr(signal, "plan_json", None) or {}
+            if ((plan_json.get("execution") or {}) if isinstance(plan_json, dict) else {}).get("mode") != "live":
+                continue
+            total += self.estimate_signal_margin(signal)
+        return round(total, 6)
+
     def used_margin(self, db: Session, bot_id: int) -> float:
         total = 0.0
 

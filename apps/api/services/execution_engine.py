@@ -303,6 +303,7 @@ class ExecutionEngine:
 
         self.db.add(order)
         self.db.add(position)
+        self._mark_execution(signal, live)
         self.db.flush()
 
         return {
@@ -403,7 +404,11 @@ class ExecutionEngine:
         close_side = self._close_order_side(position.side)
         exit_fill = float(exit_price)
         live = None
-        if self._live_mode():
+        live_mode = self._live_mode()
+        on_exchange = live_mode and self._opened_live(signal)
+        if live_mode and not on_exchange:
+            await self._book_only_close(signal=signal, position=position, stage="partial")
+        if on_exchange:
             # В live сначала биржа, потом учёт: позиция в базе уменьшается только
             # на то, что биржа реально закрыла.
             live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
@@ -456,7 +461,7 @@ class ExecutionEngine:
         self.db.add(close_order)
         self.db.flush()
 
-        if not self._live_mode():
+        if not live_mode:
             # off/dry_run: бумага уже учла закрытие, ядро только логирует.
             live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
                                      reduce_only=True, purpose=f"{reason}_close", route=route)
@@ -508,8 +513,12 @@ class ExecutionEngine:
         close_side = self._close_order_side(position.side)
         exit_fill = float(exit_price)
         live = None
+        live_mode = self._live_mode()
+        on_exchange = live_mode and self._opened_live(signal)
+        if live_mode and not on_exchange:
+            await self._book_only_close(signal=signal, position=position, stage="close")
 
-        if self._live_mode():
+        if on_exchange:
             # (#live-close-safety-2026-09-16) В live сначала биржа, потом учёт.
             # Прежде позиция помечалась закрытой ДО ордера, а отказ биржи уходил
             # только в лог: на бирже оставалась позиция без стопа и без
@@ -527,10 +536,22 @@ class ExecutionEngine:
                 await self._alert_live_already_flat(signal=signal, position=position,
                                                     exchange_stop_fill=exchange_stop_fill)
             else:
-                # Закрываем то, что РЕАЛЬНО стоит на бирже: после частичных
-                # закрытий учёт и биржа могут разойтись на остаток лота, и
-                # закрытие «по учёту» оставило бы хвост.
-                send_qty = exch_qty if exch_qty is not None else float(position.qty)
+                # (#manual-orders-2026-09-16) Закрываем СВОЮ долю: не больше
+                # учёта. Прежде уходил весь размер позиции на бирже — ради хвоста
+                # лота после частичного закрытия, — но на том же символе, стороне
+                # и режиме маржи может стоять ручная позиция владельца, и она
+                # закрылась бы вместе с роботом. Хвоста больше нет: частичные
+                # закрытия округляются по лоту биржи (3718a03). Меньше учёта на
+                # бирже — закрываем то, что есть.
+                book_qty = float(position.qty)
+                send_qty = book_qty if exch_qty is None else min(book_qty, float(exch_qty))
+                if exch_qty is not None and float(exch_qty) < book_qty * (1 - 1e-9):
+                    from core.logging import get_logger, log_event
+                    import logging as _logging
+
+                    log_event(get_logger(__name__), _logging.WARNING, "live_close_exchange_below_book",
+                              signal_id=signal.id, symbol=signal.symbol,
+                              book_qty=book_qty, exchange_qty=float(exch_qty))
                 live = self._submit_live(close_side, position.symbol, send_qty, exit_price,
                                          reduce_only=True, purpose="trend_close", route=route)
                 if not (live or {}).get("ok"):
@@ -591,10 +612,12 @@ class ExecutionEngine:
 
         # (#exchange-stop-2026-09-16) Позиция закрыта — стоп на бирже снимаем
         # после закрытия, а не до: выход не ждёт лишнего запроса. Режим решает
-        # сервис: live — ордер, dry_run — запись в лог, off — ничего.
-        await self._cancel_exchange_stops(signal, route, reason)
+        # сервис: live — ордер, dry_run — запись в лог, off — ничего. Позиция,
+        # которой робот на бирже не открывал, стопов робота на бирже не имеет.
+        if on_exchange or not live_mode:
+            await self._cancel_exchange_stops(signal, route, reason)
 
-        if not self._live_mode():
+        if not live_mode:
             # off/dry_run: бумага уже учла закрытие, ядро только логирует.
             live = self._submit_live(close_side, position.symbol, position.qty, exit_price,
                                      reduce_only=True, purpose="trend_close", route=route)
@@ -614,6 +637,69 @@ class ExecutionEngine:
         }
 
     # ── live: закрытие и расхождения (#live-close-safety-2026-09-16) ─────────
+
+    @staticmethod
+    def _mark_execution(signal: Signal, live: dict | None) -> None:
+        """(#manual-orders-2026-09-16) Где открыта позиция: на бирже (live) или
+        только в учёте (paper/dry_run). Закрывать и страховать на бирже робот
+        имеет право только то, что сам там открыл: позиция, открытая в paper и
+        доживающая до включения live, закрывалась бы reduce-only ордером — а на
+        том же символе может стоять ручная позиция владельца."""
+        mode = "live" if (live or {}).get("mode") == "live" and (live or {}).get("ok") else (
+            (live or {}).get("mode") or "paper")
+        plan = dict(signal.plan_json or {})
+        plan["execution"] = {
+            "mode": mode,
+            "exchange_order_id": (live or {}).get("exchange_order_id"),
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+        }
+        signal.plan_json = plan
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(signal, "plan_json")
+        except Exception:  # noqa: BLE001 — не ORM-объект (тесты)
+            pass
+
+    @staticmethod
+    def _opened_live(signal: Signal) -> bool:
+        return ((signal.plan_json or {}).get("execution") or {}).get("mode") == "live"
+
+    async def _book_only_close(self, *, signal: Signal, position, stage: str) -> None:
+        """В live закрывается позиция, которой робот на бирже не открывал: только
+        учёт, без ордера. Владелец узнаёт один раз на сделку."""
+        from core.logging import get_logger, log_event
+        import logging as _logging
+
+        log_event(get_logger(__name__), _logging.WARNING, "live_close_book_only",
+                  signal_id=signal.id, symbol=signal.symbol, stage=stage,
+                  book_qty=float(position.qty),
+                  opened_as=((signal.plan_json or {}).get("execution") or {}).get("mode"))
+        plan = dict(signal.plan_json or {})
+        execution = dict(plan.get("execution") or {})
+        if execution.get("book_only_alerted"):
+            return
+        execution["book_only_alerted"] = True
+        plan["execution"] = execution
+        signal.plan_json = plan
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(signal, "plan_json")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await self.telegram.owner_alert(
+                "LIVE: ПОЗИЦИЯ НЕ С БИРЖИ — ЗАКРЫТА ТОЛЬКО В УЧЁТЕ",
+                (
+                    f"Signal #{signal.id} · {signal.symbol} {signal.side}\n"
+                    f"Позиция открыта до включения live (в paper/dry_run), на бирже её "
+                    f"робот не открывал. Ордер на бирже не отправлен, чтобы не закрыть "
+                    f"ручную позицию по тому же символу. Этап: {stage}."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LIVE CLOSE] owner alert failed: {type(exc).__name__}: {exc}")
 
     @staticmethod
     def _live_mode() -> bool:

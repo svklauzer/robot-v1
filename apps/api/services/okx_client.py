@@ -324,6 +324,10 @@ class OKXClient:
     # ccxt okx разбирает сторону позиции из этого ключа (posSide в запросе).
     POSITION_SIDE_PARAM = "positionSide"
 
+    # (#manual-orders-2026-09-16) Спот и своп OKX — один торговый счёт: ccxt
+    # fetch_balance отдаёт его и на type=spot, и на type=swap.
+    UNIFIED_TRADING_ACCOUNT = True
+
     # ── стоп на бирже (#exchange-stop-2026-09-16) ─────────────────────────────
     def create_stop_loss_order(self, symbol: str, side: str, amount: float,
                                trigger_price: float, params: dict | None = None):
@@ -347,9 +351,11 @@ class OKXClient:
 
     @staticmethod
     def make_client_order_id(purpose: str) -> str:
-        """clOrdId OKX: буквы и цифры, до 32 символов."""
-        tag = "".join(ch for ch in str(purpose) if ch.isalnum())[:8] or "ord"
-        return f"{tag}{uuid.uuid4().hex}"[:32]
+        """clOrdId OKX: буквы и цифры, до 32 символов, с префиксом робота —
+        по нему ордера робота отличаются от ручных (services/robot_orders.py)."""
+        from services.robot_orders import alnum_client_id
+
+        return alnum_client_id(purpose)
 
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         if hasattr(self.exchange, "set_margin_mode"):

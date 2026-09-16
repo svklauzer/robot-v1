@@ -180,7 +180,7 @@ export default function HealthPage() {
           status={health?.exchange_switch?.safe === false ? "bad" : "good"}
           subtitle={
             health?.exchange_switch?.safe === false
-              ? `${health.exchange_switch.inactive_exchange}: есть открытое!`
+              ? `${health.exchange_switch.inactive_exchange}: открыты ордера робота!`
               : "переключение только вручную"
           }
         />
@@ -322,10 +322,20 @@ export default function HealthPage() {
         <Panel title="Exchange reconciliation">
           <InfoRow label="Status" value={exchangeReconciliation?.status || "unknown"} danger={!exchangeReconciliation?.ok && exchangeReconciliation?.status !== "disabled"} />
           <InfoRow label="Enabled" value={String(Boolean(exchangeReconciliation?.enabled))} danger={Boolean(exchangeReconciliation?.live_enabled) && !exchangeReconciliation?.enabled} />
-          <InfoRow label="Local orders" value={exchangeReconciliation?.counts?.local_open_orders ?? 0} />
-          <InfoRow label="Exchange orders" value={exchangeReconciliation?.counts?.exchange_open_orders ?? 0} />
-          <InfoRow label="Local positions" value={exchangeReconciliation?.counts?.local_live_positions ?? 0} />
-          <InfoRow label="Exchange positions" value={exchangeReconciliation?.counts?.exchange_positions ?? 0} />
+          {/* (#exchange-reconciliation-2026-09-16) Сверка только live, только
+              чтение и только объекты робота: ручные ордера и позиции владельца
+              не в счёт. Кеш фонового цикла — страница биржу не дёргает. */}
+          <InfoRow label="Проверено" value={exchangeReconciliation?.checked_at ? formatDate(exchangeReconciliation.checked_at) : "—"} />
+          <InfoRow label="Позиций робота в live" value={exchangeReconciliation?.counts?.robot_live_positions ?? 0} />
+          <InfoRow label="Стопов робота на бирже" value={exchangeReconciliation?.counts?.robot_stops ?? 0} />
+          <InfoRow label="Позиций на бирже (всего)" value={exchangeReconciliation?.counts?.exchange_positions ?? 0} />
+          {(exchangeReconciliation?.mismatches || []).map((item: any, idx: number) => (
+            <InfoRow key={`m${idx}`} label={reconciliationLabel(item?.type)} value={reconciliationValue(item)} danger />
+          ))}
+          {(exchangeReconciliation?.warnings || []).map((item: any, idx: number) => (
+            <InfoRow key={`w${idx}`} label={reconciliationLabel(item?.type)} value={reconciliationValue(item)} />
+          ))}
+          {exchangeReconciliation?.note && <InfoRow label="Note" value={exchangeReconciliation.note} />}
           {(exchangeReconciliation?.blockers || []).map((blocker: string, idx: number) => (
             <InfoRow key={idx} label="Breaker" value={blocker} danger />
           ))}
@@ -813,6 +823,31 @@ function InfoRow({ label, value, danger }: { label: string; value: any; danger?:
 
 function Empty({ text }: { text: string }) {
   return <div className="rounded-xl border border-emerald-950 bg-black/20 p-6 text-center text-emerald-100/50">{text}</div>;
+}
+
+// (#exchange-reconciliation-2026-09-16) Типы из services/exchange_reconciliation.py.
+const RECONCILIATION_LABELS: Record<string, string> = {
+  exchange_below_book: "На бирже меньше учёта",
+  exchange_above_book: "На бирже больше учёта",
+  stale_robot_order: "Зависший ордер робота",
+  orphan_robot_stop: "Стоп робота без сделки",
+  stray_robot_stop: "Лишний стоп робота",
+  exchange_stop_missing: "Нет стопа на бирже",
+  untracked_position_in_robot_margin_mode: "Позиция в режиме маржи робота",
+  stop_fetch_failed: "Стопы не прочитаны",
+};
+
+function reconciliationLabel(type: any) {
+  return RECONCILIATION_LABELS[String(type)] || String(type || "-");
+}
+
+function reconciliationValue(item: any) {
+  const where = [item?.symbol, item?.side, item?.margin_mode].filter(Boolean).join(" ");
+  if (item?.book_qty != null || item?.exchange_qty != null) {
+    return `${where} · учёт ${item?.book_qty ?? "-"} / биржа ${item?.exchange_qty ?? "-"}`;
+  }
+  if (item?.order_id) return `${where} · ордер ${item.order_id}`;
+  return where || "-";
 }
 
 function formatNumber(value: any) {

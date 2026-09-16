@@ -2422,7 +2422,11 @@ class Settings(BaseSettings):
     # =========================
     MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 15000
     MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
-    EXCHANGE_RECONCILIATION_ENABLED: bool = False
+    # (#exchange-reconciliation-2026-09-16) Сверка робота с биржей: только live,
+    # только чтение, только ордера/позиции робота (ручные владельца не в счёт).
+    # В paper и dry_run цикл не обращается к бирже — включение безопасно.
+    EXCHANGE_RECONCILIATION_ENABLED: bool = True
+    EXCHANGE_RECONCILIATION_INTERVAL_SEC: float = 300.0
 
 
     @property

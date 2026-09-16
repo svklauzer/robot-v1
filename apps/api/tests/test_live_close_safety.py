@@ -68,7 +68,7 @@ def world(monkeypatch):
         opened_at=datetime.now(timezone.utc), closed_at=None,
     )
     signal = SimpleNamespace(id=7, bot_id=1, symbol="XRP/USDT", side="short",
-                             plan_json={"routing": dict(ROUTING)})
+                             plan_json={"routing": dict(ROUTING), "execution": {"mode": "live"}})
     alerts, kills, sent = [], [], []
 
     async def owner_alert(title, body):
@@ -149,15 +149,54 @@ async def test_a_partial_fill_shrinks_the_book_by_what_was_closed(world):
 
 
 @pytest.mark.anyio
-async def test_the_close_sends_what_is_really_on_the_exchange(world):
-    """Учёт 176, на бирже 180 (хвост лота после частичного закрытия) — закрыть 180."""
+async def test_the_close_never_takes_more_than_the_robot_holds(world):
+    """(#manual-orders-2026-09-16) Учёт 176, на бирже 180: лишние 4 — ручная
+    позиция владельца в том же режиме маржи. Закрывается доля робота."""
     world.state["exchange_qty"] = 180.0
-    world.state["reply"] = {"mode": "live", "ok": True, "status": "closed", "filled_qty": 180.0, "avg_price": 1.395}
+    world.state["reply"] = {"mode": "live", "ok": True, "status": "closed", "filled_qty": 176.0, "avg_price": 1.395}
     out = await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="tz_kama")
 
-    assert world.sent[-1]["qty"] == pytest.approx(180.0) and world.sent[-1]["reduce_only"] is True
+    assert world.sent[-1]["qty"] == pytest.approx(176.0) and world.sent[-1]["reduce_only"] is True
     assert out["status"] == "closed" and world.position.status == "closed"
     assert out["exit_price"] == pytest.approx(1.395), "цена закрытия — филл биржи, а не расчётная"
+
+
+@pytest.mark.anyio
+async def test_the_close_sends_what_is_left_when_the_exchange_holds_less(world):
+    """Учёт 176, на бирже 150 (часть закрыли вне робота) — закрыть 150, не больше."""
+    world.state["exchange_qty"] = 150.0
+    world.state["reply"] = {"mode": "live", "ok": True, "status": "closed", "filled_qty": 150.0, "avg_price": 1.395}
+    await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="tz_kama")
+
+    assert world.sent[-1]["qty"] == pytest.approx(150.0)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("opened_as", ["paper", "dry_run", None])
+async def test_a_position_not_opened_live_is_closed_in_the_book_only(world, opened_as):
+    """Позиция из paper/dry_run, дожившая до включения live: на бирже её нет, а
+    reduce-only закрытие по её объёму съело бы ручную позицию на том же символе."""
+    if opened_as is None:
+        world.signal.plan_json.pop("execution")
+    else:
+        world.signal.plan_json["execution"] = {"mode": opened_as}
+    world.state["exchange_qty"] = 500.0                   # ручная позиция владельца
+
+    out = await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="stop_loss")
+    await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="stop_loss")
+
+    assert out["status"] == "closed" and world.position.status == "closed"
+    assert world.sent == [], "ордер на биржу по позиции, которой робот там не открывал"
+    assert world.alerts == ["LIVE: ПОЗИЦИЯ НЕ С БИРЖИ — ЗАКРЫТА ТОЛЬКО В УЧЁТЕ"]
+
+
+@pytest.mark.anyio
+async def test_partial_close_of_a_position_not_opened_live_sends_nothing(world):
+    world.signal.plan_json["execution"] = {"mode": "dry_run"}
+    out = await world.engine.partial_close_paper_position(world.signal, exit_price=1.40, share=0.5)
+
+    assert out["status"] == "partial_closed" and world.sent == []
+    assert world.position.qty == pytest.approx(88.0)
 
 
 @pytest.mark.anyio
@@ -250,6 +289,28 @@ async def test_a_partially_filled_open_is_booked_not_abandoned(world):
     assert out["status"] == "opened"
     assert out["position"].qty == pytest.approx(120.0)
     assert out["position"].entry_price == pytest.approx(1.419)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("reply, opened_as", [
+    ({"mode": "live", "ok": True, "status": "closed", "filled_qty": 176.0, "avg_price": 1.42,
+      "exchange_order_id": "ex1"}, "live"),
+    ({"mode": "dry_run", "ok": True, "status": "dry_run", "filled_qty": 176.0, "avg_price": 1.42}, "dry_run"),
+    (None, "paper"),
+])
+async def test_the_open_records_where_the_position_lives(world, reply, opened_as):
+    """(#manual-orders-2026-09-16) По этой отметке live закрывает и страхует на
+    бирже только то, что робот сам там открыл."""
+    world.engine.db.position = None
+    world.state["live"] = opened_as == "live"
+    world.state["reply"] = reply
+    signal = _open_signal()
+
+    out = await world.engine.open_paper_position(bot=SimpleNamespace(id=1), signal=signal, entry_price=1.42)
+
+    assert out["status"] == "opened"
+    assert signal.plan_json["execution"]["mode"] == opened_as
+    assert signal.plan_json["routing"] == ROUTING, "отметка затёрла маршрут сделки"
 
 
 # ── жизненный цикл: сделка не закрывается при отказе биржи ───────────────────

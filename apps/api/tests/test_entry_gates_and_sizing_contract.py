@@ -141,7 +141,7 @@ def test_lifecycle_opens_position_on_the_same_equity():
     source = (API / "services" / "signal_lifecycle.py").read_text(encoding="utf-8")
     open_call = source.split("execution.open_paper_position(", 1)[1][:300]
 
-    assert "self._equity_usdt()" in open_call, (
+    assert "self._equity_usdt(db, bot)" in open_call, (
         "открытие позиции считает план от своего капитала, а не от общего"
     )
 

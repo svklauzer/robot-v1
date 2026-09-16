@@ -94,7 +94,7 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ML", ("ML_",)),
     # LOOP_ — поведение самого торгового цикла (пульс отчёта о простое и т.п.).
     ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_",
-                         "SCAN_SILENCE")),
+                         "SCAN_SILENCE", "EXCHANGE_RECONCILIATION")),
     ("Телеграм и отчёты", ("TELEGRAM_", "REPORT_", "DIGEST_", "SUBSCRIPTION_", "BILLING_", "PAYMENT_")),
     # (#memory-probe-2026-09-16) Бюджет Render: замер памяти, потолок журнала
     # egress, кеш readonly-скана дашборда.
@@ -121,6 +121,8 @@ _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
     "LIVE_MAX_ORDER_NOTIONAL_USDT",
     # (#exchange-stop-2026-09-16) Страховка live-позиций на время простоя робота
     "LIVE_EXCHANGE_STOP_ENABLED", "LIVE_EXCHANGE_STOP_BUFFER_PCT",
+    # (#exchange-reconciliation-2026-09-16) Сверка с биржей в live
+    "EXCHANGE_RECONCILIATION_ENABLED",
     # Аварийные выключатели
     "GRID_ENABLED", "GRID_KILL_SWITCH_ENABLED", "CROSS_FARB_ENABLED",
     "ENABLE_FUNDING_ARB", "ENABLE_RANGE_STRATEGY", "ENABLE_CRT_STRATEGY",

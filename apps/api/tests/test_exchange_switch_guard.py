@@ -64,20 +64,25 @@ def test_safe_when_inactive_exchange_has_nothing_open(monkeypatch):
     assert result["open_positions"] == 0
 
 
-def test_unsafe_when_inactive_exchange_has_open_orders(monkeypatch):
-    _patch_inactive(monkeypatch, "okx", _FakeClient(orders=[{"id": "1"}]))
+def test_unsafe_when_inactive_exchange_has_open_robot_orders(monkeypatch):
+    _patch_inactive(monkeypatch, "okx", _FakeClient(orders=[{"id": "1", "clientOrderId": "rbttrendab12cd34"}]))
     result = guard.check(force=True)
     assert result["safe"] is False
     assert result["open_orders"] == 1
 
 
-def test_unsafe_when_inactive_exchange_has_open_positions(monkeypatch):
-    _patch_inactive(
-        monkeypatch, "okx", _FakeClient(positions=[{"contracts": 5.0, "symbol": "BTC/USDT:USDT"}])
-    )
+def test_manual_orders_and_positions_do_not_stop_the_robot(monkeypatch):
+    """(#manual-orders-2026-09-16) Владелец торгует на неактивной бирже руками —
+    это не осиротевшие сделки робота, входы на активной бирже не останавливаются."""
+    _patch_inactive(monkeypatch, "okx", _FakeClient(
+        orders=[{"id": "1", "clientOrderId": None}, {"id": "2", "clientOrderId": "e847386590ce4dBC"}],
+        positions=[{"contracts": 5.0, "symbol": "BTC/USDT:USDT"}],
+    ))
     result = guard.check(force=True)
-    assert result["safe"] is False
-    assert result["open_positions"] == 1
+    assert result["safe"] is True
+    assert result["open_orders"] == 0 and result["manual_orders"] == 2
+    assert result["open_positions"] == 1 and result["positions_block"] is False
+    assert result["found"] == []
 
 
 def test_zero_size_positions_do_not_count_as_open(monkeypatch):
@@ -223,7 +228,7 @@ def test_live_mode_still_blocks(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
     _patch_inactive(
         monkeypatch, "htx",
-        _FakeClient(positions=[{"contracts": 1.0, "symbol": "BTC/USDT:USDT"}]),
+        _FakeClient(orders=[{"id": "o1", "symbol": "BTC/USDT:USDT", "clientOrderId": "770123456789012"}]),
     )
 
     assert guard.check(force=True)["safe"] is False
@@ -253,15 +258,18 @@ def test_result_says_what_exactly_is_open(monkeypatch):
     _patch_inactive(
         monkeypatch, "htx",
         _FakeClient(
-            orders=[{"id": "o1", "symbol": "ETH/USDT:USDT", "side": "buy", "amount": 0.5}],
+            orders=[{"id": "o1", "symbol": "ETH/USDT:USDT", "side": "buy", "amount": 0.5,
+                     "clientOrderId": "rbttrendab12cd34"},
+                    {"id": "o2", "symbol": "SOL/USDT:USDT", "side": "sell", "amount": 3.0}],
             positions=[{"contracts": 2.0, "symbol": "BTC/USDT:USDT", "side": "long"}],
         ),
     )
 
-    found = guard.check(force=True)["found"]
+    result = guard.check(force=True)
 
-    assert {"BTC/USDT:USDT", "ETH/USDT:USDT"} == {f["symbol"] for f in found}
-    assert all(f["size_unknown"] is False for f in found)
+    assert {f["symbol"] for f in result["found"]} == {"ETH/USDT:USDT"}, "блокирует только ордер робота"
+    assert {f["symbol"] for f in result["manual"]} == {"SOL/USDT:USDT", "BTC/USDT:USDT"}
+    assert all(f["size_unknown"] is False for f in result["found"] + result["manual"])
 
 
 def test_size_unknown_is_flagged_explicitly(monkeypatch):
@@ -274,5 +282,6 @@ def test_size_unknown_is_flagged_explicitly(monkeypatch):
 
     result = guard.check(force=True)
 
-    assert result["safe"] is False
-    assert result["found"][0]["size_unknown"] is True
+    # Позиции больше не блокируют (#manual-orders-2026-09-16), но видны.
+    assert result["safe"] is True
+    assert result["manual"][0]["size_unknown"] is True
