@@ -226,6 +226,25 @@ class ExecutionEngine:
         live = self._submit_live(open_side, signal.symbol, order_qty, entry_price,
                                  reduce_only=False, purpose="trend_open", route=route)
 
+        # (#live-close-safety-2026-09-16) В live исключение внутри live-слоя —
+        # тоже отказ: иначе бумага заводила позицию, которой на бирже нет, и все
+        # её выходы потом уходили бы в пустоту.
+        if live is None and self._live_mode():
+            live = {"mode": "live", "ok": False, "status": "error", "error": "live_submit_exception"}
+
+        # Частичный филл — позиция на бирже ЕСТЬ, пусть и меньше плана. Отказ с
+        # ненулевым исполнением больше не бросает её без учёта.
+        live_filled = float((live or {}).get("filled_qty") or 0.0)
+        if (live is not None and live.get("mode") == "live" and not live.get("ok")
+                and live_filled > 0):
+            from core.logging import get_logger, log_event
+            import logging as _logging
+
+            log_event(get_logger(__name__), _logging.WARNING, "live_open_partial_fill",
+                      signal_id=signal.id, symbol=signal.symbol, planned=order_qty,
+                      filled=live_filled, status=live.get("status"), error=live.get("error"))
+            live = {**live, "ok": True, "partial_fill": True}
+
         if live is not None and live.get("mode") == "live" and not live.get("ok"):
             await self._halt_on_live_divergence(
                 signal=signal,
@@ -368,20 +387,44 @@ class ExecutionEngine:
         if not position:
             return None
 
-        close_qty = float(self.client.amount_to_precision(position.symbol, float(position.qty) * share))
+        route = route_from_payload(signal.plan_json, position.symbol, position.side)
+        # (#live-close-safety-2026-09-16) Доля округляется по ЛОТУ биржи того
+        # рынка, где стоит позиция, — одинаково для бумаги и live. Прежде бралась
+        # точность базового символа (спот), а биржа закрывала целыми лотами: у
+        # CHIP (лот 100 монет) бумага закрывала 3250, биржа 3200, и финальное
+        # закрытие оставляло на бирже хвост.
+        close_qty, _ = self._quantize_qty(route, float(position.qty) * share)
         remaining_qty = round(float(position.qty) - close_qty, 10)
         if close_qty <= 0 or remaining_qty <= 0:
             # Слишком мелкая позиция для частичного закрытия (precision/min lot) —
             # ведём как раньше (только breakeven-стоп), без частичной фиксации.
             return None
 
-        route = route_from_payload(signal.plan_json, position.symbol, position.side)
+        close_side = self._close_order_side(position.side)
+        exit_fill = float(exit_price)
+        live = None
+        if self._live_mode():
+            # В live сначала биржа, потом учёт: позиция в базе уменьшается только
+            # на то, что биржа реально закрыла.
+            live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
+                                     reduce_only=True, purpose=f"{reason}_close", route=route)
+            filled = float((live or {}).get("filled_qty") or 0.0)
+            if not (live or {}).get("ok"):
+                if 0 < filled < close_qty:
+                    close_qty = filled                  # закрылась часть — фиксируем её
+                    remaining_qty = round(float(position.qty) - close_qty, 10)
+                else:
+                    await self._on_live_close_failed(signal=signal, stage="partial", live=live)
+                    return {"status": "live_close_failed", "live": live, "reason": reason}
+            if (live or {}).get("avg_price"):
+                exit_fill = float(live["avg_price"])
+
         preview = self.cost_engine.estimate(
             symbol=position.symbol,
             market_type=route.market_type,
             side=position.side,
             entry_price=float(position.entry_price),
-            exit_price=float(exit_price),
+            exit_price=exit_fill,
             qty=close_qty,
             liquidity="taker",
             holding_funding_periods=1 if route.market_type != "spot" else 0,
@@ -392,7 +435,6 @@ class ExecutionEngine:
             closed_at=datetime.now(timezone.utc),
         )
 
-        close_side = self._close_order_side(position.side)
         close_order = Order(
             bot_id=position.bot_id,
             signal_id=signal.id,
@@ -403,22 +445,24 @@ class ExecutionEngine:
             qty=close_qty,
             price=exit_price,
             filled_qty=close_qty,
-            avg_fill_price=exit_price,
+            avg_fill_price=exit_fill,
             client_order_id=f"PAPER-PARTIAL-{uuid.uuid4()}",
-            exchange_order_id=None,
+            exchange_order_id=(live or {}).get("exchange_order_id"),
         )
 
         position.qty = remaining_qty
-        position.mark_price = exit_price
+        position.mark_price = exit_fill
 
         self.db.add(close_order)
         self.db.flush()
 
-        live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
-                                 reduce_only=True, purpose="tp1_partial_close", route=route)
-        if live is not None:
-            close_order.exchange_order_id = live.get("exchange_order_id")
-            self.db.flush()
+        if not self._live_mode():
+            # off/dry_run: бумага уже учла закрытие, ядро только логирует.
+            live = self._submit_live(close_side, position.symbol, close_qty, exit_price,
+                                     reduce_only=True, purpose=f"{reason}_close", route=route)
+            if live is not None:
+                close_order.exchange_order_id = live.get("exchange_order_id")
+                self.db.flush()
 
         return {
             "status": "partial_closed",
@@ -426,6 +470,7 @@ class ExecutionEngine:
             "close_order": close_order,
             "closed_qty": close_qty,
             "remaining_qty": remaining_qty,
+            "exit_price": exit_fill,
             "net_pnl": preview.net_pnl,
             "total_cost": preview.total_cost,
             "reason": reason,
@@ -460,12 +505,47 @@ class ExecutionEngine:
         # Фандинг платят только держатели контракта: на споте его нет, и
         # закладывать буфер в стоимость спотовой сделки — завышать издержки.
         route = route_from_payload(signal.plan_json, position.symbol, position.side)
+        close_side = self._close_order_side(position.side)
+        exit_fill = float(exit_price)
+        live = None
+
+        if self._live_mode():
+            # (#live-close-safety-2026-09-16) В live сначала биржа, потом учёт.
+            # Прежде позиция помечалась закрытой ДО ордера, а отказ биржи уходил
+            # только в лог: на бирже оставалась позиция без стопа и без
+            # сопровождения — для системы сделка была закрыта.
+            exch_qty = self._exchange_position_base(route, position)
+            if exch_qty is not None and exch_qty <= 0:
+                # Биржа уже пуста (закрыто вручную, ликвидация) — ордер не нужен,
+                # но расхождение обязано дойти до владельца.
+                live = {"mode": "live", "ok": True, "status": "already_flat",
+                        "filled_qty": 0.0, "avg_price": None}
+                await self._alert_live_already_flat(signal=signal, position=position)
+            else:
+                # Закрываем то, что РЕАЛЬНО стоит на бирже: после частичных
+                # закрытий учёт и биржа могут разойтись на остаток лота, и
+                # закрытие «по учёту» оставило бы хвост.
+                send_qty = exch_qty if exch_qty is not None else float(position.qty)
+                live = self._submit_live(close_side, position.symbol, send_qty, exit_price,
+                                         reduce_only=True, purpose="trend_close", route=route)
+                if not (live or {}).get("ok"):
+                    filled = float((live or {}).get("filled_qty") or 0.0)
+                    if 0 < filled < float(position.qty):
+                        # Закрылась часть — учёт уменьшаем ровно на неё, остаток
+                        # остаётся открытым и закрывается следующим проходом.
+                        position.qty = round(float(position.qty) - filled, 10)
+                        self.db.flush()
+                    await self._on_live_close_failed(signal=signal, stage="close", live=live)
+                    return {"status": "live_close_failed", "live": live, "reason": reason}
+                if live.get("avg_price"):
+                    exit_fill = float(live["avg_price"])
+
         preview = self.cost_engine.estimate(
             symbol=position.symbol,
             market_type=route.market_type,
             side=position.side,
             entry_price=float(position.entry_price),
-            exit_price=float(exit_price),
+            exit_price=exit_fill,
             qty=float(position.qty),
             liquidity="taker",
             holding_funding_periods=1 if route.market_type != "spot" else 0,
@@ -476,7 +556,6 @@ class ExecutionEngine:
             closed_at=datetime.now(timezone.utc),
         )
 
-        close_side = self._close_order_side(position.side)
         client_order_id = f"PAPER-CLOSE-{uuid.uuid4()}"
 
         close_order = Order(
@@ -489,13 +568,13 @@ class ExecutionEngine:
             qty=position.qty,
             price=exit_price,
             filled_qty=position.qty,
-            avg_fill_price=exit_price,
+            avg_fill_price=exit_fill,
             client_order_id=client_order_id,
-            exchange_order_id=None,
+            exchange_order_id=(live or {}).get("exchange_order_id"),
         )
 
         position.status = "closed"
-        position.mark_price = exit_price
+        position.mark_price = exit_fill
         # (#audit-positions) Закрытая позиция не имеет НЕреализованного PnL —
         # раньше поле держало net_pnl закрытия и путало фронт/аналитику.
         # Реализованный результат живёт в Signal.closed_net_pnl.
@@ -505,22 +584,141 @@ class ExecutionEngine:
         self.db.add(close_order)
         self.db.flush()
 
-        # Live-путь закрытия (reduceOnly) через ядро. off=пропуск, dry_run=лог.
-        live = self._submit_live(close_side, position.symbol, position.qty, exit_price,
-                                 reduce_only=True, purpose="trend_close", route=route)
-        if live is not None:
-            close_order.exchange_order_id = live.get("exchange_order_id")
-            self.db.flush()
+        if not self._live_mode():
+            # off/dry_run: бумага уже учла закрытие, ядро только логирует.
+            live = self._submit_live(close_side, position.symbol, position.qty, exit_price,
+                                     reduce_only=True, purpose="trend_close", route=route)
+            if live is not None:
+                close_order.exchange_order_id = live.get("exchange_order_id")
+                self.db.flush()
 
         return {
             "status": "closed",
             "position": position,
             "close_order": close_order,
+            "exit_price": exit_fill,
             "net_pnl": preview.net_pnl,
             "net_pnl_pct": preview.net_pnl_pct,
             "total_cost": preview.total_cost,
             "reason": reason,
         }
+
+    # ── live: закрытие и расхождения (#live-close-safety-2026-09-16) ─────────
+
+    @staticmethod
+    def _live_mode() -> bool:
+        """Ордера реально уходят на биржу. off и dry_run — прежний бумажный поток."""
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+
+            return bool(LIVE_EXECUTOR.is_live())
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _exchange_position_base(route, position) -> float | None:
+        try:
+            from services.live_executor import LIVE_EXECUTOR
+
+            return LIVE_EXECUTOR.exchange_position_base(
+                route.exchange_symbol, str(position.side).lower(), route.market_type
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _on_live_close_failed(self, *, signal: Signal, stage: str, live: dict | None) -> None:
+        """Биржа не закрыла позицию. Сделка остаётся открытой в учёте — следующий
+        проход сопровождения повторит закрытие, пока условие выхода в силе, и
+        позиция не останется без присмотра.
+
+        Первый отказ по сделке: kill switch (новые входы стоят) и алерт. Дальше
+        алерт на каждый десятый отказ — повтор идёт раз в ~10 с, и сообщение на
+        каждую попытку заглушило бы остальные.
+        """
+        from core.logging import get_logger, log_event
+        import logging as _logging
+
+        live = live or {"ok": False, "status": "error", "error": "live_submit_exception"}
+        plan = dict(signal.plan_json or {})
+        failures = dict(plan.get("live_close_failures") or {})
+        count = int(failures.get("count") or 0) + 1
+        failures.update({
+            "count": count,
+            "stage": stage,
+            "last_status": live.get("status"),
+            "last_error": live.get("error"),
+            "last_at": datetime.now(timezone.utc).isoformat(),
+        })
+        plan["live_close_failures"] = failures
+        signal.plan_json = plan
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(signal, "plan_json")
+        except Exception:  # noqa: BLE001 — не ORM-объект (тесты)
+            pass
+
+        log_event(
+            get_logger(__name__), _logging.ERROR, "live_close_failed",
+            signal_id=signal.id, symbol=signal.symbol, stage=stage, attempt=count,
+            status=live.get("status"), error=live.get("error"),
+            filled_qty=live.get("filled_qty"),
+        )
+
+        if count == 1:
+            try:
+                from services.live_safety import LiveSafetyService
+
+                bot = self.db.query(Bot).filter(Bot.id == signal.bot_id).first()
+                if bot:
+                    LiveSafetyService().set_kill_switch(
+                        self.db, bot, enabled=True,
+                        reason=f"live_close_failed:{stage}:{live.get('error') or live.get('status')}",
+                    )
+                    self.db.flush()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LIVE CLOSE] kill-switch failed: {type(exc).__name__}: {exc}")
+
+        if count == 1 or count % 10 == 0:
+            try:
+                await self.telegram.owner_alert(
+                    "LIVE CLOSE FAILED — ПОЗИЦИЯ НА БИРЖЕ НЕ ЗАКРЫТА",
+                    (
+                        f"Signal #{signal.id} · {signal.symbol} {signal.side}\n"
+                        f"Этап: {stage} · попытка {count}\n"
+                        f"Статус: {live.get('status')}\n"
+                        f"Ошибка: {live.get('error')}\n"
+                        f"Исполнено: {live.get('filled_qty')}\n\n"
+                        f"Сделка оставлена открытой, закрытие повторяется каждый проход "
+                        f"сопровождения. Kill switch включён — новых входов нет.\n"
+                        f"Проверьте позицию на бирже и права ключа."
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LIVE CLOSE] owner alert failed: {type(exc).__name__}: {exc}")
+
+    async def _alert_live_already_flat(self, *, signal: Signal, position) -> None:
+        """На бирже позиции уже нет, а в учёте она открыта: закрыли вручную,
+        ликвидировали или разошлись раньше. Учёт закрывается, владелец узнаёт."""
+        from core.logging import get_logger, log_event
+        import logging as _logging
+
+        log_event(
+            get_logger(__name__), _logging.WARNING, "live_position_already_flat",
+            signal_id=signal.id, symbol=signal.symbol, side=signal.side,
+            book_qty=float(position.qty),
+        )
+        try:
+            await self.telegram.owner_alert(
+                "LIVE: ПОЗИЦИИ НА БИРЖЕ УЖЕ НЕТ",
+                (
+                    f"Signal #{signal.id} · {signal.symbol} {signal.side}\n"
+                    f"В учёте открыто {float(position.qty)}, на бирже — пусто.\n"
+                    f"Сделка закрыта в учёте без ордера. Проверьте историю ордеров на бирже."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LIVE CLOSE] owner alert failed: {type(exc).__name__}: {exc}")
 
     def _open_order_side(self, signal_side: str) -> str:
         return "buy" if signal_side == "long" else "sell"

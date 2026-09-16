@@ -307,6 +307,45 @@ class LiveExecutor:
         })
         return achievable, meta
 
+    def exchange_position_base(self, symbol: str, side: str, market_type: str) -> float | None:
+        """Размер позиции НА БИРЖЕ в базовой монете. (#live-close-safety-2026-09-16)
+
+        None — узнать не удалось (спот, нет метода, сбой запроса): вызывающий
+        обязан закрывать по своему учёту. 0.0 — запрос прошёл, позиции нет.
+        Клиенты бросают исключение при сбое, а пустой список отдают только на
+        успешный ответ — поэтому ноль здесь означает «на бирже пусто», а не
+        «не спросили».
+        """
+        if str(market_type).lower() not in ("swap", "future", "futures", "linear"):
+            return None
+        fetch = getattr(self.client, "fetch_positions", None)
+        if not callable(fetch):
+            return None
+        try:
+            positions = fetch() or []
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, logging.WARNING, "live_position_fetch_failed",
+                      symbol=symbol, error=f"{type(exc).__name__}: {exc}")
+            return None
+
+        getter = getattr(self.client, "contract_size", None)
+        default_size = getter(symbol) if callable(getter) else None
+        want_side = str(side or "").lower()
+        total = 0.0
+        for p in positions:
+            if not isinstance(p, dict) or p.get("symbol") != symbol:
+                continue
+            p_side = str(p.get("side") or "").lower()
+            if p_side and want_side and p_side != want_side:
+                continue
+            try:
+                contracts = abs(float(p.get("contracts") or 0.0))
+                size = float(p.get("contractSize") or default_size or 0.0)
+            except (TypeError, ValueError):
+                continue
+            total += contracts * size
+        return round(total, 12)
+
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
                      reduce_only: bool = False, leverage: float | None = None,
