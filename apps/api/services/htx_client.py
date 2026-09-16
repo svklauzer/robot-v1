@@ -332,6 +332,20 @@ class HTXClient:
             return self._retry(self.exchange.set_leverage, leverage, symbol, params or {})
         return None
 
+    def set_swap_leverage(self, symbol: str, leverage: float, margin_mode: str,
+                          position_side: str | None = None):
+        """Плечо linear-свопа для режима маржи сделки. (#live-margin-posmode-2026-09-16)
+
+        ccxt htx берёт режим маржи для v5 position/lever из `marginMode`, но
+        оставляет и сам ключ в теле запроса. Передаём родное имя `margin_mode`:
+        ccxt кладёт его в запрос как есть, лишних полей бирже не уходит.
+        `set_margin_mode` у ccxt htx не поддерживается — режим маржи HTX тоже
+        задаётся в ордере. Сторона позиции (двусторонний режим HTX) не
+        передаётся: режим позиций HTX через ccxt не читается и на живом API не
+        проверен. Ошибку не глушим: без подтверждённого плеча позицию не открываем.
+        """
+        return self._retry(self.exchange.set_leverage, leverage, symbol, {"margin_mode": margin_mode})
+
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         """cross/isolated для символа (swap). best-effort."""
         if hasattr(self.exchange, "set_margin_mode"):

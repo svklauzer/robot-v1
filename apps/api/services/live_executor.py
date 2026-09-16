@@ -38,6 +38,13 @@ from services.exchange_factory import get_exchange_client
 
 logger = get_logger(__name__)
 
+_DERIVATIVE_TYPES = ("swap", "future", "futures", "linear")
+_MARGIN_MODES = ("cross", "isolated")
+# Режим позиций аккаунта нельзя сменить при открытых позициях и ордерах, поэтому
+# между сделками он меняется редко; десяти минут хватает, чтобы не спрашивать
+# биржу на каждый ордер.
+_POSITION_MODE_TTL_SEC = 600.0
+
 
 @dataclass
 class OrderResult:
@@ -66,8 +73,9 @@ class OrderResult:
 class LiveExecutor:
     def __init__(self):
         self.client = get_exchange_client()
-        self._leverage_set: set[str] = set()
+        self._leverage_set: set[tuple] = set()  # (symbol, margin_mode, leverage, position_side)
         self._bal_cache: dict[str, tuple[float, float]] = {}  # market_type -> (free_usdt, ts)
+        self._position_mode: tuple[bool, float] | None = None  # (hedged, ts)
 
     # ── режим ─────────────────────────────────────────────────────────────────
     @staticmethod
@@ -114,22 +122,123 @@ class LiveExecutor:
         return None
 
     # ── плечо / режим маржи ─────────────────────────────────────────────────────
+    @staticmethod
+    def _is_derivative(market_type: str | None) -> bool:
+        return str(market_type or "").lower() in _DERIVATIVE_TYPES
+
+    @staticmethod
+    def resolve_margin_mode(margin_mode: str | None) -> str:
+        """Режим маржи сделки: из маршрута, иначе LIVE_MARGIN_MODE.
+
+        Неизвестное значение — ошибка, а не молчаливый cross: режим маржи решает,
+        чем рискует позиция — своей маржой или всем счётом.
+        """
+        value = str(margin_mode or getattr(settings, "LIVE_MARGIN_MODE", "cross") or "").lower().strip()
+        if value not in _MARGIN_MODES:
+            raise ValueError(f"margin_mode_invalid:{value or 'empty'}")
+        return value
+
+    def position_hedged(self) -> bool | None:
+        """Режим позиций деривативного счёта. (#live-margin-posmode-2026-09-16)
+
+        True — Long/Short mode (OKX long_short_mode): у каждого ордера обязана
+        быть сторона позиции, reduceOnly не применяется. False — One-way (net).
+        None — биржа не отдаёт режим (у HTX в ccxt метода нет) или запрос не
+        прошёл: ордер уходит как для One-way. Ошибка здесь безопасна — биржа
+        отклонит ордер без стороны позиции, и отказ остановит робота; позицию
+        не того размера или направления она не откроет.
+        """
+        cached = getattr(self, "_position_mode", None)
+        if cached and (time.time() - cached[1]) < _POSITION_MODE_TTL_SEC:
+            return cached[0]
+        fetch = getattr(self.client, "fetch_position_mode", None)
+        if not callable(fetch):
+            return None
+        try:
+            hedged = bool((fetch() or {}).get("hedged"))
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, logging.WARNING, "live_position_mode_fetch_failed",
+                      error=f"{type(exc).__name__}: {exc}")
+            return cached[0] if cached else None
+        if not cached or cached[0] != hedged:
+            log_event(logger, logging.INFO, "live_position_mode",
+                      hedged=hedged, mode="long_short" if hedged else "one_way")
+        self._position_mode = (hedged, time.time())
+        return hedged
+
+    @staticmethod
+    def _position_side(side: str, reduce_only: bool) -> str:
+        """Сторона позиции в Long/Short mode: buy открывает лонг или закрывает шорт."""
+        is_buy = str(side).lower() == "buy"
+        if reduce_only:
+            return "short" if is_buy else "long"
+        return "long" if is_buy else "short"
+
+    @classmethod
+    def order_params(cls, *, client_id: str, market_type: str | None, side: str,
+                     reduce_only: bool, margin_mode: str | None,
+                     hedged: bool | None) -> dict[str, Any]:
+        """Параметры ордера для ccxt — одинаковые для любого этапа сделки.
+
+        Без `marginMode` ccxt подставляет cross: у OKX tdMode=cross, у HTX
+        margin_mode=cross. План же сделки — isolated (TREND_MARGIN_MODE), и
+        плечо настраивалось под isolated, а позиция открывалась бы в cross и
+        рисковала всем счётом. Закрытие обязано идти в том же режиме, что и
+        открытие: у OKX reduce-only в cross не закрывает isolated-позицию.
+
+        `defaultType` не передаём: рынок ccxt определяет по символу, а ключ
+        ccxt okx/htx не разбирает и отправляет бирже в теле ордера как есть.
+        """
+        params: dict[str, Any] = {"clientOrderId": client_id}
+        if cls._is_derivative(market_type):
+            params["marginMode"] = margin_mode
+            if hedged:
+                params["positionSide"] = cls._position_side(side, reduce_only)
+                return params
+        if reduce_only:
+            params["reduceOnly"] = True
+        return params
+
     def _ensure_leverage(self, symbol: str, market_type: str, leverage: float | None,
-                         margin_mode: str | None = None):
-        if market_type != "swap" or not bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
-            return
-        if symbol in self._leverage_set:
-            return
+                         margin_mode: str | None = None,
+                         position_side: str | None = None) -> str | None:
+        """Плечо под режим маржи сделки. None — готово (или настройка выключена),
+        строка — причина, по которой открывать позицию нельзя.
+
+        Прежде ошибка только писалась в лог, и ордер уходил при том плече, что
+        стояло на бирже: у isolated-позиции с плечом 10× ликвидация в ~10% от
+        входа, а стопы у робота программные.
+        """
+        if not self._is_derivative(market_type) or not bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
+            return None
         lev = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
         lev = max(1.0, min(lev, float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))))  # потолок-предохранитель
-        margin_mode = str(margin_mode or getattr(settings, "LIVE_MARGIN_MODE", "cross")).lower()
+        lev_out: float | int = int(lev) if lev.is_integer() else lev
         try:
-            self.client.set_margin_mode(margin_mode, symbol)
-            self.client.set_leverage(lev, symbol)
-            self._leverage_set.add(symbol)
-            log_event(logger, logging.INFO, "live_leverage_set", symbol=symbol, leverage=lev, margin=margin_mode)
+            mm = self.resolve_margin_mode(margin_mode)
+        except ValueError as exc:
+            return str(exc)
+        key = (symbol, mm, lev_out, position_side)
+        if key in self._leverage_set:
+            return None
+        try:
+            setter = getattr(self.client, "set_swap_leverage", None)
+            if callable(setter):
+                setter(symbol, lev_out, mm, position_side)
+            else:
+                params: dict[str, Any] = {"marginMode": mm}
+                if position_side:
+                    params["posSide"] = position_side
+                self.client.set_leverage(lev_out, symbol, params)
         except Exception as exc:  # noqa: BLE001
-            log_event(logger, logging.WARNING, "live_leverage_set_fail", symbol=symbol, error=str(exc))
+            log_event(logger, logging.ERROR, "live_leverage_set_fail", symbol=symbol,
+                      leverage=lev_out, margin=mm, position_side=position_side,
+                      error=f"{type(exc).__name__}: {exc}")
+            return f"leverage_setup_failed:{type(exc).__name__}: {exc}"
+        self._leverage_set.add(key)
+        log_event(logger, logging.INFO, "live_leverage_set", symbol=symbol, leverage=lev_out,
+                  margin=mm, position_side=position_side)
+        return None
 
     # ── подтверждение филла ─────────────────────────────────────────────────────
     def _await_fill(self, symbol: str, order: dict, client_id: str) -> dict:
@@ -307,7 +416,8 @@ class LiveExecutor:
         })
         return achievable, meta
 
-    def exchange_position_base(self, symbol: str, side: str, market_type: str) -> float | None:
+    def exchange_position_base(self, symbol: str, side: str, market_type: str,
+                               margin_mode: str | None = None) -> float | None:
         """Размер позиции НА БИРЖЕ в базовой монете. (#live-close-safety-2026-09-16)
 
         None — узнать не удалось (спот, нет метода, сбой запроса): вызывающий
@@ -315,9 +425,17 @@ class LiveExecutor:
         Клиенты бросают исключение при сбое, а пустой список отдают только на
         успешный ответ — поэтому ноль здесь означает «на бирже пусто», а не
         «не спросили».
+
+        Считаются только позиции в режиме маржи сделки: у OKX по одному символу
+        cross и isolated — разные позиции, и reduce-only в isolated не закроет
+        объём, лежащий в cross.
         """
-        if str(market_type).lower() not in ("swap", "future", "futures", "linear"):
+        if not self._is_derivative(market_type):
             return None
+        try:
+            want_margin = self.resolve_margin_mode(margin_mode)
+        except ValueError:
+            want_margin = None
         fetch = getattr(self.client, "fetch_positions", None)
         if not callable(fetch):
             return None
@@ -337,6 +455,9 @@ class LiveExecutor:
                 continue
             p_side = str(p.get("side") or "").lower()
             if p_side and want_side and p_side != want_side:
+                continue
+            p_margin = str(p.get("marginMode") or "").lower()
+            if p_margin and want_margin and p_margin != want_margin:
                 continue
             try:
                 contracts = abs(float(p.get("contracts") or 0.0))
@@ -396,8 +517,29 @@ class LiveExecutor:
                                client_order_id=client_id, filled_qty=amount,
                                avg_price=float(reference_price) if reference_price else None, **base)
 
-        # LIVE: плечо/режим маржи → отправка (одна попытка) → сверка → подтверждение
-        self._ensure_leverage(symbol, market_type, leverage, margin_mode)
+        # LIVE: режим маржи и позиций → плечо → отправка (одна попытка) → сверка → подтверждение
+        derivative = self._is_derivative(market_type)
+        hedged: bool | None = None
+        if derivative:
+            try:
+                margin_mode = self.resolve_margin_mode(margin_mode)
+            except ValueError as exc:
+                log_event(logger, logging.ERROR, "live_order_margin_mode_invalid",
+                          symbol=symbol, error=str(exc))
+                return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                                   client_order_id=client_id, error=str(exc), **base)
+            hedged = self.position_hedged()
+
+        # Плечо — только для открытия: закрытие риск не добавляет, и сбой
+        # настройки плеча не должен мешать выйти из позиции.
+        if derivative and not reduce_only:
+            leverage_error = self._ensure_leverage(
+                symbol, market_type, leverage, margin_mode,
+                self._position_side(side, False) if hedged else None,
+            )
+            if leverage_error:
+                return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                                   client_order_id=client_id, error=leverage_error, **base)
 
         # Перевод объёма в единицы рынка. Ошибка здесь означала бы позицию
         # кратно больше расчётной, поэтому неизвестный размер контракта —
@@ -422,11 +564,9 @@ class LiveExecutor:
                       symbol=symbol, base_amount=amount,
                       contract_size=unit_meta["contract_size"], contracts=send_amount)
 
-        params: dict[str, Any] = {"clientOrderId": client_id}
-        if market_type:
-            params["defaultType"] = market_type
-        if reduce_only:
-            params["reduceOnly"] = True
+        params = self.order_params(client_id=client_id, market_type=market_type, side=side,
+                                   reduce_only=reduce_only, margin_mode=margin_mode,
+                                   hedged=hedged)
 
         try:
             order = self.client.create_order_once(symbol, "market", side, send_amount, None, params)
@@ -435,6 +575,9 @@ class LiveExecutor:
                       client_order_id=client_id, error=str(exc))
             found = self._find_by_client_id(symbol, client_id)
             if not found:
+                # Отказ мог быть из-за смены режима позиций на аккаунте —
+                # следующий ордер спросит биржу заново, а не возьмёт кеш.
+                self._position_mode = None
                 return OrderResult(ok=False, mode="live", sent=False, status="error",
                                    client_order_id=client_id, error=f"create_failed:{exc}", **base)
             order = found  # ордер на самом деле ушёл — НЕ повторяем

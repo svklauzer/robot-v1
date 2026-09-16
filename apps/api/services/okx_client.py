@@ -286,6 +286,27 @@ class OKXClient:
             return self._retry(self.exchange.set_leverage, leverage, symbol, params or {})
         return None
 
+    def set_swap_leverage(self, symbol: str, leverage: float, margin_mode: str,
+                          position_side: str | None = None):
+        """Плечо свопа для режима маржи сделки. (#live-margin-posmode-2026-09-16)
+
+        У OKX режим маржи задаётся не на инструменте, а в каждом ордере (tdMode);
+        плечо хранится отдельно на паре инструмент + режим маржи (+ сторона в
+        Long/Short mode). Поэтому достаточно одного вызова set-leverage с
+        mgnMode — ccxt `set_margin_mode` бьёт в тот же эндпоинт и без `lever`
+        падает. Без marginMode ccxt ставит плечо для cross, а ордер isolated
+        открылся бы при том плече, что стоит на бирже.
+        Ошибку не глушим: без подтверждённого плеча позицию не открываем.
+        """
+        params: dict = {"marginMode": margin_mode}
+        if position_side:
+            params["posSide"] = position_side
+        return self._retry(self.exchange.set_leverage, leverage, symbol, params)
+
+    def fetch_position_mode(self) -> dict:
+        """{'hedged': True} — аккаунт в Long/Short mode, False — One-way."""
+        return self._retry(self.exchange.fetch_position_mode)
+
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         if hasattr(self.exchange, "set_margin_mode"):
             try:
