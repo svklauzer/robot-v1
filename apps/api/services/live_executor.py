@@ -359,7 +359,7 @@ class LiveExecutor:
         return accounts
 
     def effective_equity_usdt(self, market_type: str | None = None,
-                              robot_margin_usdt: float = 0.0) -> float:
+                              robot_margin_usdt: float = 0.0, strict: bool = False) -> float | None:
         """Капитал робота для сайзинга и экспозиции.
 
         paper/dry_run/off → RISK_EQUITY_USDT: бумажный капитал не меняется.
@@ -372,25 +372,37 @@ class LiveExecutor:
         без возврата экспозиция вычитала бы её второй раз, и каждая открытая
         сделка ужимала бы и лимит, и базу дневного убытка. Размер позиции из
         капитала строит плечо из конфига (FUTURES_LEVERAGE, потолок
-        LIVE_MAX_LEVERAGE). Fallback на RISK_EQUITY_USDT, если баланс недоступен.
+        LIVE_MAX_LEVERAGE).
+
+        strict=True — для торговли (#no-paper-equity-in-live-2026-09-17): в live
+        баланс не прочитан → None, пустой → 0.0, и вызывающий не открывает новых
+        сделок. Прежде подставлялся RISK_EQUITY_USDT — бумажный капитал (3000 при
+        реальных 300): при сбое сети или ключа позиции считались бы от денег,
+        которых на счёте нет. strict=False — прежний fallback для бумажных
+        симуляций (сетка, арбитраж), которым реальный счёт не нужен.
         """
         fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
             return fallback
 
         own = max(0.0, float(robot_margin_usdt or 0.0))
-        if market_type:
-            free = self.free_usdt(market_type)
-            return float(free) + own if free is not None and free + own > 0 else fallback
-
+        accounts = [market_type] if market_type else self.execution_accounts()
         total = 0.0
         seen = False
-        for account in self.execution_accounts():
+        for account in accounts:
             free = self.free_usdt(account)
             if free is not None:
                 total += float(free)
                 seen = True
-        return total + own if seen and total + own > 0 else fallback
+        if not seen:
+            if strict:
+                log_event(logger, logging.WARNING, "live_balance_unavailable", accounts=accounts)
+                return None
+            return fallback
+        capital = total + own
+        if strict:
+            return max(0.0, capital)
+        return capital if capital > 0 else fallback
 
     # ── единицы объёма ──────────────────────────────────────────────────────────
     def _to_exchange_amount(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:
