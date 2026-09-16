@@ -72,12 +72,14 @@ def test_swap_amount_rounds_down_to_whole_contracts():
     assert result == pytest.approx(0.04)
 
 
-def test_swap_amount_below_one_contract_rounds_up_to_the_minimum():
-    """Ниже одного контракта, но > 0: HTX-логика подстраховывает минимум в
-    1 контракт, а не в ноль — иначе сделка молча исчезает."""
+def test_swap_amount_below_the_minimum_lot_is_zero_not_one_lot():
+    """(#okx-lot-step-2026-09-16) Прежде объём меньше одного контракта
+    поднимался до одного — и BTC-план с кэпом 250 USDT становился позицией
+    760 USDT (1 контракт = 0.01 BTC). Подъём до лота выводит позицию за риск и
+    кэп; ноль честно говорит «открывать нечем»."""
     c = _client(_OKX_SWAP_MARKETS)
-    result = c.amount_to_precision("BTC/USDT:USDT", 0.003)  # < 0.01 (1 contract)
-    assert result == pytest.approx(0.01)
+    result = c.amount_to_precision("BTC/USDT:USDT", 0.003)  # 0.3 контракта < 1 (шаг фикстуры)
+    assert result == 0.0
 
 
 def test_swap_amount_never_exceeds_the_requested_amount_by_more_than_one_contract():

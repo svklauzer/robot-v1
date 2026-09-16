@@ -35,12 +35,13 @@ class OKXClient:
     ровно то поле, из которого ccxt строит унифицированный `contractSize`.
     Модель конвертации не HTX-специфика, а общий контракт деривативов OKX —
     порт логики корректен.
-    Осталась не устранённая (и унаследованная от HTXClient, не новая здесь)
-    неточность: округление ниже предполагает шаг ровно в 1 контракт
-    (`int(contracts)`), а не читает фактический `lotSz` — для инструментов,
-    где шаг лота отличается от 1, это может округлить консервативнее, чем
-    нужно. Не опасно (никогда не завышает объём), но не оптимально; тот же
-    компромисс уже есть в HTXClient.amount_to_precision.
+    (#okx-lot-step-2026-09-16) Прежняя версия округляла до ЦЕЛОГО контракта и
+    при объёме меньше одного контракта поднимала его до одного. Утверждение
+    «никогда не завышает объём» было неверным: у OKX шаг лота 0.01 контракта
+    (BTC/ETH/SOL/XRP/DOGE), а 1 контракт BTC = 0.01 BTC ≈ 760 USDT. План с кэпом
+    250 USDT превращался в позицию 760: в бумаге BTC стоил втрое больше других
+    сделок, в live каждый такой ордер отклонял бы кэп. Теперь шаг и минимум
+    берутся из рынка (lotSz/minSz), округление только вниз, меньше минимума — 0.
     """
 
     _markets_loaded: bool = False
@@ -320,13 +321,38 @@ class OKXClient:
             log_event(logger, logging.WARNING, "okx_price_precision_fallback", symbol=symbol, error=str(e))
             return float(price)
 
-    def amount_to_precision(self, symbol: str, amount: float) -> float:
-        """Округляет количество по точности OKX.
+    @staticmethod
+    def _contract_lot(market: dict) -> tuple[float, float]:
+        """(шаг, минимум) объёма ордера в КОНТРАКТАХ. (#okx-lot-step-2026-09-16)
 
-        См. класс-докстринг (#okx-precision-verified-2026-09-02): логика
-        конвертации в целые контракты для линейных свопов повторяет HTXClient
-        — сверено с документацией OKX (lotSz/minSz/ctVal), это её собственный
-        контракт деривативов, не HTX-специфика.
+        Источник — сырые `lotSz`/`minSz` OKX из `market["info"]`: однозначны при
+        любом режиме точности ccxt. Запасной — унифицированные
+        `precision.amount` (у OKX режим TICK_SIZE, это и есть шаг) и
+        `limits.amount.min`. Нет ни того ни другого — шаг в 1 контракт, как было.
+        """
+        def positive(value):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
+
+        info = market.get("info") or {}
+        step = (positive(info.get("lotSz"))
+                or positive((market.get("precision") or {}).get("amount"))
+                or 1.0)
+        minimum = (positive(info.get("minSz"))
+                   or positive(((market.get("limits") or {}).get("amount") or {}).get("min"))
+                   or step)
+        return step, minimum
+
+    def amount_to_precision(self, symbol: str, amount: float) -> float:
+        """Объём В МОНЕТАХ, который биржа примет, — округлённый вниз.
+
+        Для контрактного рынка: монеты → контракты → вниз до шага лота → монеты.
+        Меньше минимального лота — 0: сделку открывать нечем, а поднимать объём
+        до лота значит выйти за риск и кэп нотионала (#okx-lot-step-2026-09-16).
+        Результат никогда не больше `amount`.
         """
         try:
             amount = float(amount)
@@ -342,11 +368,15 @@ class OKXClient:
 
             if market and market.get('contract') and market.get('contractSize'):
                 contract_size = float(market['contractSize'])
+                step, minimum = self._contract_lot(market)
                 contracts = amount / contract_size
-                contracts_int = int(contracts)
-                if contracts_int < 1 and amount > 0:
-                    contracts_int = 1
-                return float(contracts_int * contract_size)
+                # Относительный допуск: 0.3/0.1 в float — 2.9999999, а не 3.
+                lots = math.floor(contracts / step * (1 + 1e-9))
+                contracts_q = lots * step
+                if contracts_q < minimum * (1 - 1e-9):
+                    return 0.0
+                base = round(contracts_q * contract_size, 12)
+                return float(min(base, amount))
 
             return float(self.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
@@ -379,9 +409,22 @@ class OKXClient:
             cost_limits = limits.get("cost") or {}
             price_limits = limits.get("price") or {}
 
+            # (#okx-lot-step-2026-09-16) У деривативов OKX лимиты объёма — в
+            # КОНТРАКТАХ (minSz), а план сравнивает их с объёмом в МОНЕТАХ. Пока
+            # объём поднимался до целого контракта, BTC (минимум 0.01 контракта)
+            # проходил случайно; с честным округлением 0.0032 BTC < «0.01» —
+            # и каждая BTC-сделка отклонялась бы. Отдаём в монетах.
+            min_amount = amount_limits.get("min")
+            max_amount = amount_limits.get("max")
+            if market.get("contract") and market.get("contractSize"):
+                size = float(market["contractSize"])
+                min_amount = float(min_amount) * size if min_amount is not None else None
+                max_amount = float(max_amount) * size if max_amount is not None else None
+
             return {
-                "min_amount": amount_limits.get("min"),
-                "max_amount": amount_limits.get("max"),
+                "amount_unit": "base",
+                "min_amount": min_amount,
+                "max_amount": max_amount,
                 "min_cost": cost_limits.get("min"),
                 "max_cost": cost_limits.get("max"),
                 "min_price": price_limits.get("min"),
