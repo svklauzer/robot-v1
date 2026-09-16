@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { Activity, Bot, Database, RefreshCw, Radio, ShieldAlert, ShieldCheck, Wifi } from "lucide-react";
 
 export default function HealthPage() {
@@ -84,17 +85,8 @@ export default function HealthPage() {
     await loadAll();
   }
 
-  useEffect(() => {
-    loadAll();
-    const timer = setInterval(loadAll, 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    loadEgress();
-    const timer = setInterval(loadEgress, 60000);
-    return () => clearInterval(timer);
-  }, [egressHours]);
+  useVisiblePolling(loadAll, 5000);
+  useVisiblePolling(loadEgress, 60000, {}, [egressHours]);
 
   const bot = health?.bot;
   const market = readiness?.market_connectivity || health?.market;

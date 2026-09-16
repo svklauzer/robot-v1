@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import {
   ArrowDownUp,
   PlayCircle,
@@ -45,11 +46,7 @@ export default function FundingArbPage() {
     }
   }
 
-  useEffect(() => {
-    loadAll();
-    const timer = setInterval(loadAll, 30000);
-    return () => clearInterval(timer);
-  }, []);
+  useVisiblePolling(loadAll, 30000);
 
   const candidates = useMemo(
     () => opportunities.filter((item) => item.status === "candidate"),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { RefreshCw, BookOpen, Database, BarChart3 } from "lucide-react";
 
 export default function OrderbookPage() {
@@ -45,11 +46,7 @@ export default function OrderbookPage() {
     load();
   }, []);
 
-  useEffect(() => {
-    if (!auto) return;
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, [auto]);
+  useVisiblePolling(load, 5000, { enabled: auto, immediate: false });
 
   useEffect(() => {
     loadVP();

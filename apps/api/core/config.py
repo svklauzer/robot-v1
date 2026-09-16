@@ -1281,6 +1281,17 @@ class Settings(BaseSettings):
     # (#audit-event-spam) Дедуп повторяющихся blocked-событий intelligence_events:
     # одно и то же (symbol, decision) не пишем чаще, чем раз в N минут.
     INTEL_EVENT_DEDUP_MINUTES: float = 10.0
+    # (#scan-cache-2026-09-16) GET /intelligence/scan — живой скан всех символов
+    # (5 ТФ × 250 свечей на символ, ~50 запросов к бирже) на КАЖДЫЙ вызов, а
+    # страница Intelligence дёргает его раз в 10 с. Результат держится столько
+    # секунд, повторный скан при идущем не запускается. Торговый цикл этим
+    # эндпоинтом не пользуется; реже скан — меньше конкуренции с ним за лимиты
+    # биржи и её размыкатель. 0 — без кеша.
+    INTEL_SCAN_CACHE_SEC: float = 60.0
+    # (#memory-probe-2026-09-16) Строка memory_usage в лог; WARNING от доли
+    # лимита контейнера.
+    MEMORY_LOG_INTERVAL_SEC: float = 600.0
+    MEMORY_WARN_SHARE: float = 0.85
 
     # (#audit-traj) Компактная траектория сделки [age_sec, current_pct] в
     # lifecycle — сырьё для offline A/B exit-параметров (/ml/exit-replay).

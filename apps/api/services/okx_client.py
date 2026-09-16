@@ -117,6 +117,12 @@ class OKXClient:
             "options": {
                 "defaultType": settings.OKX_MARKET_TYPE,
                 "adjustForTimeDifference": True,
+                # (#memory-probe-2026-09-16) Только спот и свопы. По умолчанию
+                # ccxt грузит ещё срочные фьючерсы и опционы: 4443 рынка и
+                # +55 МБ против 1905 и +28 МБ (замер 16.09) — при лимите
+                # контейнера 512 МБ. Торговля идёт спотом (OKX_MARKET_TYPE),
+                # комиссии и стакан — по свопам; срочные и опционы не нужны нигде.
+                "fetchMarkets": {"types": ["spot", "swap"]},
             },
         }
 

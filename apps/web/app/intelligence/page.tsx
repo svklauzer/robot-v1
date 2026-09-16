@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import GradeBadge from "../../components/GradeBadge";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import ImpulseLatchLine from "../../components/ImpulseLatchLine";
 import { CLOSE_REASON_LABELS } from "../../lib/closeReasons";
 import { RefreshCw } from "lucide-react";
@@ -190,11 +191,7 @@ export default function IntelligencePage() {
     }
   }
 
-  useEffect(() => {
-    loadScan();
-    const timer = setInterval(loadScan, 10000);
-    return () => clearInterval(timer);
-  }, []);
+  useVisiblePolling(loadScan, 10000);
 
   const results = Array.isArray(scanData?.results) ? scanData.results : [];
 

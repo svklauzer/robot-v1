@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { apiGet, apiPost } from "../../lib/api";
+import { useVisiblePolling } from "../../lib/useVisiblePolling";
 import { Grid3x3, RefreshCw, Power, PlayCircle, XCircle } from "lucide-react";
 
 const REGIME_COLOR: Record<string, string> = {
@@ -69,11 +70,7 @@ export default function GridPage() {
     load();
   }, []);
 
-  useEffect(() => {
-    if (!auto) return;
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, [auto]);
+  useVisiblePolling(load, 5000, { enabled: auto, immediate: false });
 
   const enabled = !!state?.enabled;
   const cfg = state?.config || {};

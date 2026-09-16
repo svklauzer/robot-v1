@@ -94,13 +94,29 @@ def _percentiles(values: list[float]) -> dict:
 def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(window_hours))
 
+    # (#memory-probe-2026-09-16) Две лёгкие выборки вместо одной тяжёлой.
+    # Перепись и концентрация читают только решение, символ и режим, а payload
+    # нужен лишь событиям ТЗ и TP2 — 20–27% окна. Прежняя выборка поднимала в
+    # память ORM-объекты со всеми payload: за 168 ч это 6724 события целиком,
+    # и отчёт стоял в ряду подозреваемых, когда 16.09 Render перезапустил
+    # robot-api за превышение памяти. Результат отчёта тот же.
     rows = (
-        db.query(IntelligenceEvent)
+        db.query(IntelligenceEvent.id, IntelligenceEvent.decision,
+                 IntelligenceEvent.symbol, IntelligenceEvent.regime)
         .filter(IntelligenceEvent.created_at >= cutoff)
         .order_by(IntelligenceEvent.id.desc())
         .limit(int(max_rows))
         .all()
     )
+    detailed = (
+        db.query(IntelligenceEvent.decision, IntelligenceEvent.symbol,
+                 IntelligenceEvent.regime, IntelligenceEvent.payload_json)
+        .filter(IntelligenceEvent.created_at >= cutoff)
+        .filter(IntelligenceEvent.id >= rows[-1].id)
+        .filter(IntelligenceEvent.decision.in_([TZ_DECISION, TP2_DECISION]))
+        .order_by(IntelligenceEvent.id.desc())
+        .all()
+    ) if rows else []
 
     by_decision: dict[str, int] = {}
     for row in rows:
@@ -123,7 +139,7 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
     latch_by_kind: dict[str, int] = {}
     latch_sole_by_kind: dict[str, int] = {}
 
-    for row in rows:
+    for row in detailed:
         payload = row.payload_json if isinstance(row.payload_json, dict) else {}
         if str(row.decision or "") != TZ_DECISION or not payload.get("evaluated"):
             continue
@@ -174,7 +190,7 @@ def build(db: Session, *, window_hours: float = 24.0, max_rows: int = 20000) -> 
         "events": len(rows),
         "by_decision": dict(sorted(by_decision.items(), key=lambda kv: kv[1], reverse=True)),
         "concentration": _concentration(rows),
-        "tp2_reach": _tp2_reach(rows),
+        "tp2_reach": _tp2_reach(detailed),
         "adx_rising": {
             "tz_evaluated": tz_evaluated,
             "adx_not_rising_failed": adx_failed,

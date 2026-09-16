@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../lib/api";
+import { useVisiblePolling } from "../lib/useVisiblePolling";
 
 type LiveState = {
   effective_mode?: string;      // off | dry_run | live
@@ -54,20 +55,17 @@ export default function ModeBanner() {
   const [state, setState] = useState<LiveState | null>(null);
   const [err, setErr] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const data = await apiGet("/live/state");
-        if (alive) { setState(data); setErr(false); }
-      } catch {
-        if (alive) setErr(true);
-      }
-    };
-    load();
-    const t = setInterval(load, 30000); // 30s — режим меняется редко
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+
+  useVisiblePolling(async () => {
+    try {
+      const data = await apiGet("/live/state");
+      if (aliveRef.current) { setState(data); setErr(false); }
+    } catch {
+      if (aliveRef.current) setErr(true);
+    }
+  }, 30000); // 30s — режим меняется редко
 
   if (err || !state) return null; // бэк без эндпоинта / недоступен → не мешаем
 
