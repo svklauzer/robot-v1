@@ -119,6 +119,8 @@ _PINNED_ON_PURPOSE: frozenset[str] = frozenset({
     # делает запись лишней — сменится дефолт, и раздача удвоится молча.
     "AFFILIATE_TRIAL_ONE_PER_USER",
     "LIVE_MAX_ORDER_NOTIONAL_USDT",
+    # (#exchange-stop-2026-09-16) Страховка live-позиций на время простоя робота
+    "LIVE_EXCHANGE_STOP_ENABLED", "LIVE_EXCHANGE_STOP_BUFFER_PCT",
     # Аварийные выключатели
     "GRID_ENABLED", "GRID_KILL_SWITCH_ENABLED", "CROSS_FARB_ENABLED",
     "ENABLE_FUNDING_ARB", "ENABLE_RANGE_STRATEGY", "ENABLE_CRT_STRATEGY",

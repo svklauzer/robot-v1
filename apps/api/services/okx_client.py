@@ -324,6 +324,27 @@ class OKXClient:
     # ccxt okx разбирает сторону позиции из этого ключа (posSide в запросе).
     POSITION_SIDE_PARAM = "positionSide"
 
+    # ── стоп на бирже (#exchange-stop-2026-09-16) ─────────────────────────────
+    def create_stop_loss_order(self, symbol: str, side: str, amount: float,
+                               trigger_price: float, params: dict | None = None):
+        """Условный стоп-лосс по рынку: ordType=conditional, slOrdPx=-1.
+
+        ОДНА попытка, как create_order_once: повтор при таймауте поставил бы
+        второй стоп; расхождение ловит сверка открытых стопов. Алгоритмические
+        ордера OKX не резервируют ни маржу, ни позицию — рыночному закрытию
+        стоп не мешает.
+        """
+        query = dict(params or {})
+        query["stopLossPrice"] = trigger_price
+        return self.exchange.create_order(symbol, "market", side, amount, None, query)
+
+    def fetch_open_stop_orders(self, symbol: str):
+        return self._retry(self.exchange.fetch_open_orders, symbol, None, None,
+                           {"trigger": True, "ordType": "conditional"})
+
+    def cancel_stop_order(self, order_id: str, symbol: str):
+        return self._retry(self.exchange.cancel_order, order_id, symbol, {"trigger": True})
+
     @staticmethod
     def make_client_order_id(purpose: str) -> str:
         """clOrdId OKX: буквы и цифры, до 32 символов."""

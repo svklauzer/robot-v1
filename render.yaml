@@ -475,6 +475,13 @@ services:
         value: "0.4"
       - key: LIVE_MAX_ORDER_NOTIONAL_USDT
         value: "250"
+      # Стоп-лосс на бирже для live-позиций свопа: страховка на рестарт/деплой.
+      # Стоит дальше программного на BUFFER_PCT, чтобы при живом роботе первым
+      # срабатывал программный. В paper и dry_run не действует.
+      - key: LIVE_EXCHANGE_STOP_ENABLED
+        value: "true"
+      - key: LIVE_EXCHANGE_STOP_BUFFER_PCT
+        value: "0.5"
       - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
         value: "5"
       - key: MAX_ACTIVE_SIGNALS
