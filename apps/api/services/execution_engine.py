@@ -621,7 +621,8 @@ class ExecutionEngine:
             from services.live_executor import LIVE_EXECUTOR
 
             return LIVE_EXECUTOR.exchange_position_base(
-                route.exchange_symbol, str(position.side).lower(), route.market_type
+                route.exchange_symbol, str(position.side).lower(), route.market_type,
+                route.margin_mode,
             )
         except Exception:  # noqa: BLE001
             return None

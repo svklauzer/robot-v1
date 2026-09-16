@@ -3,6 +3,7 @@ import math
 import random
 import socket
 import time
+import uuid
 
 import ccxt
 import urllib3.util.connection as _urllib3_connection
@@ -331,6 +332,81 @@ class HTXClient:
         if hasattr(self.exchange, "set_leverage"):
             return self._retry(self.exchange.set_leverage, leverage, symbol, params or {})
         return None
+
+    def set_swap_leverage(self, symbol: str, leverage: float, margin_mode: str,
+                          position_side: str | None = None):
+        """Плечо linear-свопа для режима маржи сделки. (#live-margin-posmode-2026-09-16)
+
+        ccxt htx берёт режим маржи для v5 position/lever из `marginMode`, но
+        оставляет и сам ключ в теле запроса. Передаём родное имя `margin_mode`:
+        ccxt кладёт его в запрос как есть, лишних полей бирже не уходит.
+        `set_margin_mode` у ccxt htx не поддерживается — режим маржи HTX тоже
+        задаётся в ордере. Сторона позиции нужна для isolated в двустороннем
+        режиме (dual_side). Ошибку не глушим: без подтверждённого плеча позицию
+        не открываем.
+        """
+        params = {"margin_mode": margin_mode}
+        if position_side:
+            params["position_side"] = position_side
+        return self._retry(self.exchange.set_leverage, leverage, symbol, params)
+
+    # ccxt htx для v5 стороны позиции не разбирает — родной ключ уходит бирже как есть.
+    POSITION_SIDE_PARAM = "position_side"
+
+    # Режимы залога USDT-M (GET /v5/account/asset_mode): 0 — одновалютный
+    # (старый), 1 — мультивалютный, 2 — одновалютный (новый).
+    _ASSET_MODE_SINGLE_OLD = 0
+
+    @staticmethod
+    def _v5_data(response) -> dict:
+        data = (response or {}).get("data") if isinstance(response, dict) else None
+        if isinstance(data, list):
+            data = data[0] if data else None
+        return data if isinstance(data, dict) else {}
+
+    def fetch_derivatives_account(self) -> dict:
+        """Режим счёта USDT-M: {'hedged', 'blocker', 'info'}. (#live-margin-posmode-2026-09-16)
+
+        ccxt htx ведёт ВСЕ приватные запросы linear-свопа (ордер, плечо,
+        позиции, баланс) через API v5. HTX выпустил v5 для счетов с
+        мультивалютным залогом и велел одновалютным (старым) оставаться на
+        прежнем API (объявление HTX 08.05.2025). Поэтому старый одновалютный
+        режим — блокер открытия с понятной причиной, а не отказ биржи на
+        первой сделке. Режим 2 («одновалютный, новый») не блокируем: в
+        объявлении его нет, проверяется первым ордером.
+        """
+        asset_mode_raw = self._v5_data(
+            self._retry(self.exchange.contractPrivateGetV5AccountAssetMode)
+        ).get("asset_mode")
+        try:
+            asset_mode = int(asset_mode_raw) if asset_mode_raw is not None else None
+        except (TypeError, ValueError):
+            asset_mode = None
+        info = {"asset_mode": asset_mode, "position_mode": None}
+        if asset_mode == self._ASSET_MODE_SINGLE_OLD:
+            blocker = ("htx_asset_mode_single_old: USDT-M счёт HTX в старом одновалютном "
+                       "режиме залога, а ccxt торгует свопы через API v5 — переключить "
+                       "на Multi-Assets Collateral")
+            return {"hedged": None, "blocker": blocker, "info": info}
+
+        position_mode = self._v5_data(
+            self._retry(self.exchange.contractPrivateGetV5PositionMode)
+        ).get("position_mode")
+        info["position_mode"] = position_mode
+        hedged = None
+        if position_mode in ("dual_side", "single_side"):
+            hedged = position_mode == "dual_side"
+        return {"hedged": hedged, "blocker": None, "info": info}
+
+    @staticmethod
+    def make_client_order_id(purpose: str) -> str:
+        """client_order_id HTX-свопа — только целое число (ccxt htx берёт его
+        через safe_integer, буквенный не передаёт вовсе, и сверка по номеру
+        после обрыва связи не находила бы ордер). Не больше 52 бит: ccxt
+        переводит число через float, и 62-битный номер уходил бы на биржу
+        искажённым (594284936468578360 → …304) — сверка снова не нашла бы ордер.
+        Спот HTX принимает строку до 64 символов, цифры подходят и ему."""
+        return str((uuid.uuid4().int & ((1 << 52) - 1)) or 1)
 
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         """cross/isolated для символа (swap). best-effort."""

@@ -2,6 +2,7 @@ import logging
 import math
 import random
 import time
+import uuid
 
 import ccxt
 from core.config import settings
@@ -285,6 +286,49 @@ class OKXClient:
         if hasattr(self.exchange, "set_leverage"):
             return self._retry(self.exchange.set_leverage, leverage, symbol, params or {})
         return None
+
+    def set_swap_leverage(self, symbol: str, leverage: float, margin_mode: str,
+                          position_side: str | None = None):
+        """Плечо свопа для режима маржи сделки. (#live-margin-posmode-2026-09-16)
+
+        У OKX режим маржи задаётся не на инструменте, а в каждом ордере (tdMode);
+        плечо хранится отдельно на паре инструмент + режим маржи (+ сторона в
+        Long/Short mode). Поэтому достаточно одного вызова set-leverage с
+        mgnMode — ccxt `set_margin_mode` бьёт в тот же эндпоинт и без `lever`
+        падает. Без marginMode ccxt ставит плечо для cross, а ордер isolated
+        открылся бы при том плече, что стоит на бирже.
+        Ошибку не глушим: без подтверждённого плеча позицию не открываем.
+        """
+        params: dict = {"marginMode": margin_mode}
+        if position_side:
+            params["posSide"] = position_side
+        return self._retry(self.exchange.set_leverage, leverage, symbol, params)
+
+    def fetch_derivatives_account(self) -> dict:
+        """Режим счёта для свопов: {'hedged', 'blocker', 'info'}.
+
+        Один запрос account/config: posMode — режим позиций (long_short_mode →
+        нужна сторона позиции в ордере), acctLv — режим счёта. В режиме
+        «Spot mode» (acctLv=1) свопы не торгуются вовсе.
+        """
+        res = self._retry(self.exchange.fetch_position_mode) or {}
+        info = res.get("info") or {}
+        acct_lv = str(info.get("acctLv") or "")
+        blocker = None
+        if acct_lv == "1":
+            blocker = ("okx_account_mode_spot_only: счёт OKX в режиме Spot mode, свопы не "
+                       "торгуются — переключить Trading mode на Spot and futures")
+        return {"hedged": bool(res.get("hedged")), "blocker": blocker,
+                "info": {"posMode": info.get("posMode"), "acctLv": acct_lv or None}}
+
+    # ccxt okx разбирает сторону позиции из этого ключа (posSide в запросе).
+    POSITION_SIDE_PARAM = "positionSide"
+
+    @staticmethod
+    def make_client_order_id(purpose: str) -> str:
+        """clOrdId OKX: буквы и цифры, до 32 символов."""
+        tag = "".join(ch for ch in str(purpose) if ch.isalnum())[:8] or "ord"
+        return f"{tag}{uuid.uuid4().hex}"[:32]
 
     def set_margin_mode(self, margin_mode: str, symbol: str, params: dict | None = None):
         if hasattr(self.exchange, "set_margin_mode"):
