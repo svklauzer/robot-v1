@@ -567,15 +567,20 @@ function FilterSelect({
 
 // (#exchange-stop-2026-09-16) В live у позиции свопа на бирже стоит страховочный
 // стоп дальше программного — на случай рестарта робота
-// (services/exchange_stop.py → plan_json.exchange_stop). В paper записи нет.
+// (services/exchange_stop.py → plan_json.exchange_stop). (#dry-run-parity-2026-09-16)
+// В dry_run та же сверка идёт без биржи: mode="dry_run" — стоп, который стоял бы.
 function StopValue({ stop, exchangeStop }: { stop: any; exchangeStop: any }) {
   const placed = exchangeStop?.order_id ? exchangeStop.trigger : null;
   const failures = Number(exchangeStop?.failures ?? 0);
+  const simulated = exchangeStop?.mode === "dry_run";
   return (
     <>
       {fmt(stop, 4)}
       {placed != null && (
-        <div className="mt-0.5 text-[11px] font-normal text-emerald-100/50">на бирже {fmt(placed, 4)}</div>
+        <div className="mt-0.5 text-[11px] font-normal text-emerald-100/50">
+          {simulated ? "dry-run: на бирже был бы " : "на бирже "}
+          {fmt(placed, 4)}
+        </div>
       )}
       {failures > 0 && (
         <div className="mt-0.5 text-[11px] font-normal text-red-300">биржа отклонила стоп ×{failures}</div>

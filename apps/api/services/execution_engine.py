@@ -589,10 +589,10 @@ class ExecutionEngine:
         self.db.add(close_order)
         self.db.flush()
 
-        if self._live_mode():
-            # (#exchange-stop-2026-09-16) Позиция закрыта — стоп на бирже снимаем
-            # после закрытия, а не до: выход не ждёт лишнего запроса.
-            await self._cancel_exchange_stops(signal, route, reason)
+        # (#exchange-stop-2026-09-16) Позиция закрыта — стоп на бирже снимаем
+        # после закрытия, а не до: выход не ждёт лишнего запроса. Режим решает
+        # сервис: live — ордер, dry_run — запись в лог, off — ничего.
+        await self._cancel_exchange_stops(signal, route, reason)
 
         if not self._live_mode():
             # off/dry_run: бумага уже учла закрытие, ядро только логирует.

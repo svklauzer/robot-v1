@@ -247,12 +247,13 @@ class SignalLifecycleManager:
 
     async def _sync_exchange_stop(self, db, signal: Signal) -> None:
         """(#exchange-stop-2026-09-16) После прохода — привести стоп на бирже к
-        итогу прохода: вход, перенос стопа, частичное закрытие, закрытие. Только
-        live; в paper и dry_run выходит до запросов к БД и бирже."""
+        итогу прохода: вход, перенос стопа, частичное закрытие, закрытие. live —
+        настоящие ордера; dry_run — та же сверка без запросов к бирже
+        (#dry-run-parity-2026-09-16); off — выходит до запросов к БД."""
         try:
-            from services.exchange_stop import ExchangeStopService, live_stops_active
+            from services.exchange_stop import ExchangeStopService, stops_mode
 
-            if not live_stops_active():
+            if stops_mode() is None:
                 return
             position = self._get_open_position_for_signal(db, signal)
             state = (signal.plan_json or {}).get("exchange_stop") or {}

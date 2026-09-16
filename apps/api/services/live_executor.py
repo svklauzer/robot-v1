@@ -231,6 +231,12 @@ class LiveExecutor:
             params["reduceOnly"] = True
         return params
 
+    @staticmethod
+    def _leverage_value(leverage: float | None) -> float | int:
+        lev = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
+        lev = max(1.0, min(lev, float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))))  # потолок-предохранитель
+        return int(lev) if lev.is_integer() else lev
+
     def _ensure_leverage(self, symbol: str, market_type: str, leverage: float | None,
                          margin_mode: str | None = None,
                          position_side: str | None = None) -> str | None:
@@ -243,9 +249,7 @@ class LiveExecutor:
         """
         if not self._is_derivative(market_type) or not bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
             return None
-        lev = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
-        lev = max(1.0, min(lev, float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))))  # потолок-предохранитель
-        lev_out: float | int = int(lev) if lev.is_integer() else lev
+        lev_out = self._leverage_value(leverage)
         try:
             mm = self.resolve_margin_mode(margin_mode)
         except ValueError as exc:
@@ -561,6 +565,21 @@ class LiveExecutor:
             return None
         return [s for s in (self._normalize_stop(o) for o in raw) if s]
 
+    def stop_order_params(self, position_side: str, margin_mode: str | None, *,
+                          hedged: bool | None, market_type: str) -> tuple[str, str, dict]:
+        """(сторона, номер, параметры) стоп-ордера — одни для live и dry_run.
+        ValueError — неизвестный режим маржи."""
+        close_side = self._close_side(position_side)
+        mm = self.resolve_margin_mode(margin_mode)
+        client_id = self._client_order_id("slexch")
+        params = self.order_params(
+            client_id=client_id, market_type=market_type, side=close_side,
+            reduce_only=True, margin_mode=mm, hedged=hedged,
+            position_side_key=getattr(getattr(self, "client", None), "POSITION_SIDE_PARAM",
+                                      "positionSide"),
+        )
+        return close_side, client_id, params
+
     def place_stop_order(self, symbol: str, position_side: str, contracts: float,
                          trigger_price: float, *, market_type: str,
                          margin_mode: str | None) -> dict:
@@ -574,16 +593,11 @@ class LiveExecutor:
         if contracts <= 0:
             return {**base, "ok": False, "error": "amount_below_min_contract"}
         try:
-            mm = self.resolve_margin_mode(margin_mode)
+            close_side, client_id, params = self.stop_order_params(
+                position_side, margin_mode, hedged=self.derivatives_account()["hedged"],
+                market_type=market_type)
         except ValueError as exc:
             return {**base, "ok": False, "error": str(exc)}
-        hedged = self.derivatives_account()["hedged"]
-        client_id = self._client_order_id("slexch")
-        params = self.order_params(
-            client_id=client_id, market_type=market_type, side=close_side,
-            reduce_only=True, margin_mode=mm, hedged=hedged,
-            position_side_key=getattr(self.client, "POSITION_SIDE_PARAM", "positionSide"),
-        )
         try:
             order = create(symbol, close_side, float(contracts), float(trigger_price), params) or {}
         except Exception as exc:  # noqa: BLE001
@@ -619,6 +633,53 @@ class LiveExecutor:
             return False
         log_event(logger, logging.INFO, "live_stop_cancelled", symbol=symbol, order_id=order_id)
         return True
+
+    # ── сборка ордера: одна для live и dry_run (#dry-run-parity-2026-09-16) ─────
+    def prepare_order(self, symbol: str, side: str, amount: float, *, market_type: str,
+                      reduce_only: bool, leverage: float | None, margin_mode: str | None,
+                      client_id: str, hedged: bool | None) -> dict:
+        """Всё, что уйдёт на биржу, без обращения к ней.
+
+        {"ok", "error", "error_event", "margin_mode", "amount", "unit_meta",
+         "params", "leverage"}
+
+        Прежде dry_run выходил ДО перевода в контракты, режима маржи и сборки
+        параметров: в paper нельзя было увидеть ни объём в контрактах, ни
+        marginMode, ни отказ «меньше одного контракта» — всё это впервые
+        случилось бы на живой бирже. Теперь обе ветки собирают ордер здесь.
+        """
+        out: dict[str, Any] = {"ok": False, "error": None, "error_event": None,
+                               "margin_mode": None, "amount": None, "unit_meta": None,
+                               "params": None, "leverage": None}
+        derivative = self._is_derivative(market_type)
+        if derivative:
+            try:
+                out["margin_mode"] = self.resolve_margin_mode(margin_mode)
+            except ValueError as exc:
+                return {**out, "error": str(exc), "error_event": "live_order_margin_mode_invalid"}
+
+        # Перевод объёма в единицы рынка. Ошибка здесь означала бы позицию
+        # кратно больше расчётной, поэтому неизвестный размер контракта —
+        # отказ, а не отправка «как есть».
+        try:
+            send_amount, unit_meta = self._to_exchange_amount(symbol, float(amount), market_type)
+        except ValueError as exc:
+            return {**out, "error": str(exc), "error_event": "live_order_unit_unresolved"}
+        out.update(amount=send_amount, unit_meta=unit_meta)
+        if send_amount <= 0:
+            return {**out, "error": "amount_below_min_contract",
+                    "error_event": "live_order_amount_below_one_contract"}
+
+        out["params"] = self.order_params(
+            client_id=client_id, market_type=market_type, side=side, reduce_only=reduce_only,
+            margin_mode=out["margin_mode"], hedged=hedged,
+            position_side_key=getattr(self.client, "POSITION_SIDE_PARAM", "positionSide"),
+        )
+        # Плечо — только для открытия: закрытие риск не добавляет.
+        if derivative and not reduce_only and bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
+            out["leverage"] = self._leverage_value(leverage)
+        out["ok"] = True
+        return out
 
     # ── публичный вход: рыночный ордер ──────────────────────────────────────────
     def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
@@ -663,19 +724,45 @@ class LiveExecutor:
                           note="в LIVE этот ордер был бы ОТКЛОНЁН кэпом. Поднять "
                                "LIVE_MAX_ORDER_NOTIONAL_USDT или снизить размер позиции "
                                "ДО включения live — иначе бумага разойдётся с биржей")
-            log_event(logger, logging.INFO, "live_dry_run_order", symbol=symbol, side=side,
+            # (#dry-run-parity-2026-09-16) Та же сборка, что в live: контракты,
+            # режим маржи, параметры, плечо. Режим счёта (приватный запрос) в
+            # dry_run не спрашивается — сторона позиции собирается как для
+            # One-way. Бумага не меняется: результат прежний, а отказ, который
+            # случился бы в live, виден в логе и в поле error.
+            try:
+                prepared = self.prepare_order(
+                    symbol, side, amount, market_type=market_type, reduce_only=reduce_only,
+                    leverage=leverage, margin_mode=margin_mode, client_id=client_id, hedged=None,
+                )
+            except Exception as exc:  # noqa: BLE001 — сборка не должна ронять бумагу
+                prepared = {"ok": False, "error": f"prepare_failed:{type(exc).__name__}: {exc}"}
+            would_reject = None if prepared.get("ok") else prepared.get("error")
+            if over_cap and would_reject is None:
+                would_reject = f"notional>{cap}"
+            unit_meta = prepared.get("unit_meta") or {}
+            log_event(logger, logging.WARNING if would_reject else logging.INFO,
+                      "live_dry_run_order", symbol=symbol, side=side,
                       qty=amount, market_type=market_type, reduce_only=reduce_only,
-                      ref_price=reference_price, purpose=purpose, client_order_id=client_id)
+                      ref_price=reference_price, purpose=purpose, client_order_id=client_id,
+                      margin_mode=prepared.get("margin_mode"),
+                      exchange_amount=prepared.get("amount"),
+                      submitted_unit=unit_meta.get("submitted_unit"),
+                      contract_size=unit_meta.get("contract_size"),
+                      params=prepared.get("params"), leverage=prepared.get("leverage"),
+                      account_mode="not_checked_in_dry_run",
+                      would_reject=would_reject)
             return OrderResult(ok=True, mode="dry_run", sent=False, status="dry_run",
                                client_order_id=client_id, filled_qty=amount,
-                               avg_price=float(reference_price) if reference_price else None, **base)
+                               avg_price=float(reference_price) if reference_price else None,
+                               error=f"would_reject:{would_reject}" if would_reject else None,
+                               **base)
 
-        # LIVE: режим маржи и позиций → плечо → отправка (одна попытка) → сверка → подтверждение
-        derivative = self._is_derivative(market_type)
+        # LIVE: режим счёта → сборка ордера → плечо → отправка (одна попытка) → сверка → подтверждение
         hedged: bool | None = None
-        if derivative:
+        if self._is_derivative(market_type):
+            # Неизвестный режим маржи — отказ до любых запросов к бирже.
             try:
-                margin_mode = self.resolve_margin_mode(margin_mode)
+                self.resolve_margin_mode(margin_mode)
             except ValueError as exc:
                 log_event(logger, logging.ERROR, "live_order_margin_mode_invalid",
                           symbol=symbol, error=str(exc))
@@ -692,45 +779,34 @@ class LiveExecutor:
                 return OrderResult(ok=False, mode=mode, sent=False, status="error",
                                    client_order_id=client_id, error=account["blocker"], **base)
 
+        prepared = self.prepare_order(
+            symbol, side, amount, market_type=market_type, reduce_only=reduce_only,
+            leverage=leverage, margin_mode=margin_mode, client_id=client_id, hedged=hedged,
+        )
+        if not prepared["ok"]:
+            unit_meta = prepared.get("unit_meta") or {}
+            log_event(logger, logging.ERROR, prepared["error_event"], symbol=symbol,
+                      market_type=market_type, base_amount=amount,
+                      contract_size=unit_meta.get("contract_size"), error=prepared["error"])
+            return OrderResult(ok=False, mode=mode, sent=False, status="error",
+                               client_order_id=client_id, error=prepared["error"], **base)
+
         # Плечо — только для открытия: закрытие риск не добавляет, и сбой
         # настройки плеча не должен мешать выйти из позиции.
-        if derivative and not reduce_only:
+        if prepared["leverage"] is not None:
             leverage_error = self._ensure_leverage(
-                symbol, market_type, leverage, margin_mode,
+                symbol, market_type, leverage, prepared["margin_mode"],
                 self._position_side(side, False) if hedged else None,
             )
             if leverage_error:
                 return OrderResult(ok=False, mode=mode, sent=False, status="error",
                                    client_order_id=client_id, error=leverage_error, **base)
 
-        # Перевод объёма в единицы рынка. Ошибка здесь означала бы позицию
-        # кратно больше расчётной, поэтому неизвестный размер контракта —
-        # отказ, а не отправка «как есть».
-        try:
-            send_amount, unit_meta = self._to_exchange_amount(symbol, amount, market_type)
-        except ValueError as exc:
-            log_event(logger, logging.ERROR, "live_order_unit_unresolved",
-                      symbol=symbol, market_type=market_type, error=str(exc))
-            return OrderResult(ok=False, mode=mode, sent=False, status="error",
-                               client_order_id=client_id, error=str(exc), **base)
-
-        if send_amount <= 0:
-            log_event(logger, logging.ERROR, "live_order_amount_below_one_contract",
-                      symbol=symbol, base_amount=amount, contract_size=unit_meta.get("contract_size"))
-            return OrderResult(ok=False, mode=mode, sent=False, status="error",
-                               client_order_id=client_id,
-                               error="amount_below_min_contract", **base)
-
+        send_amount, unit_meta, params = prepared["amount"], prepared["unit_meta"], prepared["params"]
         if unit_meta["submitted_unit"] == "contracts":
             log_event(logger, logging.INFO, "live_order_amount_in_contracts",
                       symbol=symbol, base_amount=amount,
                       contract_size=unit_meta["contract_size"], contracts=send_amount)
-
-        params = self.order_params(client_id=client_id, market_type=market_type, side=side,
-                                   reduce_only=reduce_only, margin_mode=margin_mode,
-                                   hedged=hedged,
-                                   position_side_key=getattr(self.client, "POSITION_SIDE_PARAM",
-                                                             "positionSide"))
 
         try:
             order = self.client.create_order_once(symbol, "market", side, send_amount, None, params)
