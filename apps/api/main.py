@@ -410,6 +410,59 @@ async def background_memory_log_loop():
         await asyncio.sleep(max(60.0, float(getattr(settings, "MEMORY_LOG_INTERVAL_SEC", 600.0))))
 
 
+_RECON_ALERTED: set[str] = set()
+
+
+async def background_exchange_reconciliation_loop():
+    """Сверка робота с биржей (#exchange-reconciliation-2026-09-16) — только live.
+
+    Читает биржу раз в EXCHANGE_RECONCILIATION_INTERVAL_SEC и кладёт итог в кеш,
+    который отдаёт /system/health. Владелец узнаёт о каждом НОВОМ расхождении
+    один раз; исчезнувшее расхождение снимается с учёта и при повторе снова
+    дойдёт до владельца. Ничего на бирже не меняет.
+    """
+    await asyncio.sleep(90)
+
+    while True:
+        interval = max(60.0, float(getattr(settings, "EXCHANGE_RECONCILIATION_INTERVAL_SEC", 300.0)))
+        try:
+            from services.exchange_reconciliation import ExchangeReconciliationService, mismatch_key
+            from services.live_executor import LIVE_EXECUTOR
+
+            if bool(getattr(settings, "EXCHANGE_RECONCILIATION_ENABLED", True)) and LIVE_EXECUTOR.is_live():
+                def _run():
+                    db = SessionLocal()
+                    try:
+                        bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
+                        return ExchangeReconciliationService().reconcile(db, bot.id if bot else None)
+                    finally:
+                        db.close()
+
+                result = await asyncio.to_thread(_run)
+                keys = {mismatch_key(m): m for m in result.get("mismatches") or []}
+                fresh = [m for k, m in keys.items() if k not in _RECON_ALERTED]
+                _RECON_ALERTED.intersection_update(keys)
+                log_event(logger, logging.WARNING if keys else logging.INFO, "exchange_reconciliation",
+                          status=result.get("status"), mismatches=len(keys),
+                          warnings=len(result.get("warnings") or []), error=result.get("error"))
+                if fresh:
+                    lines = "\n".join(
+                        f"• {m.get('type')} {m.get('symbol')} {m.get('side') or ''} "
+                        f"учёт {m.get('book_qty', '-')} / биржа {m.get('exchange_qty', '-')}"
+                        for m in fresh[:10]
+                    )
+                    await TelegramRouter().owner_alert(
+                        "LIVE: РАСХОЖДЕНИЕ С БИРЖЕЙ",
+                        f"{lines}\n\nСверка только читает — ничего не закрыто и не снято. "
+                        f"Ручные ордера и позиции владельца не учитываются. Подробности: /system/health.",
+                    )
+                    _RECON_ALERTED.update(mismatch_key(m) for m in fresh)
+        except Exception as e:  # noqa: BLE001 — сверка не имеет права мешать торговле
+            log_event(logger, logging.WARNING, "exchange_reconciliation_loop_failed", error=str(e))
+
+        await asyncio.sleep(interval)
+
+
 async def background_egress_monitor_loop():
     """Непрерывный замер исходящей сети (#egress-monitor-2026-07-26).
 
@@ -838,6 +891,7 @@ async def lifespan(app: FastAPI):
     funding_observe_task = asyncio.create_task(background_funding_observe_loop())
     egress_monitor_task = asyncio.create_task(background_egress_monitor_loop())
     memory_log_task = asyncio.create_task(background_memory_log_loop())  # noqa: F841
+    reconciliation_task = asyncio.create_task(background_exchange_reconciliation_loop())  # noqa: F841
     walkforward_task = asyncio.create_task(background_walkforward_loop())
 
     yield

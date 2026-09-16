@@ -491,10 +491,6 @@ class LiveExecutor:
         """
         if not self._is_derivative(market_type):
             return None
-        try:
-            want_margin = self.resolve_margin_mode(margin_mode)
-        except ValueError:
-            want_margin = None
         fetch = getattr(self.client, "fetch_positions", None)
         if not callable(fetch):
             return None
@@ -504,7 +500,16 @@ class LiveExecutor:
             log_event(logger, logging.WARNING, "live_position_fetch_failed",
                       symbol=symbol, error=f"{type(exc).__name__}: {exc}")
             return None
+        return self.position_base_from(positions, symbol, side, margin_mode)
 
+    def position_base_from(self, positions: list, symbol: str, side: str,
+                           margin_mode: str | None = None) -> float:
+        """Сумма позиций символа, стороны и режима маржи сделки в базовой монете
+        из уже полученного списка ccxt — одна выборка на всю сверку."""
+        try:
+            want_margin = self.resolve_margin_mode(margin_mode)
+        except ValueError:
+            want_margin = None
         getter = getattr(self.client, "contract_size", None)
         default_size = getter(symbol) if callable(getter) else None
         want_side = str(side or "").lower()
