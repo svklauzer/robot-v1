@@ -499,3 +499,45 @@ def test_settings_are_pinned_in_the_blueprint():
         assert f"key: {key}" in blueprint
         assert key in _PINNED_ON_PURPOSE
         assert hasattr(settings, key)
+
+
+# ── закрытие в движке ──────────────────────────────────────────────────────────
+from tests.test_live_close_safety import world  # noqa: E402,F401 — фикстура live-закрытия
+
+
+@pytest.fixture
+def cancels(monkeypatch):
+    calls = []
+
+    async def fake_cancel(self, signal, route, reason):
+        calls.append(reason)
+
+    monkeypatch.setattr(ExecutionEngine, "_cancel_exchange_stops", fake_cancel)
+    return calls
+
+
+@pytest.mark.anyio
+async def test_full_close_cancels_the_exchange_stop_after_the_exchange_closed(world, cancels):
+    out = await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="stop_loss")
+    assert out["status"] == "closed"
+    assert cancels == ["stop_loss"]
+
+
+@pytest.mark.anyio
+async def test_refused_close_keeps_the_exchange_stop(world, cancels):
+    world.state["reply"] = {"mode": "live", "ok": False, "status": "error", "error": "timeout"}
+    out = await world.engine.close_paper_position(world.signal, exit_price=1.40, reason="stop_loss")
+    assert out["status"] == "live_close_failed"
+    assert cancels == [], "позиция на бирже осталась — страховку снимать нельзя"
+
+
+@pytest.mark.anyio
+async def test_flat_after_the_exchange_stop_fired_books_the_trigger(world, cancels):
+    world.signal.plan_json["exchange_stop"] = {"order_id": "s1", "trigger": 1.5075}
+    world.state["exchange_qty"] = 0.0
+
+    out = await world.engine.close_paper_position(world.signal, exit_price=1.53, reason="stop_loss")
+
+    assert out["status"] == "closed" and out["exit_price"] == 1.5075
+    assert cancels == ["stop_loss"]
+    assert world.sent == [], "позиции на бирже нет — ордер не отправляется"
