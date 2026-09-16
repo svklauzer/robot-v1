@@ -155,3 +155,70 @@ def test_the_loop_passes_the_robot_margin_into_capital():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     assert source.count("to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))") == 2
     assert "to_thread(effective_equity_usdt)" not in source
+
+
+# ── нет баланса в live — нет сделок (#no-paper-equity-in-live-2026-09-17) ───────
+class _NoBalance(_Balances):
+    def fetch_balance(self, params=None):
+        raise TimeoutError("okx down")
+
+
+def test_live_without_a_readable_balance_has_no_capital(monkeypatch):
+    ex = _executor(monkeypatch, _NoBalance({}))
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 3000.0)
+
+    assert ex.effective_equity_usdt(robot_margin_usdt=50.0, strict=True) is None
+    assert ex.effective_equity_usdt(strict=False) == 3000.0, "бумажные симуляции сохраняют fallback"
+
+
+def test_live_empty_account_is_zero_not_paper_equity(monkeypatch):
+    ex = _executor(monkeypatch, _Balances({"swap": 0.0}))
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 3000.0)
+
+    assert ex.effective_equity_usdt(strict=True) == 0.0
+
+
+def test_loop_equity_is_none_in_live_without_balance(monkeypatch):
+    import main
+    from services import live_executor as live_module
+
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(live_module.LIVE_EXECUTOR, "effective_equity_usdt",
+                        lambda **_k: None)
+    assert main.effective_equity_usdt(0.0) is None
+
+    def boom(**_k):
+        raise RuntimeError("client broken")
+
+    monkeypatch.setattr(live_module.LIVE_EXECUTOR, "effective_equity_usdt", boom)
+    assert main.effective_equity_usdt(0.0) is None, "в live исключение не должно превращаться в бумажный капитал"
+
+
+def test_paper_loop_equity_is_unchanged(monkeypatch):
+    import main
+
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "dry_run"))
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 3000.0)
+    assert main.effective_equity_usdt(0.0) == 3000.0
+
+
+def test_lifecycle_does_not_open_without_live_balance(monkeypatch):
+    from services.signal_lifecycle import SignalLifecycleManager
+    from services import live_executor as live_module
+
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(ExposureGuard, "live_position_margin", lambda self, db, bot_id: 0.0)
+    manager = SignalLifecycleManager.__new__(SignalLifecycleManager)
+    for value in (None, 0.0):
+        monkeypatch.setattr(live_module.LIVE_EXECUTOR, "effective_equity_usdt", lambda value=value, **_k: value)
+        assert manager._equity_usdt(object(), SimpleNamespace(id=1)) is None
+
+
+def test_the_robot_loop_skips_entries_before_live_safety_without_balance():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    loop = source.split("async def background_robot_loop", 1)[1].split("\nasync def ", 1)[0]
+    skip = loop.index('reason="loop_skip_live_balance"')
+    assert skip < loop.index("await loop.step(")
+    assert "if equity_usdt else {}" in loop, "live-safety не должен считаться от пустого капитала"
