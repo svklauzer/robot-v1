@@ -259,3 +259,16 @@ def test_health_page_knows_every_reconciliation_type():
         assert f"  {t}:" in page, f"нет подписи для {t}"
     for counter in ("robot_live_positions", "robot_stops", "exchange_positions"):
         assert f'"{counter}"' in source and f"counts?.{counter}" in page
+
+
+def test_paper_says_the_reconciliation_is_on_and_waits_for_live(monkeypatch):
+    """Включённая сверка в paper не должна выглядеть забытой («pending» без
+    объяснения): статус говорит, что она включена и начнёт работу с live."""
+    monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "dry_run"))
+    exchange = _Exchange(error=AssertionError("paper must not call the exchange"))
+
+    result = ExchangeReconciliationService(client=exchange).check(None)
+
+    assert result["status"] == "not_live" and result["enabled"] is True and result["ok"] is True
+    assert "после включения live" in result["note"]
+    assert exchange.calls == []

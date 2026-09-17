@@ -380,6 +380,15 @@ export default function HealthPage() {
                 label="Осталось переключить"
                 value={(preflight.switches_to_flip || []).length ? preflight.switches_to_flip.join(", ") : "ничего"}
               />
+              {/* Все рубильники live, а не только оставшиеся: включённое
+                  (сверка, стоп на бирже) тоже должно быть видно. */}
+              {(preflight.switches || []).map((sw: any) => (
+                <InfoRow
+                  key={sw.key}
+                  label={`${sw.ok ? "✓" : "→"} ${sw.key}`}
+                  value={sw.ok ? `${String(sw.current)} — на месте` : `${String(sw.current)} → ${String(sw.required)}`}
+                />
+              ))}
               {(preflight.checks || []).map((check: any) => (
                 <InfoRow
                   key={check.id}
