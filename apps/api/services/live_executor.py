@@ -73,7 +73,6 @@ class OrderResult:
 class LiveExecutor:
     def __init__(self):
         self.client = get_exchange_client()
-        self._leverage_set: set[tuple] = set()  # (symbol, margin_mode, leverage, position_side)
         self._bal_cache: dict[str, tuple[float, float]] = {}  # market_type -> (free_usdt, ts)
         self._account_state: tuple[dict, float] | None = None  # (режим счёта, ts)
 
@@ -247,17 +246,29 @@ class LiveExecutor:
         Прежде ошибка только писалась в лог, и ордер уходил при том плече, что
         стояло на бирже: у isolated-позиции с плечом 10× ликвидация в ~10% от
         входа, а стопы у робота программные.
+
+        (#leverage-every-entry-2026-09-16) Ставится перед КАЖДЫМ входом, а не
+        раз за жизнь процесса. Плечо хранится на бирже на инструмент и режим
+        маржи; поменяй его владелец руками после первой сделки робота — до
+        рестарта робот входил бы при чужом плече, а размер и маржу считал под
+        своё. Регулятор плеча — конфиг (FUTURES_LEVERAGE), не биржа.
+
+        Плечо сделки выше LIVE_MAX_LEVERAGE — отказ, а не молчаливая обрезка:
+        сайзинг считал маржу под запрошенное плечо, биржа держала бы другое.
         """
         if not self._is_derivative(market_type) or not bool(getattr(settings, "LIVE_SET_LEVERAGE", True)):
             return None
+        requested = float(leverage or getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
+        ceiling = float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0))
+        if requested > ceiling:
+            log_event(logger, logging.ERROR, "live_leverage_above_cap", symbol=symbol,
+                      leverage=requested, cap=ceiling)
+            return f"leverage_above_cap:{requested:g}>{ceiling:g}"
         lev_out = self._leverage_value(leverage)
         try:
             mm = self.resolve_margin_mode(margin_mode)
         except ValueError as exc:
             return str(exc)
-        key = (symbol, mm, lev_out, position_side)
-        if key in self._leverage_set:
-            return None
         try:
             setter = getattr(self.client, "set_swap_leverage", None)
             if callable(setter):
@@ -272,7 +283,6 @@ class LiveExecutor:
                       leverage=lev_out, margin=mm, position_side=position_side,
                       error=f"{type(exc).__name__}: {exc}")
             return f"leverage_setup_failed:{type(exc).__name__}: {exc}"
-        self._leverage_set.add(key)
         log_event(logger, logging.INFO, "live_leverage_set", symbol=symbol, leverage=lev_out,
                   margin=mm, position_side=position_side)
         return None
@@ -349,7 +359,7 @@ class LiveExecutor:
         return accounts
 
     def effective_equity_usdt(self, market_type: str | None = None,
-                              robot_margin_usdt: float = 0.0) -> float:
+                              robot_margin_usdt: float = 0.0, strict: bool = False) -> float | None:
         """Капитал робота для сайзинга и экспозиции.
 
         paper/dry_run/off → RISK_EQUITY_USDT: бумажный капитал не меняется.
@@ -362,25 +372,37 @@ class LiveExecutor:
         без возврата экспозиция вычитала бы её второй раз, и каждая открытая
         сделка ужимала бы и лимит, и базу дневного убытка. Размер позиции из
         капитала строит плечо из конфига (FUTURES_LEVERAGE, потолок
-        LIVE_MAX_LEVERAGE). Fallback на RISK_EQUITY_USDT, если баланс недоступен.
+        LIVE_MAX_LEVERAGE).
+
+        strict=True — для торговли (#no-paper-equity-in-live-2026-09-17): в live
+        баланс не прочитан → None, пустой → 0.0, и вызывающий не открывает новых
+        сделок. Прежде подставлялся RISK_EQUITY_USDT — бумажный капитал (3000 при
+        реальных 300): при сбое сети или ключа позиции считались бы от денег,
+        которых на счёте нет. strict=False — прежний fallback для бумажных
+        симуляций (сетка, арбитраж), которым реальный счёт не нужен.
         """
         fallback = float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
         if not self.is_live() or not bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)):
             return fallback
 
         own = max(0.0, float(robot_margin_usdt or 0.0))
-        if market_type:
-            free = self.free_usdt(market_type)
-            return float(free) + own if free is not None and free + own > 0 else fallback
-
+        accounts = [market_type] if market_type else self.execution_accounts()
         total = 0.0
         seen = False
-        for account in self.execution_accounts():
+        for account in accounts:
             free = self.free_usdt(account)
             if free is not None:
                 total += float(free)
                 seen = True
-        return total + own if seen and total + own > 0 else fallback
+        if not seen:
+            if strict:
+                log_event(logger, logging.WARNING, "live_balance_unavailable", accounts=accounts)
+                return None
+            return fallback
+        capital = total + own
+        if strict:
+            return max(0.0, capital)
+        return capital if capital > 0 else fallback
 
     # ── единицы объёма ──────────────────────────────────────────────────────────
     def _to_exchange_amount(self, symbol: str, amount: float, market_type: str) -> tuple[float, dict]:

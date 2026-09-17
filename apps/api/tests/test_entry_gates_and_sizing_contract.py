@@ -139,11 +139,14 @@ def test_equity_helper_falls_back_to_configured_capital(monkeypatch):
 
 def test_lifecycle_opens_position_on_the_same_equity():
     source = (API / "services" / "signal_lifecycle.py").read_text(encoding="utf-8")
-    open_call = source.split("execution.open_paper_position(", 1)[1][:300]
+    before, open_call = source.split("execution.open_paper_position(", 1)
+    open_call = open_call[:300]
 
-    assert "self._equity_usdt(db, bot)" in open_call, (
+    assert "balance_usdt=balance_usdt" in open_call and "balance_usdt = self._equity_usdt(db, bot)" in before[-900:], (
         "открытие позиции считает план от своего капитала, а не от общего"
     )
+    # (#no-paper-equity-in-live-2026-09-17) Без баланса в live сделка не открывается.
+    assert "if balance_usdt is None:" in before[-900:]
 
 
 # ── 4. Ведение позиций не блокирует event loop ───────────────────────────────

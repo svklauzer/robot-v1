@@ -98,6 +98,8 @@ const IMPORTANT_DECISIONS = [
   "loop_skip_validation_gates",
   "loop_skip_exchange_switch",
   "loop_skip_live_safety",
+  // (#no-paper-equity-in-live-2026-09-17) Баланс счёта в live не прочитан или пуст.
+  "loop_skip_live_balance",
   "loop_resumed",
   "scan_no_candidate",
   "scan_candidates_resumed",
@@ -725,6 +727,13 @@ function SystemEventBody({ decision, payload }: { decision: string; payload: any
           <Metric label="Одобрено за проход" value={`${payload.approved ?? 0} из ${payload.symbols}`} />
         )}
 
+        {decision === "loop_skip_live_balance" && (
+          <>
+            <Metric label="Капитал робота" value={payload.capital_usdt == null ? "не прочитан" : `${payload.capital_usdt} USDT`} danger />
+            <Metric label="Счета" value={(payload.accounts || []).join(", ") || "-"} />
+          </>
+        )}
+
         {decision === "loop_skip_live_safety" && (
           <>
             <Metric label="Дневной убыток" value={`${payload.daily_loss_pct ?? "-"}% из ${payload.max_daily_loss_pct ?? "-"}%`} danger />
@@ -1098,6 +1107,7 @@ function decisionLabel(code: string | null | undefined) {
     // выглядела на экранах как работающая система с пустой лентой.
     loop_skip_exchange_switch: "⛔ Цикл стоит: гейт переключения биржи",
     loop_skip_live_safety: "⛔ Цикл стоит: предохранитель live-safety",
+    loop_skip_live_balance: "⛔ Цикл стоит: баланс счёта не прочитан или пуст",
     loop_skip_validation_gates: "⛔ Цикл стоит: гейты готовности к live",
     loop_resumed: "▶ Цикл возобновил работу",
     // (#scan-visibility-2026-09-05) Вторая ось молчания: цикл работает, шаги
@@ -1366,6 +1376,10 @@ function decisionExplanation(e: any) {
 
   if (decision === "loop_skip_exchange_switch") {
     return `На неактивной бирже ${String(payload?.inactive_exchange || "").toUpperCase()} есть открытые ордера робота — новые входы на ${String(payload?.active_exchange || "активной").toUpperCase()} стоят, пока их не разберут руками. Ручные ордера и позиции владельца вход не держат.`;
+  }
+
+  if (decision === "loop_skip_live_balance") {
+    return "Live: баланс счёта не прочитан (сеть, ключ) или пуст — новые сделки не открываются, бумажный капитал вместо реального не подставляется. Открытые позиции ведутся.";
   }
 
   if (decision === "loop_skip_live_safety") {

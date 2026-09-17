@@ -80,20 +80,28 @@ class SignalLifecycleManager:
         """Рынок ЭТОЙ сделки, зафиксированный при входе."""
         return route_from_payload(signal.plan_json, signal.symbol, signal.side).market_type
 
-    def _equity_usdt(self, db=None, bot=None) -> float:
+    def _equity_usdt(self, db=None, bot=None) -> float | None:
         """Тот же источник эквити, что у сайзинга в robot_loop и у риск-лимитов:
         в live — свободный баланс плюс маржа собственных позиций робота
-        (#manual-orders-2026-09-16)."""
+        (#manual-orders-2026-09-16). None — в live баланс не прочитан или пуст:
+        входить не из чего (#no-paper-equity-in-live-2026-09-17)."""
+        live = False
         try:
             from services.live_executor import LIVE_EXECUTOR
 
+            live = LIVE_EXECUTOR.is_live()
             robot_margin = 0.0
-            if db is not None and bot is not None and LIVE_EXECUTOR.is_live():
+            if db is not None and bot is not None and live:
                 from services.exposure_guard import ExposureGuard
 
                 robot_margin = ExposureGuard().live_position_margin(db, bot.id)
-            return float(LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin))
+            value = LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin, strict=True)
+            if live and not value:
+                return None
+            return float(value)
         except Exception:  # noqa: BLE001
+            if live:
+                return None
             return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
 
     def _signal_age_sec(self, lifecycle: dict | None) -> float | None:
@@ -425,11 +433,19 @@ class SignalLifecycleManager:
                     db.flush()
                     return
 
+                balance_usdt = self._equity_usdt(db, bot)
+                if balance_usdt is None:
+                    # (#no-paper-equity-in-live-2026-09-17) Баланс счёта не прочитан
+                    # или пуст — сделка ждёт следующего прохода, а не открывается
+                    # от бумажного капитала.
+                    print(f"[LIVE] open #{signal.id} skipped: live balance unavailable")
+                    return
+
                 result = await execution.open_paper_position(
                     bot=bot,
                     signal=signal,
                     entry_price=price,
-                    balance_usdt=self._equity_usdt(db, bot),
+                    balance_usdt=balance_usdt,
                 )
 
                 plan = result.get("plan")

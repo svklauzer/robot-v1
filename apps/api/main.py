@@ -140,7 +140,7 @@ position_manage_lock = asyncio.Lock()
 logger = get_logger(__name__)
 
 
-def effective_equity_usdt(robot_margin_usdt: float = 0.0) -> float:
+def effective_equity_usdt(robot_margin_usdt: float = 0.0) -> float | None:
     """Единственный источник эквити для сайзинга и риск-лимитов.
 
     В paper/dry_run — RISK_EQUITY_USDT, в live — свободный баланс счёта
@@ -149,13 +149,38 @@ def effective_equity_usdt(robot_margin_usdt: float = 0.0) -> float:
     остаётся вычтенной биржей. До этого сайзинг и дневной стоп-лосс считались
     от захардкоженной 1000, экспозиция — от настоящего баланса: на счёте,
     отличном от 1000, план и предохранитель расходились с реальностью.
+
+    None — в live баланс не прочитан (#no-paper-equity-in-live-2026-09-17):
+    новых сделок нет, бумажный RISK_EQUITY_USDT в live не подставляется.
     """
     try:
         from services.live_executor import LIVE_EXECUTOR
 
-        return float(LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin_usdt))
-    except Exception:  # noqa: BLE001 — эквити не должно ронять цикл
+        value = LIVE_EXECUTOR.effective_equity_usdt(robot_margin_usdt=robot_margin_usdt, strict=True)
+        return None if value is None else float(value)
+    except Exception as exc:  # noqa: BLE001 — эквити не должно ронять цикл
+        if live_mode_safe():
+            log_event(logger, logging.WARNING, "live_balance_unavailable", error=f"{type(exc).__name__}: {exc}")
+            return None
         return float(getattr(settings, "RISK_EQUITY_USDT", 950.0))
+
+
+def live_execution_accounts() -> list[str]:
+    try:
+        from services.live_executor import LIVE_EXECUTOR
+
+        return list(LIVE_EXECUTOR.execution_accounts())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def live_mode_safe() -> bool:
+    try:
+        from services.live_executor import LIVE_EXECUTOR
+
+        return bool(LIVE_EXECUTOR.is_live())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def robot_live_margin_usdt(db, bot) -> float:
@@ -227,9 +252,24 @@ async def background_robot_loop():
                     db.commit()
                 else:
                     equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
-                    safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
+                    # (#no-paper-equity-in-live-2026-09-17) В live без прочитанного
+                    # или при нулевом балансе размер не из чего считать: новые
+                    # сделки не открываются, открытые ведёт background_manage_loop.
+                    safety = (
+                        LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
+                        if equity_usdt else {}
+                    )
 
-                    if safety.get("blocked"):
+                    if not equity_usdt:
+                        log_event(logger, logging.WARNING, "robot_loop_live_balance_skip",
+                                  capital_usdt=equity_usdt)
+                        skip_reporter.report(
+                            db, loop.decisions,
+                            reason="loop_skip_live_balance",
+                            payload={"capital_usdt": equity_usdt, "accounts": live_execution_accounts()},
+                        )
+                        db.commit()
+                    elif safety.get("blocked"):
                         log_event(logger, logging.WARNING, "robot_loop_safety_skip", **safety)
                         skip_reporter.report(
                             db, loop.decisions,
@@ -1657,6 +1697,8 @@ async def run_robot_once():
             return {"status": "skipped", "reason": "validation_gates_blocked", "validation_gates": validation_gates}
 
         equity_usdt = await asyncio.to_thread(effective_equity_usdt, robot_live_margin_usdt(db, bot))
+        if not equity_usdt:
+            return {"status": "skipped", "reason": "live_balance_unavailable", "capital_usdt": equity_usdt}
         safety = LiveSafetyService().enforce(db=db, bot=bot, equity_usdt=equity_usdt)
         if safety.get("blocked"):
             db.commit()
