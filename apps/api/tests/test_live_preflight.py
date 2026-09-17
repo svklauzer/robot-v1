@@ -208,7 +208,8 @@ def test_preflight_runs_only_on_demand():
 def test_health_page_renders_the_preflight():
     page = (Path(__file__).resolve().parents[2] / "web" / "app" / "health" / "page.tsx").read_text(encoding="utf-8")
     assert 'apiGet("/live/preflight")' in page
-    for field in ("switches_to_flip", "check.title", "check.detail", "check.status", "preflight.ready"):
+    for field in ("switches_to_flip", "preflight.switches", "sw.ok", "sw.current", "sw.required",
+                  "check.title", "check.detail", "check.status", "preflight.ready"):
         assert field in page, field
     for status in (lp.OK, lp.INFO, lp.WARN, lp.FAIL):
         assert f"{status}:" in page.split("const PREFLIGHT_MARK", 1)[1].split("\n", 1)[0]

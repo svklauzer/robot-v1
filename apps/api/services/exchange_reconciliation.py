@@ -87,9 +87,19 @@ class ExchangeReconciliationService:
         if force and db is not None:
             return self.reconcile(db)
         if _LAST is None:
+            # Не «pending»: в paper и dry_run сверка не ждёт своей очереди, её
+            # предмета нет. Статус обязан это сказать, иначе включённая сверка
+            # на экране выглядит забытой. Режим читается из настроек — к бирже
+            # проверка не обращается.
+            if self.executor.effective_mode() != "live":
+                return {"status": "not_live", "enabled": True, "ok": True, "checked_at": None,
+                        "blockers": [], "mismatches": [], "warnings": [], "live_enabled": live_enabled,
+                        "note": "включена; в paper и dry_run позиций робота на бирже нет — "
+                                "начнёт сверять сама после включения live, раз в "
+                                f"{int(float(getattr(settings, 'EXCHANGE_RECONCILIATION_INTERVAL_SEC', 300)))} с"}
             return {"status": "pending", "enabled": True, "ok": True, "checked_at": None,
                     "blockers": [], "mismatches": [], "warnings": [], "live_enabled": live_enabled,
-                    "note": "сверка идёт фоновым циклом только в live"}
+                    "note": "live включён — первая сверка в течение пары минут после старта"}
         return _LAST
 
     # ── сверка ─────────────────────────────────────────────────────────────────
