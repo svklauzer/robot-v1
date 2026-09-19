@@ -27,6 +27,10 @@ from typing import Any
 from models.signal import Signal
 
 MARKET = "market"
+# Сделки старше зоны входа плана не несут вовсе. Записывать их в «рыночные»
+# значило бы приписать им способ входа, которого тогда ещё не существовало, и
+# разбавить бакет, по которому потом сравнивают режимы.
+UNKNOWN = "unknown"
 
 
 def _f(value) -> float | None:
@@ -48,6 +52,35 @@ def _entry_price(signal: Signal, plan: dict) -> float | None:
     if low and high:
         return (low + high) / 2.0
     return low or high
+
+
+def entry_mode(plan: dict) -> str:
+    """Способ входа сделки: market, limit_wall, limit_vwap или unknown."""
+    zone_plan = plan.get("entry_zone_plan")
+    if not isinstance(zone_plan, dict) or not zone_plan.get("mode"):
+        return UNKNOWN
+    return str(zone_plan["mode"])
+
+
+def entry_notional_usdt(signal: Signal, plan: dict) -> float:
+    """Номинал сделки — база, к которой относятся и фора, и стоимость оборота."""
+    return (_entry_price(signal, plan) or 0.0) * (_f(signal.qty) or 0.0)
+
+
+def entry_edge_usdt(signal: Signal, plan: dict) -> float:
+    """Фора перенесённого входа в USDT — одна формула на все отчёты.
+
+    Возникает только там, где бумага взяла цену лучше рынка: рыночный вход
+    берёт то, что есть, а сделка, уже исполненная в live, записана по факту
+    филла.
+    """
+    mode = entry_mode(plan)
+    drift = _f((plan.get("entry_zone_plan") or {}).get("drift_pct")) or 0.0
+    if mode in (MARKET, UNKNOWN) or drift <= 0:
+        return 0.0
+    if str((plan.get("execution") or {}).get("mode") or "") == "live":
+        return 0.0
+    return entry_notional_usdt(signal, plan) * drift / 100.0
 
 
 def _round_trip_pct(plan: dict) -> float | None:
@@ -98,19 +131,13 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
     for signal in signals:
         plan = signal.plan_json or {}
         zone_plan = plan.get("entry_zone_plan") or {}
-        mode = str(zone_plan.get("mode") or MARKET)
+        mode = entry_mode(plan)
         drift = _f(zone_plan.get("drift_pct")) or 0.0
         executed_live = str((plan.get("execution") or {}).get("mode") or "") == "live"
-        entry = _entry_price(signal, plan)
-        qty = _f(signal.qty) or 0.0
-        notional = (entry or 0.0) * qty
+        notional = entry_notional_usdt(signal, plan)
         net_pnl = _f(signal.closed_net_pnl) or 0.0
 
-        # Фора возникает только там, где бумага взяла цену лучше рынка: рыночный
-        # вход берёт то, что есть, а live-сделка уже записана по факту филла.
-        edge = 0.0
-        if mode != MARKET and drift > 0 and not executed_live:
-            edge = notional * drift / 100.0
+        edge = entry_edge_usdt(signal, plan)
         if executed_live:
             live_trades += 1
 
@@ -120,13 +147,13 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
 
         for bucket in (overall, by_mode.setdefault(mode, _bucket())):
             bucket["trades"] += 1
-            bucket["drift_sum"] += drift if mode != MARKET else 0.0
+            bucket["drift_sum"] += drift if mode not in (MARKET, UNKNOWN) else 0.0
             bucket["edge_usdt"] += edge
             bucket["notional_sum"] += notional
             bucket["net_pnl_usdt"] += net_pnl
 
     trades = overall["trades"]
-    limit_trades = sum(b["trades"] for m, b in by_mode.items() if m != MARKET)
+    limit_trades = sum(b["trades"] for m, b in by_mode.items() if m not in (MARKET, UNKNOWN))
     edge_usdt = overall["edge_usdt"]
     net_pnl = overall["net_pnl_usdt"]
     avg_round_trip = round(sum(round_trips) / len(round_trips), 4) if round_trips else None
@@ -142,7 +169,8 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
             **_finish(overall),
             "limit_trades": limit_trades,
             "limit_share_pct": round(limit_trades / trades * 100, 2) if trades else 0.0,
-            "market_trades": trades - limit_trades,
+            "market_trades": by_mode.get(MARKET, {}).get("trades", 0),
+            "unknown_trades": by_mode.get(UNKNOWN, {}).get("trades", 0),
             "live_trades": live_trades,
             "avg_drift_pct_all_trades": avg_drift_all,
             "avg_round_trip_pct": avg_round_trip,

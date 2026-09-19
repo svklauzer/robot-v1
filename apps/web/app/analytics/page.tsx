@@ -318,6 +318,50 @@ export default function AnalyticsPage() {
               ))}
             </div>
             <p className="mt-3 text-xs text-yellow-200/80">{entryDrift.note}</p>
+
+            {/* (#entry-mode-quality-2026-09-19) Сам разрыв по деньгам ещё не
+                отвечает, хуже ли рыночный вход ПО СУЩЕСТВУ: перенесённый
+                получает фору, которой у рыночного нет. Отвечает edge_ratio —
+                отношение хода в нашу сторону к ходу против, оно от цены
+                подарка не зависит. Рядом результат без форы и он же,
+                нормированный на номинал: рыночные сделки крупнее. */}
+            {(mfeMae?.by_entry_mode || []).length > 0 && (
+              <div className="mt-5 border-t border-emerald-950 pt-4">
+                <h3 className="mb-1 text-sm font-semibold text-emerald-200">
+                  Хуже ли рыночный вход по существу
+                </h3>
+                <p className="mb-3 text-xs text-emerald-100/50">
+                  edge_ratio — ход в нашу сторону против хода против нас, от цены входа не зависит.
+                </p>
+                <div className="space-y-1">
+                  {(mfeMae.by_entry_mode || []).map((m: any) => (
+                    <div
+                      key={m.entry_mode}
+                      className="grid grid-cols-2 items-center gap-2 rounded-lg border border-emerald-950/60 bg-black/20 px-3 py-2 text-xs md:grid-cols-[150px_repeat(5,1fr)]"
+                    >
+                      <span className="font-semibold text-emerald-100">
+                        {m.entry_mode} <span className="font-normal text-emerald-100/40">×{m.count}</span>
+                      </span>
+                      <span className="text-emerald-100/70">
+                        MFE {Number(m.avg_mfe_pct ?? 0).toFixed(2)}%
+                      </span>
+                      <span className="text-emerald-100/70">
+                        MAE {Number(m.avg_mae_pct ?? 0).toFixed(2)}%
+                      </span>
+                      <span className={Number(m.edge_ratio ?? 0) >= 1 ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
+                        edge {m.edge_ratio ?? "—"}
+                      </span>
+                      <span className={Number(m.net_pnl_without_edge_usdt ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}>
+                        без форы {Number(m.net_pnl_without_edge_usdt ?? 0).toFixed(2)} USDT
+                      </span>
+                      <span className={Number(m.net_pnl_per_notional_pct ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}>
+                        {m.net_pnl_per_notional_pct != null ? `${m.net_pnl_per_notional_pct.toFixed(3)}% номинала` : "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         )}
 
