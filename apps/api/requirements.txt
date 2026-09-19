@@ -7,9 +7,9 @@ pydantic-settings
 python-jose[cryptography]
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
+ccxt==4.5.78
 redis
 httpx[socks]>=0.27,<0.29
-ccxt
 pandas
 numpy
 scikit-learn
