@@ -1248,6 +1248,7 @@ class Settings(BaseSettings):
     SCALP_MIN_NET_PNL_TP2_USDT: float = 0.55           # санити, не гейт
     SCALP_MIN_NET_RR_TP2: float = 1.10                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
+    SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0   # тот же флор долей номинала
     # (#margin-cap-collision-2026-07-28) БЫЛО 20.0 — ровно столько же, сколько
     # цель сайзинга SCALP_MAX_POSITION_MARGIN_PCT (0.20 × equity). Два
     # предохранителя стояли на ОДНОМ числе, а гвард сравнивает строго:
@@ -1576,6 +1577,12 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.10
     ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90       # реальный гейт награды — на TP2
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
+    # (#sizing-scales-with-equity-2026-09-19) Тот же запас долей номинала
+    # сделки. Абсолютные 1.20 USDT привязывают гейт к депозиту, под который
+    # его калибровали: на счёте 300 (номинал ~90) это запас больше процента
+    # от позиции — проходят единицы; на 30 000 порог не значит ничего.
+    # Доля замещает абсолют, когда > 0. Ориентир: 1.20 / 250 = 0.48%.
+    ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0
     ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 12.0
     ANTI_DRAIN_MAX_USED_MARGIN_PCT: float = 50.0
     # POSITION (trend) профиль anti-drain: согласован с trade_plan

@@ -90,3 +90,75 @@ def test_blueprint_carries_the_setting():
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: LIVE_MAX_ORDER_NOTIONAL_PCT", 1)[1].split("- key:", 1)[0]
     assert 'value: "0"' in block
+
+
+# ── запас экономики сделки: доля номинала вместо суммы ──────────────────────
+def _signal(**over):
+    base = {"symbol": "XRP/USDT", "side": "long", "grade": "B", "confidence": 70.0,
+            "rationale": "", "required_margin": 90.0, "leverage": 1,
+            "net_rr_tp1": 2.0, "net_rr_tp2": 3.0,
+            "net_pnl_tp1": 1.7, "net_pnl_tp2": 1.7, "net_pnl_stop": -1.2}
+    return {**base, **over}
+
+
+_STATE = {"equity_usdt": 300.0, "used_margin_usdt": 0.0, "daily_pnl_usdt": 0.0,
+          "drawdown_pct": 0.0, "open_positions_count": 0, "active_signals_by_symbol": {}}
+
+
+def _cfg(**over):
+    from services.anti_drain_guard import AntiDrainConfig
+
+    return AntiDrainConfig(min_confidence=0.0, max_position_margin_pct=100.0,
+                           max_used_margin_pct=100.0, max_open_positions=5,
+                           economics_use_tp2=True, **over)
+
+
+def test_absolute_edge_floor_blocks_a_small_account():
+    """Ровно та привязка, которую просили убрать: 1.20 USDT запаса при номинале
+    90 — это больше процента от позиции, и сделка не проходит."""
+    from services.anti_drain_guard import should_open_signal
+
+    allowed, reason = should_open_signal(_signal(), _STATE, _cfg(min_expected_edge_after_costs_usdt=1.20))
+
+    assert allowed is False and reason == "blocked_bad_trade_economics"
+
+
+def test_share_of_notional_judges_the_same_trade_by_its_size():
+    """0.48% номинала — то же требование, что 1.20 USDT при номинале 250."""
+    from services.anti_drain_guard import should_open_signal
+
+    allowed, _ = should_open_signal(
+        _signal(), _STATE,
+        _cfg(min_expected_edge_after_costs_usdt=1.20, min_expected_edge_after_costs_pct=0.48),
+    )
+
+    assert allowed is True, "запас 0.43 USDT на номинал 90 — сделка проходит"
+
+
+def test_the_share_scales_with_leverage():
+    """Плечо меняет номинал, а с ним и масштаб издержек, от которых защищает запас."""
+    from services.anti_drain_guard import should_open_signal
+
+    cfg = _cfg(min_expected_edge_after_costs_pct=0.48)
+    # Та же маржа при плече 5 — номинал 450, запас 2.16 USDT: прибыли 1.7 мало.
+    allowed, reason = should_open_signal(_signal(leverage=5), _STATE, cfg)
+
+    assert allowed is False and reason == "blocked_bad_trade_economics"
+
+
+def test_absolute_floor_still_works_when_the_share_is_off():
+    from services.anti_drain_guard import should_open_signal
+
+    allowed, _ = should_open_signal(
+        _signal(net_pnl_tp2=5.0), _STATE, _cfg(min_expected_edge_after_costs_usdt=1.20))
+
+    assert allowed is True
+
+
+def test_loop_and_decision_card_carry_the_share():
+    """Порог, по которому судят сделку, должен быть виден в её карточке."""
+    from services import decision_config
+    from workers import robot_loop
+
+    assert "min_expected_edge_after_costs_pct=" in inspect.getsource(robot_loop)
+    assert '"min_edge_after_costs_pct"' in inspect.getsource(decision_config)
