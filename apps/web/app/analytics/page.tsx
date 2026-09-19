@@ -16,6 +16,7 @@ export default function AnalyticsPage() {
   const [depthCoverage, setDepthCoverage] = useState<any>(null);
   const [expectancy, setExpectancy] = useState<any>(null);
   const [reasons, setReasons] = useState<any>(null);
+  const [entryDrift, setEntryDrift] = useState<any>(null);
   const [mfeWindow, setMfeWindow] = useState<string>("168");
   const [loading, setLoading] = useState(false);
 
@@ -23,7 +24,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     try {
       const mfeQs = mfeWindow === "all" ? "" : `&window_hours=${mfeWindow}`;
-      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData, depthData, expectancyData, reasonsData] = await Promise.all([
+      const [summaryData, qualityData, readinessData, rootCauseData, symbolPerfData, validationData, mfeMaeData, depthData, expectancyData, reasonsData, entryDriftData] = await Promise.all([
         apiGet("/analytics/summary"),
         apiGet("/analytics/signal-quality"),
         apiGet("/system/readiness"),
@@ -35,6 +36,9 @@ export default function AnalyticsPage() {
         apiGet("/analytics/depth-coverage?limit=200").catch(() => null),
         apiGet("/analytics/expectancy").catch(() => null),
         apiGet("/analytics/reason-breakdown?limit=500").catch(() => null),
+        // (#entry-drift-2026-09-19) Окно то же, что у MFE: обе метрики про одну
+        // выборку, и разные окна рядом читались бы как противоречие.
+        apiGet(`/analytics/entry-drift?limit=500${mfeQs}`).catch(() => null),
       ]);
       setSummary(summaryData);
       setQuality(qualityData);
@@ -46,6 +50,7 @@ export default function AnalyticsPage() {
       setDepthCoverage(depthData);
       setExpectancy(expectancyData);
       setReasons(reasonsData);
+      setEntryDrift(entryDriftData);
     } finally {
       setLoading(false);
     }
@@ -236,6 +241,85 @@ export default function AnalyticsPage() {
                 нет, читается как выполненная. Сама доставка живёт на /health. */}
           </Panel>
         </section>
+
+        {/* (#entry-drift-2026-09-19) Зона входа переносит сделку к цене лучше
+            рынка, и бумага книжит её как исполненную. Live шлёт рыночный ордер и
+            пишет фактический филл — этой форы там не будет. Разрыв копится на
+            каждой перенесённой сделке и сопоставим со всей стоимостью оборота,
+            поэтому он должен быть виден рядом с экономикой, а не всплыть после
+            переключения рубильников. */}
+        {entryDrift?.status === "ok" && (
+          <section className="rounded-2xl border border-amber-900/70 bg-amber-950/10 p-5">
+            <h2 className="mb-1 text-xl font-semibold text-amber-200">
+              Фора бумаги на входе
+            </h2>
+            <p className="mb-4 text-sm text-emerald-100/50">
+              Насколько бумажная цена входа лучше рыночной. Выборка:{" "}
+              {entryDrift.sample_count ?? "—"} закрытых
+              {entryDrift.window_hours ? ` за ${entryDrift.window_hours} ч` : " за всю историю"}.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <Metric
+                  label="Входов перенесено с рынка"
+                  value={`${(entryDrift.overall?.limit_share_pct ?? 0).toFixed(1)}% (${entryDrift.overall?.limit_trades ?? 0} из ${entryDrift.sample_count ?? 0})`}
+                />
+                <Metric
+                  label="Фора на сделку"
+                  value={`${(entryDrift.overall?.avg_drift_pct_all_trades ?? 0).toFixed(3)}% от номинала`}
+                  warn
+                />
+                <Metric
+                  label="Стоимость оборота"
+                  value={
+                    entryDrift.overall?.avg_round_trip_pct != null
+                      ? `${entryDrift.overall.avg_round_trip_pct.toFixed(3)}% от номинала`
+                      : "—"
+                  }
+                />
+                <Metric
+                  label="Сделок уже в live"
+                  value={`${entryDrift.overall?.live_trades ?? 0} — у них цена по факту филла`}
+                />
+              </div>
+              <div>
+                <Metric
+                  label="Фора всего"
+                  value={`${(entryDrift.overall?.edge_usdt ?? 0).toFixed(2)} USDT`}
+                  warn
+                />
+                <Metric
+                  label="Net (как посчитала бумага)"
+                  value={`${(entryDrift.overall?.net_pnl_usdt ?? 0).toFixed(2)} USDT`}
+                  good={(entryDrift.overall?.net_pnl_usdt ?? 0) > 0}
+                />
+                <Metric
+                  label="Net без форы"
+                  value={`${(entryDrift.overall?.net_pnl_without_edge_usdt ?? 0).toFixed(2)} USDT`}
+                  warn={(entryDrift.overall?.net_pnl_without_edge_usdt ?? 0) < 0}
+                />
+                <Metric
+                  label="Фора на сделку в деньгах"
+                  value={`${(entryDrift.overall?.edge_per_trade_usdt ?? 0).toFixed(3)} USDT`}
+                  warn
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {Object.entries(entryDrift.by_mode || {}).map(([mode, item]: [string, any]) => (
+                <span
+                  key={mode}
+                  className="rounded-lg border border-emerald-950/60 bg-black/20 px-3 py-1.5 text-xs text-emerald-100/70"
+                >
+                  <span className="font-semibold text-emerald-200">{mode}</span> ×{item.trades}
+                  {item.avg_drift_pct ? ` · ${item.avg_drift_pct.toFixed(3)}%` : ""}
+                  {item.edge_usdt ? ` · ${item.edge_usdt.toFixed(2)} USDT` : ""}
+                </span>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-yellow-200/80">{entryDrift.note}</p>
+          </section>
+        )}
 
         {/* (#ui-cleanup-2026-07-28) Здесь был «Reason breakdown» — плитки со
             СЧЁТЧИКАМИ закрытий по причинам. Число закрытий ни на что не отвечает:

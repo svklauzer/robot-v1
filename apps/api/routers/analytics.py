@@ -867,3 +867,22 @@ def analytics_daily_quality_report(hours: int = 24):
         )
     finally:
         db.close()
+
+
+@router.get("/entry-drift", dependencies=[Depends(require_owner_action)])
+def analytics_entry_drift(limit: int = 500, window_hours: float | None = None):
+    """(#entry-drift-2026-09-19) Насколько бумажный результат опирается на цену,
+    которой в live не будет.
+
+    Зона входа переносит сделку к стенке или микро-VWAP и берёт цену ЛУЧШЕ
+    рынка, а бумага считает такой вход исполненным всегда. Live шлёт рыночный
+    ордер и книжит фактический филл. Разница копится на каждой перенесённой
+    сделке; здесь видно её размер и результат без неё.
+    """
+    from services.entry_drift_report import report as _entry_drift
+
+    db = SessionLocal()
+    try:
+        return _entry_drift(db, limit=limit, window_hours=window_hours)
+    finally:
+        db.close()
