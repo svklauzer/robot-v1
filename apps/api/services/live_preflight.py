@@ -19,8 +19,11 @@ from core.config import settings
 from services.market_routing import _swap_symbol, from_payload as route_from_payload
 
 # Формы запросов OKX/HTX проверены на этой версии (tests/test_live_margin_mode.py,
-# tests/test_exchange_stop.py). В requirements.txt ccxt не закреплён.
-TESTED_CCXT_VERSION = "4.5.77"
+# tests/test_exchange_stop.py собирают запросы настоящим ccxt без сети).
+# Версия закреплена в requirements.txt, и тест держит эти два места вместе:
+# 19.09 прод уехал на 4.5.78 при незакреплённой зависимости, а константа
+# осталась на 4.5.77 — preflight увидел расхождение уже на проде.
+TESTED_CCXT_VERSION = "4.5.78"
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 

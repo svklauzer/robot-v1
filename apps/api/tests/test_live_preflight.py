@@ -215,6 +215,41 @@ def test_health_page_renders_the_preflight():
         assert f"{status}:" in page.split("const PREFLIGHT_MARK", 1)[1].split("\n", 1)[0]
 
 
+def _pinned_ccxt() -> str:
+    line = next(l for l in (Path(__file__).resolve().parents[1] / "requirements.txt")
+                .read_text(encoding="utf-8").splitlines() if l.strip().startswith("ccxt"))
+    assert "==" in line, f"ccxt в requirements.txt не закреплён: {line!r}"
+    return line.split("==", 1)[1].strip()
+
+
+def _declared_tested_ccxt() -> str:
+    # Из исходника, а не из модуля: autouse-фикстура подменяет константу
+    # установленной версией, и подмена скрыла бы именно то расхождение,
+    # которое здесь проверяется.
+    source = (Path(__file__).resolve().parents[1] / "services" / "live_preflight.py").read_text(encoding="utf-8")
+    return source.split("TESTED_CCXT_VERSION = ", 1)[1].split("\n", 1)[0].strip().strip('"')
+
+
+def test_tested_ccxt_version_matches_the_pin():
+    """Версия, на которой проверены формы запросов, и версия в requirements.txt —
+    одно и то же. 19.09 они разъехались молча: зависимость была не закреплена,
+    прод собрался на 4.5.78, константа осталась на 4.5.77, и расхождение увидел
+    только preflight на проде."""
+    assert _declared_tested_ccxt() == _pinned_ccxt()
+
+
+def test_request_shapes_run_on_the_pinned_ccxt():
+    """Тесты форм проверяют ровно ту версию, что стоит в окружении. Здесь видно,
+    та ли это версия: в CI зависимости ставятся из requirements.txt, значит
+    формы проверяются на закреплённой; локальное окружение может отставать."""
+    import ccxt
+
+    if ccxt.__version__ != _pinned_ccxt():
+        pytest.skip(f"окружение не по requirements.txt: стоит {ccxt.__version__}, "
+                    f"закреплена {_pinned_ccxt()} — формы проверит CI")
+    assert _declared_tested_ccxt() == ccxt.__version__
+
+
 def test_live_execution_mode_is_pinned_in_the_blueprint():
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: LIVE_EXECUTION_MODE", 1)[1].split("- key:", 1)[0]
