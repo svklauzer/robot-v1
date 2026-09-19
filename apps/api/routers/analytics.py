@@ -493,7 +493,7 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
     """
     from datetime import timedelta as _td
 
-    from services.entry_drift_report import entry_edge_usdt, entry_mode, entry_notional_usdt
+    from services.entry_drift_report import entry_mode, entry_notional_usdt
 
     db = SessionLocal()
     try:
@@ -544,7 +544,6 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
                 # существу» от «цена исполнения хуже». MFE/MAE отвечают именно
                 # на первый вопрос: они про ход, который рынок дал после входа.
                 "entry_mode": entry_mode(plan),
-                "edge_usdt": entry_edge_usdt(s, plan),
                 "notional_usdt": entry_notional_usdt(s, plan),
                 "mfe": mfe if mfe is not None else 0.0,
                 "mae": mae if mae is not None else 0.0,
@@ -645,26 +644,21 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
         # ЗАКРЫТИЙ по причине `adaptive_mfe_capture`, а не доля забранного пика.
         overall = _agg(rows) or {}
 
-        # (#entry-mode-quality-2026-09-19) Разрез по способу входа. Рядом с
-        # каждым бакетом — фора и результат без неё: иначе «market хуже» можно
-        # прочитать как «у него нет подарка», хотя вопрос в том, хуже ли сам
-        # вход. Нормировка на номинал в `net_pnl_per_notional_pct`: рыночные
+        # (#entry-mode-quality-2026-09-19) Разрез по способу входа. Главное здесь
+        # `edge_ratio`: он про ход, который рынок дал ПОСЛЕ входа, и от цены
+        # исполнения не зависит — то есть отвечает, хуже ли сам вход, а не его
+        # цена. Нормировка на номинал в `net_pnl_per_notional_pct`: рыночные
         # сделки крупнее, и сравнивать их в USDT напрямую нельзя.
         def _entry_bucket(bucket_rows: list[dict]) -> dict | None:
             agg = _agg(bucket_rows)
             if not agg:
                 return None
-            edge = sum(r["edge_usdt"] for r in bucket_rows)
             notional = sum(r["notional_usdt"] for r in bucket_rows)
             net = agg["net_pnl_usdt"]
             return {
                 **agg,
-                "edge_usdt": round(edge, 4),
-                "net_pnl_without_edge_usdt": round(net - edge, 4),
                 "avg_notional_usdt": round(notional / len(bucket_rows), 2) if notional else None,
-                "net_pnl_per_notional_pct": (
-                    round((net - edge) / notional * 100, 4) if notional else None
-                ),
+                "net_pnl_per_notional_pct": round(net / notional * 100, 4) if notional else None,
             }
 
         entry_mode_items = []
@@ -672,7 +666,7 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
             agg = _entry_bucket(bucket)
             if agg:
                 entry_mode_items.append({"entry_mode": mode, **agg})
-        entry_mode_items.sort(key=lambda x: x["net_pnl_without_edge_usdt"])
+        entry_mode_items.sort(key=lambda x: x["net_pnl_per_notional_pct"] or 0.0)
 
         entry_mode_regime_items = []
         for key, bucket in by_entry_mode_regime.items():
@@ -680,7 +674,7 @@ def analytics_mfe_mae(limit: int = 500, window_hours: float | None = None):
             agg = _entry_bucket(bucket)
             if agg:
                 entry_mode_regime_items.append({"entry_mode": mode, "regime": regime, **agg})
-        entry_mode_regime_items.sort(key=lambda x: x["net_pnl_without_edge_usdt"])
+        entry_mode_regime_items.sort(key=lambda x: x["net_pnl_per_notional_pct"] or 0.0)
 
         return {
             "status": "ok",

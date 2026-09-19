@@ -74,15 +74,17 @@ def test_entry_modes_are_reported_with_mfe_and_mae(db_factory):
     assert _mode(result, "limit_wall")["edge_ratio"] == 3.0
 
 
-def test_edge_is_subtracted_so_modes_compare_on_equal_terms(db_factory):
-    """Иначе «limit лучше» читается как «у него есть подарок»."""
+def test_result_is_reported_per_bucket(db_factory):
+    """Сравнивать режимы входа надо по ходу и по доле номинала. Прежняя версия
+    вычитала отсюда «фору бумаги» — величину, которой не существует: вход
+    открывается по текущей цене и в бумаге, и в live."""
     _signal(db_factory, mode="limit_wall", drift=0.5, qty=100.0, entry=2.0, net_pnl=1.0)
 
     bucket = _mode(an.analytics_mfe_mae(limit=500), "limit_wall")
 
-    assert bucket["edge_usdt"] == 1.0          # 200 USDT × 0.5%
     assert bucket["net_pnl_usdt"] == 1.0
-    assert bucket["net_pnl_without_edge_usdt"] == 0.0
+    assert bucket["avg_notional_usdt"] == 200.0
+    assert "edge_usdt" not in bucket and "net_pnl_without_edge_usdt" not in bucket
 
 
 def test_result_is_normalised_by_notional(db_factory):
@@ -123,5 +125,5 @@ def test_analytics_page_shows_the_entry_mode_split():
 
     page = (Path(__file__).resolve().parents[2] / "web" / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8")
     assert "by_entry_mode" in page
-    for field in ("entry_mode", "edge_ratio", "net_pnl_without_edge_usdt", "net_pnl_per_notional_pct"):
+    for field in ("entry_mode", "edge_ratio", "net_pnl_per_notional_pct"):
         assert field in page, field

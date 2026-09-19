@@ -1,23 +1,26 @@
-"""Фора лимитного входа: чем бумага лучше того, что получит live
-(#entry-drift-2026-09-19).
+"""Цена входа: куда целились и где вошли (#entry-drift-2026-09-19).
 
-Зачем. `services/entry_zone.py` переносит вход к стенке или микро-VWAP и берёт
-цену, ВЫГОДНУЮ нам: для лонга ниже рынка, для шорта выше (там прямо так и
-написано — «вход должен ждать рынок, а не догонять его»). Бумага книжит сделку
-по этой цене и всегда считает её исполненной.
+ИСПРАВЛЕНО 19.09 после проверки по коду. Первая версия отчёта считала, что
+бумага книжит вход по цене зоны и получает «фору», которой не будет в live. Это
+неверно: `signal_lifecycle` держит сигнал в статусе `published`, ждёт, пока
+ТЕКУЩАЯ цена попадёт в коридор зоны (`_price_in_entry_zone`), и открывает
+позицию по ней же. Live в тот же момент шлёт рыночный ордер. Никакого
+систематического подарка бумаге нет, и вычитать из результата нечего.
 
-Live так не умеет: `LiveExecutor` шлёт рыночный ордер (`create_order_once(...,
-"market", ...)`), и учёт берёт фактическую среднюю цену филла. То есть на каждом
-перенесённом входе бумажный результат лучше живого ровно на `drift_pct` — и это
-не комиссия, которую можно сэкономить мейкерской ставкой, а фора, которой в live
-не будет вовсе, пока вход не станет настоящим лимитным ордером.
+Что есть на самом деле: цена входит в коридор с одной стороны — лонг падает к
+нему сверху, шорт поднимается снизу. Поэтому факт входа систематически
+оказывается у ДАЛЬНЕЙ от цели границы зоны, то есть хуже самой цели. Замер по
+сигналам 602–613: вход хуже цели на 0.06–0.10%.
 
-Отчёт считает размер этой форы по закрытым сделкам: сколько бумага получила
-сверх рыночного входа, в процентах и в USDT, и каким был бы результат без неё.
-Ничего не меняет — только измеряет, чтобы разрыв был виден ДО включения live.
+Отсюда и смысл отчёта: показать, что даст переход на лимитный ордер по цене
+цели. Две величины, обе по фактам плана:
 
-Сделки, уже исполненные в live (`plan_json.execution.mode == "live"`), в форе не
-участвуют: у них в учёте стоит реальная цена филла.
+  • `vs_target_pct` — насколько факт входа хуже (или лучше) цели зоны. Это и
+    есть выигрыш, который забрал бы лимит, если бы исполнился;
+  • `vs_mid_pct` — насколько факт входа лучше рынка на момент планирования.
+    Это то, что ожидание коридора уже даёт, и оно достаётся и бумаге, и live.
+
+Ничего не меняет — только измеряет.
 """
 from __future__ import annotations
 
@@ -43,6 +46,7 @@ def _f(value) -> float | None:
 
 
 def _entry_price(signal: Signal, plan: dict) -> float | None:
+    """Цена, по которой сделка ФАКТИЧЕСКИ открылась."""
     lifecycle = plan.get("lifecycle") or {}
     price = _f(lifecycle.get("entry_price"))
     if price:
@@ -63,24 +67,32 @@ def entry_mode(plan: dict) -> str:
 
 
 def entry_notional_usdt(signal: Signal, plan: dict) -> float:
-    """Номинал сделки — база, к которой относятся и фора, и стоимость оборота."""
+    """Номинал сделки — база, к которой относятся и выигрыш, и стоимость оборота."""
     return (_entry_price(signal, plan) or 0.0) * (_f(signal.qty) or 0.0)
 
 
-def entry_edge_usdt(signal: Signal, plan: dict) -> float:
-    """Фора перенесённого входа в USDT — одна формула на все отчёты.
+def _better_by_pct(side: str, reference: float | None, actual: float | None) -> float | None:
+    """На сколько процентов `actual` выгоднее `reference` для этой стороны.
 
-    Возникает только там, где бумага взяла цену лучше рынка: рыночный вход
-    берёт то, что есть, а сделка, уже исполненная в live, записана по факту
-    филла.
+    Лонгу выгоднее купить дешевле, шорту — продать дороже. Знак одинаково
+    означает «в нашу пользу», иначе строки лонгов и шортов нельзя складывать.
     """
-    mode = entry_mode(plan)
-    drift = _f((plan.get("entry_zone_plan") or {}).get("drift_pct")) or 0.0
-    if mode in (MARKET, UNKNOWN) or drift <= 0:
-        return 0.0
-    if str((plan.get("execution") or {}).get("mode") or "") == "live":
-        return 0.0
-    return entry_notional_usdt(signal, plan) * drift / 100.0
+    if not reference or not actual or reference <= 0:
+        return None
+    gain = (reference - actual) if str(side or "").lower() == "long" else (actual - reference)
+    return gain / reference * 100.0
+
+
+def entry_vs_target_pct(signal: Signal, plan: dict) -> float | None:
+    """Факт входа против цели зоны. Отрицательное — вошли хуже цели."""
+    target = _f((plan.get("entry_zone_plan") or {}).get("entry_price"))
+    return _better_by_pct(signal.side, target, _entry_price(signal, plan))
+
+
+def entry_vs_mid_pct(signal: Signal, plan: dict) -> float | None:
+    """Факт входа против рынка на момент планирования. Плюс — ожидание помогло."""
+    mid = _f((plan.get("entry_depth") or {}).get("mid"))
+    return _better_by_pct(signal.side, mid, _entry_price(signal, plan))
 
 
 def _round_trip_pct(plan: dict) -> float | None:
@@ -89,7 +101,12 @@ def _round_trip_pct(plan: dict) -> float | None:
 
 
 def _bucket() -> dict[str, Any]:
-    return {"trades": 0, "drift_sum": 0.0, "edge_usdt": 0.0, "notional_sum": 0.0, "net_pnl_usdt": 0.0}
+    return {"trades": 0, "notional_sum": 0.0, "net_pnl_usdt": 0.0,
+            "vs_target": [], "vs_mid": [], "limit_gain_usdt": 0.0}
+
+
+def _avg(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
 
 
 def _finish(bucket: dict[str, Any]) -> dict[str, Any]:
@@ -98,9 +115,10 @@ def _finish(bucket: dict[str, Any]) -> dict[str, Any]:
         return {"trades": 0}
     return {
         "trades": trades,
-        "avg_drift_pct": round(bucket["drift_sum"] / trades, 4),
-        "edge_usdt": round(bucket["edge_usdt"], 4),
-        "edge_per_trade_usdt": round(bucket["edge_usdt"] / trades, 4),
+        "entry_vs_target_pct": _avg(bucket["vs_target"]),
+        "entry_vs_mid_pct": _avg(bucket["vs_mid"]),
+        "limit_gain_usdt": round(bucket["limit_gain_usdt"], 4),
+        "limit_gain_per_trade_usdt": round(bucket["limit_gain_usdt"] / trades, 4),
         "avg_notional_usdt": round(bucket["notional_sum"] / trades, 2),
         "net_pnl_usdt": round(bucket["net_pnl_usdt"], 4),
     }
@@ -125,21 +143,19 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
 
     overall = _bucket()
     by_mode: dict[str, dict[str, Any]] = {}
-    live_trades = 0
     round_trips: list[float] = []
 
     for signal in signals:
         plan = signal.plan_json or {}
-        zone_plan = plan.get("entry_zone_plan") or {}
         mode = entry_mode(plan)
-        drift = _f(zone_plan.get("drift_pct")) or 0.0
-        executed_live = str((plan.get("execution") or {}).get("mode") or "") == "live"
         notional = entry_notional_usdt(signal, plan)
         net_pnl = _f(signal.closed_net_pnl) or 0.0
+        vs_target = entry_vs_target_pct(signal, plan)
+        vs_mid = entry_vs_mid_pct(signal, plan)
 
-        edge = entry_edge_usdt(signal, plan)
-        if executed_live:
-            live_trades += 1
+        # Выигрыш лимита: сколько принесла бы цена цели вместо фактической.
+        # Отрицательный `vs_target` (вошли хуже цели) даёт положительный выигрыш.
+        gain = (-vs_target / 100.0 * notional) if (vs_target is not None and notional) else 0.0
 
         rt = _round_trip_pct(plan)
         if rt is not None:
@@ -147,45 +163,49 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
 
         for bucket in (overall, by_mode.setdefault(mode, _bucket())):
             bucket["trades"] += 1
-            bucket["drift_sum"] += drift if mode not in (MARKET, UNKNOWN) else 0.0
-            bucket["edge_usdt"] += edge
             bucket["notional_sum"] += notional
             bucket["net_pnl_usdt"] += net_pnl
+            bucket["limit_gain_usdt"] += gain
+            if vs_target is not None:
+                bucket["vs_target"].append(vs_target)
+            if vs_mid is not None:
+                bucket["vs_mid"].append(vs_mid)
 
     trades = overall["trades"]
     limit_trades = sum(b["trades"] for m, b in by_mode.items() if m not in (MARKET, UNKNOWN))
-    edge_usdt = overall["edge_usdt"]
-    net_pnl = overall["net_pnl_usdt"]
     avg_round_trip = round(sum(round_trips) / len(round_trips), 4) if round_trips else None
-    # Фора на сделку в процентах — то, что сравнимо с round_trip_pct: обе цифры
-    # про долю номинала, и владельцу важно именно это сопоставление.
-    avg_drift_all = round(overall["drift_sum"] / trades, 4) if trades else None
+    maker_saving_pct = None
+    from core.config import settings
 
+    taker = _f(getattr(settings, "FUTURES_TAKER_FEE", None))
+    maker = _f(getattr(settings, "FUTURES_MAKER_FEE", None))
+    if taker is not None and maker is not None:
+        maker_saving_pct = round((taker - maker) * 100, 4)
+
+    finished = _finish(overall)
     result: dict[str, Any] = {
         "status": "ok",
         "sample_count": trades,
         "window_hours": window_hours,
         "overall": {
-            **_finish(overall),
+            **finished,
             "limit_trades": limit_trades,
             "limit_share_pct": round(limit_trades / trades * 100, 2) if trades else 0.0,
             "market_trades": by_mode.get(MARKET, {}).get("trades", 0),
             "unknown_trades": by_mode.get(UNKNOWN, {}).get("trades", 0),
-            "live_trades": live_trades,
-            "avg_drift_pct_all_trades": avg_drift_all,
             "avg_round_trip_pct": avg_round_trip,
-            "net_pnl_usdt": round(net_pnl, 4),
-            "net_pnl_without_edge_usdt": round(net_pnl - edge_usdt, 4),
+            "maker_saving_pct": maker_saving_pct,
         },
         "by_mode": {mode: _finish(bucket) for mode, bucket in sorted(by_mode.items())},
     }
 
-    note = ("Бумага книжит перенесённый вход по цене лучше рынка и всегда считает его "
-            "исполненным. Live шлёт рыночный ордер и пишет фактический филл, поэтому "
-            "этой форы там не будет. Мейкерской ставкой её не вернуть — вход должен "
-            "стать настоящим лимитным ордером.")
-    if avg_drift_all is not None and avg_round_trip:
-        note += (f" Фора {avg_drift_all:.3f}% от номинала на сделку против "
-                 f"round-trip {avg_round_trip:.3f}% — сопоставимые величины.")
+    note = ("Сигнал ждёт, пока цена сама придёт в коридор зоны, и открывается по ней "
+            "же — и в бумаге, и в live. Цена входит в коридор с одной стороны, поэтому "
+            "факт входа оказывается у дальней от цели границы: это и есть выигрыш, "
+            "который забрал бы лимитный ордер по цене цели, если бы исполнился.")
+    if finished.get("entry_vs_target_pct") is not None and maker_saving_pct:
+        note += (f" Сейчас вход {finished['entry_vs_target_pct']:+.3f}% к цели; "
+                 f"лимит добавил бы к этому мейкерскую ставку "
+                 f"(−{maker_saving_pct:.3f}% от номинала на входе).")
     result["note"] = note
     return result
