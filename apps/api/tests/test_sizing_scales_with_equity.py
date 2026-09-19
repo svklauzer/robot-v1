@@ -65,12 +65,13 @@ def test_sizing_and_submission_use_the_same_formula():
     from services import live_executor, trade_plan
 
     assert "settings.max_order_notional(balance_usdt, leverage_value)" in inspect.getsource(trade_plan)
-    assert "settings.max_order_notional(" in inspect.getsource(live_executor.LiveExecutor.place_market)
+    # Оба типа ордера идут одним телом (#limit-entry-2026-09-19), потолок там же.
+    assert "settings.max_order_notional(" in inspect.getsource(live_executor.LiveExecutor._place)
 
 
 def test_submission_asks_for_the_balance_only_when_the_share_is_on():
     """Иначе на каждый ордер уходил бы лишний запрос баланса."""
-    source = inspect.getsource(__import__("services.live_executor", fromlist=["x"]).LiveExecutor.place_market)
+    source = inspect.getsource(__import__("services.live_executor", fromlist=["x"]).LiveExecutor._place)
     head = source.split("cap = float(settings.max_order_notional", 1)[0]
     assert 'LIVE_MAX_ORDER_NOTIONAL_PCT' in head, "капитал спрашивается без проверки доли"
 
