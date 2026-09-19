@@ -750,8 +750,13 @@ class LiveExecutor:
         if mode == "off":
             return OrderResult(ok=False, mode="off", sent=False, status="off", **base)
 
-        # предохранитель размера (нотионал)
-        cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
+        # предохранитель размера (нотионал). Капитал спрашиваем ТОЛЬКО когда
+        # потолок задан долей: иначе это лишний запрос баланса на каждый ордер.
+        if float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0) or 0.0) > 0:
+            cap = float(settings.max_order_notional(
+                self.effective_equity_usdt(market_type), leverage) or 0.0)
+        else:
+            cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
         over_cap = bool(cap > 0 and reference_price and amount * float(reference_price) > cap)
 
         # (#dry-run-cap-2026-07-26) В LIVE кэп блокирует отправку — это его работа.

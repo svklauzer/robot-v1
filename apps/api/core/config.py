@@ -714,6 +714,18 @@ class Settings(BaseSettings):
     # арб-макс $500) ужимает до здорового потолка на ордер. Было 25 — это
     # ужимало КАЖДУЮ позицию в 5–8 раз (ADA-ордер $188.92 в live отклонялся бы).
     LIVE_MAX_ORDER_NOTIONAL_USDT: float = 250.0
+    # (#sizing-scales-with-equity-2026-09-19) Тот же потолок, но ДОЛЕЙ от
+    # экспозиции (капитал × плечо). Абсолютные 250 не масштабируются ни с
+    # депозитом, ни с плечом: на счёте 300 с плечом 5 они режут позицию до
+    # шестой части доступного, а на счёте 30 000 ограничивают систему тем же
+    # размером, что и на 300. Владельцу нужно обратное — «сколько на счету,
+    # тем и торгуем, с ростом позиций».
+    # Доля задаётся в процентах экспозиции и ЗАМЕЩАЕТ абсолютный потолок,
+    # когда > 0. Ноль по умолчанию: включение меняет размер позиций, то есть
+    # эпоху замера, и делается отдельным решением.
+    # Ориентир: 100 / ANTI_DRAIN_MAX_OPEN_POSITIONS = равная доля экспозиции на
+    # каждую из одновременных позиций (при 5 позициях это 20%).
+    LIVE_MAX_ORDER_NOTIONAL_PCT: float = 0.0
     # Сайзинг от РЕАЛЬНОГО баланса биржи (fetch_balance), а не от RISK_EQUITY_USDT.
     # В live эквити = свободный USDT соответствующего счёта в моменте (SPOT и
     # USDT-M фьючерсы — РАЗНЫЕ счета HTX). Растёт с пополнениями владельца и
@@ -2740,6 +2752,25 @@ class Settings(BaseSettings):
         extra = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
         # dedupe, сохраняя порядок
         return list(dict.fromkeys(defaults + extra))
+
+    def max_order_notional(self, equity_usdt: float | None = None,
+                           leverage: float | None = None) -> float:
+        """Потолок нотионала одного ордера (#sizing-scales-with-equity-2026-09-19).
+
+        Одна формула на сайзинг и на отправку: расхождение между ними уже
+        стоило отклонённых ордеров в live при полном плане в бумаге
+        (#live-notional-parity-2026-08-04).
+
+        Доля от экспозиции замещает абсолютный потолок, когда задана и когда
+        капитал известен. Неизвестный капитал (в live баланс мог не
+        прочитаться) возвращает абсолютный: предохранитель обязан работать
+        даже там, где размер счёта в этот момент неизвестен.
+        """
+        pct = float(getattr(self, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0) or 0.0)
+        absolute = float(getattr(self, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
+        if pct <= 0 or not equity_usdt or float(equity_usdt) <= 0:
+            return absolute
+        return float(equity_usdt) * max(1.0, float(leverage or 1.0)) * pct / 100.0
 
     def symbols_for(self, exchange: str | None) -> List[str]:
         """(#okx-universe-2026-09-12) Вселенная конкретной биржи."""

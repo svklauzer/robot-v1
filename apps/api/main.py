@@ -1376,6 +1376,7 @@ def live_state():
             "set_leverage": bool(getattr(settings, "LIVE_SET_LEVERAGE", True)),
             "margin_mode_default": getattr(settings, "LIVE_MARGIN_MODE", "cross"),
             "max_order_notional_usdt": getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0),
+            "max_order_notional_pct_of_exposure": getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0),
             "size_from_balance": bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True)),
             "fill_poll_timeout_sec": getattr(settings, "LIVE_FILL_POLL_TIMEOUT_SEC", 10.0),
         },
