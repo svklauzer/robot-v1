@@ -288,13 +288,18 @@ class LiveExecutor:
         return None
 
     # ── подтверждение филла ─────────────────────────────────────────────────────
-    def _await_fill(self, symbol: str, order: dict, client_id: str) -> dict:
-        timeout = float(getattr(settings, "LIVE_FILL_POLL_TIMEOUT_SEC", 10.0))
+    def _await_fill(self, symbol: str, order: dict, client_id: str,
+                    timeout: float | None = None) -> dict:
+        # Рыночный ордер ждём секунды (он либо исполнен, либо отклонён), а
+        # лимитный — весь свой срок жизни: пока цена не вернулась к нему,
+        # ордер честно стоит в стакане.
+        timeout = float(timeout if timeout is not None
+                        else getattr(settings, "LIVE_FILL_POLL_TIMEOUT_SEC", 10.0))
         interval = float(getattr(settings, "LIVE_FILL_POLL_INTERVAL_SEC", 1.0))
         oid = order.get("id")
         deadline = time.time() + timeout
         last = order
-        while time.time() < deadline:
+        while True:
             status = (last or {}).get("status")
             if status in ("closed", "filled", "canceled", "rejected"):
                 break
@@ -303,6 +308,11 @@ class LiveExecutor:
                 last = self.client.fetch_order(oid, symbol)
             except Exception as exc:  # noqa: BLE001
                 log_event(logger, logging.WARNING, "live_fill_poll_fail", symbol=symbol, oid=oid, error=str(exc))
+                break
+            # Дедлайн проверяется ПОСЛЕ опроса: ответ create не обязан нести
+            # финальный статус, и снимать ордер, ни разу не спросив биржу, —
+            # значит отменять уже исполненный.
+            if time.time() >= deadline:
                 break
         return last or order
 
@@ -737,11 +747,25 @@ class LiveExecutor:
         out["ok"] = True
         return out
 
-    # ── публичный вход: рыночный ордер ──────────────────────────────────────────
-    def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
-                     reduce_only: bool = False, leverage: float | None = None,
-                     margin_mode: str | None = None,
-                     reference_price: float | None = None, purpose: str = "") -> OrderResult:
+    # ── отправка ордера: рыночного или лимитного ────────────────────────────────
+    def _place(self, symbol: str, side: str, amount: float, *, market_type: str,
+               order_type: str = "market", limit_price: float | None = None,
+               ttl_sec: float | None = None,
+               reduce_only: bool = False, leverage: float | None = None,
+               margin_mode: str | None = None,
+               reference_price: float | None = None, purpose: str = "") -> OrderResult:
+        """Одно тело на оба типа ордера (#limit-entry-2026-09-19).
+
+        Всё, что делает путь исполнения безопасным — режим маржи, режим счёта,
+        плечо, перевод в контракты, идемпотентность по clientOrderId, сверка
+        после неоднозначного сбоя — одинаково нужно и рыночному, и лимитному
+        ордеру. Дублировать это вторым методом значило бы завести вторую
+        копию, которая начнёт отставать.
+
+        Лимитный ордер уходит с postOnly: если он попадёт в стакан как тейкер,
+        биржа его отклонит. Смысл лимитного входа в мейкерской ставке, и
+        «случайно взяли по рынку» — это не тот ордер, который мы отправляли.
+        """
         mode = self.effective_mode()
         amount = float(amount)
         base = dict(symbol=symbol, side=side, requested_qty=amount,
@@ -864,13 +888,21 @@ class LiveExecutor:
                                    client_order_id=client_id, error=leverage_error, **base)
 
         send_amount, unit_meta, params = prepared["amount"], prepared["unit_meta"], prepared["params"]
+        is_limit = str(order_type).lower() == "limit"
+        if is_limit:
+            # postOnly: ордер обязан встать в стакан мейкером или не встать
+            # вовсе. Иначе лимитный вход молча превращается в тейкерский, и
+            # экономия, ради которой он заводился, исчезает без следа.
+            params = {**params, "postOnly": True}
         if unit_meta["submitted_unit"] == "contracts":
             log_event(logger, logging.INFO, "live_order_amount_in_contracts",
                       symbol=symbol, base_amount=amount,
                       contract_size=unit_meta["contract_size"], contracts=send_amount)
 
         try:
-            order = self.client.create_order_once(symbol, "market", side, send_amount, None, params)
+            order = self.client.create_order_once(
+                symbol, order_type, side, send_amount,
+                float(limit_price) if is_limit and limit_price else None, params)
         except Exception as exc:  # noqa: BLE001 — НЕОДНОЗНАЧНО: мог пройти. Сверяем.
             log_event(logger, logging.ERROR, "live_create_ambiguous", symbol=symbol,
                       client_order_id=client_id, error=str(exc))
@@ -883,9 +915,12 @@ class LiveExecutor:
                                    client_order_id=client_id, error=f"create_failed:{exc}", **base)
             order = found  # ордер на самом деле ушёл — НЕ повторяем
 
-        order = self._await_fill(symbol, order, client_id)
-        # Ордер изменил свободный баланс: следующий сайзинг не должен взять
-        # кешированный — к нему уже прибавлена маржа новой позиции из учёта.
+        order = self._await_fill(symbol, order, client_id, timeout=ttl_sec if is_limit else None)
+        # Лимитный ордер, не исполненный за свой срок, снимается: оставить его
+        # висеть значит войти позже и по сетапу, которого уже нет. Частичное
+        # исполнение сохраняем — позиция на бирже есть, и учёт обязан её знать.
+        if is_limit and (order or {}).get("status") not in ("closed", "filled", "canceled", "rejected"):
+            order = self._cancel_unfilled(symbol, order, client_id)
         getattr(self, "_bal_cache", {}).clear()
         status = (order or {}).get("status", "open")
         filled_raw = float((order or {}).get("filled") or 0.0)
@@ -901,11 +936,52 @@ class LiveExecutor:
                   status=status, filled_base=filled, filled_raw=filled_raw,
                   unit=unit_meta["submitted_unit"], avg=avg, client_order_id=client_id,
                   exchange_order_id=(order or {}).get("id"))
-        return OrderResult(ok=status in ("closed", "filled"), mode="live", sent=True,
-                           status=status, client_order_id=client_id,
+        # Лимит, который не дождался цены, — не сбой исполнения: сетап просто не
+        # состоялся. Ошибку сюда писать нельзя, иначе kill switch будет считать
+        # обычный неисполненный вход отказом биржи.
+        ok = status in ("closed", "filled") or (is_limit and filled > 0)
+        return OrderResult(ok=ok, mode="live", sent=True,
+                           status="unfilled" if is_limit and filled <= 0 else status,
+                           client_order_id=client_id,
                            exchange_order_id=(order or {}).get("id"),
                            filled_qty=filled, avg_price=float(avg) if avg else None,
                            raw=order, **base)
+
+    def _cancel_unfilled(self, symbol: str, order: dict, client_id: str) -> dict:
+        """Снять остаток лимитного ордера по истечении срока."""
+        oid = (order or {}).get("id")
+        try:
+            self.client.cancel_order(oid, symbol)
+        except Exception as exc:  # noqa: BLE001 — мог исполниться прямо сейчас
+            log_event(logger, logging.WARNING, "live_limit_cancel_failed",
+                      symbol=symbol, oid=oid, client_order_id=client_id, error=str(exc))
+        try:
+            return self.client.fetch_order(oid, symbol) or order
+        except Exception:  # noqa: BLE001
+            return order
+
+    # ── публичные входы ─────────────────────────────────────────────────────────
+    def place_market(self, symbol: str, side: str, amount: float, *, market_type: str,
+                     reduce_only: bool = False, leverage: float | None = None,
+                     margin_mode: str | None = None,
+                     reference_price: float | None = None, purpose: str = "") -> OrderResult:
+        return self._place(symbol, side, amount, market_type=market_type, order_type="market",
+                           reduce_only=reduce_only, leverage=leverage, margin_mode=margin_mode,
+                           reference_price=reference_price, purpose=purpose)
+
+    def place_limit(self, symbol: str, side: str, amount: float, *, market_type: str,
+                    limit_price: float, ttl_sec: float,
+                    reduce_only: bool = False, leverage: float | None = None,
+                    margin_mode: str | None = None, purpose: str = "") -> OrderResult:
+        """Лимитный вход по цене зоны, с постановкой в стакан мейкером.
+
+        `ttl_sec` — срок жизни: столько же, сколько живёт сама зона входа
+        (`entry_zone_plan.ttl_sec`). Не исполнился — снимаем; сделки нет.
+        """
+        return self._place(symbol, side, amount, market_type=market_type, order_type="limit",
+                           limit_price=limit_price, ttl_sec=ttl_sec,
+                           reduce_only=reduce_only, leverage=leverage, margin_mode=margin_mode,
+                           reference_price=limit_price, purpose=purpose)
 
 
 LIVE_EXECUTOR = LiveExecutor()
