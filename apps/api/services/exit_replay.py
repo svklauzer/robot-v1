@@ -279,6 +279,7 @@ def _replay_trend_one(
     tp1_share: float = 0.0,
     tp2_share: float = 0.0,
     tp2_trigger: float = 0.92,
+    post_tp1_lock_frac: float = 0.0,
 ) -> tuple[float, str]:
     """(#backtest-trend-2026-07-27) Трендовая лестница выхода по траектории.
 
@@ -316,6 +317,15 @@ def _replay_trend_one(
     равна единице при любом дроблении — значит совокупный круг тот же. Разными
     были бы проскальзывание и минимальный размер ордера, но их replay и так не
     моделирует ни в одном варианте.
+
+    (#replay-post-tp1-lock-2026-09-19) Замок после TP1. В бою достижение цели
+    переставляет стоп на долю `POST_TP1_LOCK_FRAC` пути до неё (1.0 - на сам
+    TP1) и не ниже безубытка с буфером комиссии - `signal_lifecycle.
+    _post_tp1_lock_stop`. Это САМАЯ ЧАСТАЯ причина закрытия с плюсом в живом
+    контуре (`post_tp1_lock_stop`), и её в модели не было: сделка, которую бой
+    закрывал замком на +0.5...+1.3%, здесь либо доживала до факта, либо её
+    раньше выбивал безубыток. Доля берётся живая и не перебирается: сперва
+    модель обязана воспроизводить машину, которая работает.
     """
     mfe = 0.0
     # Доля позиции, ещё не закрытая, и уже забронированный результат по
@@ -325,6 +335,9 @@ def _replay_trend_one(
     booked = 0.0
     tp1_done = tp1_pct is None or tp1_share <= 0.0
     tp2_done = tp2_pct is None or tp2_share <= 0.0
+    # Уровень замка после TP1; None - цель не достигнута либо доля выключена.
+    # Безубыток с буфером комиссии - нижняя граница, как в бою.
+    lock_level: float | None = None
 
     def close(part: float, at_pct: float, reason: str) -> tuple[float, str]:
         return booked + part * at_pct - cost_pct, reason
@@ -336,6 +349,11 @@ def _replay_trend_one(
             continue
         mfe = max(mfe, pct)
 
+        # Замок проверяется ДО установки: иначе он сработал бы на том же баре,
+        # на котором встал (при frac=1.0 уровень равен самому TP1).
+        if lock_level is not None and pct <= lock_level:
+            return close(remaining, pct, "replay_post_tp1_lock")
+
         # Частичные фиксации идут ПЕРВЫМИ на баре: в бою они срабатывают на
         # достижении цели, до того как защитные ярусы посмотрят на откат.
         if not tp1_done and pct >= tp1_pct:
@@ -346,6 +364,9 @@ def _replay_trend_one(
             booked += remaining * tp2_share * pct
             remaining -= remaining * tp2_share
             tp2_done = True
+
+        if lock_level is None and post_tp1_lock_frac > 0 and tp1_pct and pct >= tp1_pct:
+            lock_level = max(post_tp1_lock_frac * tp1_pct, cost_pct)
 
         if mfe >= ride_arm:
             protect = mfe * (1.0 - ride_trail)
@@ -365,7 +386,8 @@ def _replay_trend_one(
 
         # Замок безубытка — последний рубеж; срабатывает, когда цена вернулась
         # к входу. Порогом min_protective НЕ гейтится: это стоп, а не фиксация.
-        if mfe >= be_arm and pct <= be_floor:
+        # После TP1 молчит: его уровень вытеснен более высоким замком.
+        if lock_level is None and mfe >= be_arm and pct <= be_floor:
             return close(remaining, pct, "replay_breakeven")
 
     # Ни один ярус не сработал: остаток закрывается фактом. Уже снятые доли
@@ -381,7 +403,19 @@ def _replay_trend_one(
     return final_pct, "actual_close"
 
 
-def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float) -> dict:
+# Ветки живого выхода, которые по траектории воспроизвести нечем: им нужны
+# индикаторы и возраст сделки, а `traj` несёт только (время, % от входа).
+# Список держится рядом с вердиктом намеренно — прежний текст перечислял
+# «стоп, tp1/tp2, adaptive-трейл» ещё долго после того, как их добавили, и
+# вердикт врал про собственную модель.
+UNMODELLED_TREND_LEGS = (
+    "tz_kama и tz_mfe_giveback_backstop (нужны KAMA и ADX по времени)",
+    "failed_setup_exit и тайм-стопы (нужен возраст сделки)",
+)
+
+
+def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float,
+                      missing: tuple[str, ...] = UNMODELLED_TREND_LEGS) -> dict:
     """Воспроизводит ли модель саму себя. (#replay-fidelity-2026-08-03)
 
     Реплей ТЕКУЩЕГО конфига на тех же сделках обязан дать примерно фактический
@@ -395,9 +429,14 @@ def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float)
     лучше» сравнивало две МОДЕЛИ, а не две реальности, и менять по такому
     сравнению конфиг нельзя.
 
-    Причина разрыва в лестнице `_replay_trend_one`: она знает безубыток, полосу
-    и трейл, но не знает стоп, tp1-partial, tp2, adaptive-трейл и flow-выходы.
-    Пока их нет, модель будет расходиться с движком систематически.
+    Причина разрыва — в неполноте лестницы `_replay_trend_one`. С тех пор в неё
+    добавлены частичные фиксации, adaptive-трейл и замок после TP1; что осталось
+    за бортом, перечисляет `UNMODELLED_TREND_LEGS`.
+
+    Отдельного яруса «стоп» в модели нет и не нужно: траектория обрывается в
+    точке фактического закрытия, поэтому сделка, которую в бою закрыл стоп,
+    книжится здесь своим фактическим результатом. Реплей может закрыть сделку
+    только РАНЬШЕ факта — это инвариант модуля.
 
     Два условия доверия, оба обязательны:
       * разрыв мал сам по себе;
@@ -421,8 +460,9 @@ def _fidelity_verdict(*, current_pct: float, actual_pct: float, best_pct: float)
             "модель воспроизводит текущий конфиг — сравнению вариантов можно верить"
             if trustworthy else
             f"модель НЕ воспроизводит текущий конфиг: разрыв {abs(gap):.2f} п.п. "
-            f"против дельты лидера {best_edge:.2f}. Сначала достроить лестницу "
-            f"выходов (нет стопа, tp1/tp2, adaptive-трейла), потом сравнивать."
+            f"против дельты лидера {best_edge:.2f}. Сравнивать варианты нельзя. "
+            f"Из живого выхода по траектории не воспроизводится: "
+            + "; ".join(missing) + "."
         ),
     }
 
@@ -737,6 +777,9 @@ def build_trend(limit: int = 2000) -> dict:
         "tp2_share": (_sanitize_float(getattr(settings, "TP2_PARTIAL_CLOSE_SHARE", 0.5), 0.5)
                       if bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True)) else 0.0),
         "tp2_trigger": 0.92,
+        # (#replay-post-tp1-lock-2026-09-19) Замок после TP1 — самая частая
+        # причина закрытия с плюсом в бою. Доля живая, как и остальные ноги.
+        "post_tp1_lock_frac": _sanitize_float(getattr(settings, "POST_TP1_LOCK_FRAC", 0.0), 0.0),
     }
     with_targets = sum(1 for t in trades if t.get("tp1_dist_pct"))
 
@@ -761,6 +804,7 @@ def build_trend(limit: int = 2000) -> dict:
                     tp1_share=partials["tp1_share"],
                     tp2_share=partials["tp2_share"],
                     tp2_trigger=partials["tp2_trigger"],
+                    post_tp1_lock_frac=partials["post_tp1_lock_frac"],
                 )
                 total += pct
                 wins += int(pct > 0)
@@ -806,10 +850,11 @@ def build_trend(limit: int = 2000) -> dict:
     # между вариантами на два порядка меньше ошибки самой модели, и любой
     # вывод «вариант X лучше» был бы сравнением двух моделей, а не реальностей.
     #
-    # Причина разрыва: лестница в _replay_trend_one знает только безубыток,
-    # полосу и трейл. Реальных выходов больше — стоп, tp1-partial, tp2,
-    # adaptive-трейл, flow-выходы. Пока их нет, модель систематически
-    # расходится с движком.
+    # С тех пор в лестницу добавлены частичные фиксации, adaptive-трейл и
+    # (#replay-post-tp1-lock-2026-09-19) замок после TP1 — самая частая причина
+    # закрытия с плюсом в бою. Что ещё не моделируется, перечисляет
+    # UNMODELLED_TREND_LEGS, и вердикт берёт список оттуда, а не из текста,
+    # который устаревает молча.
     fidelity: dict = {"checked": bool(current_row)}
     if current_row:
         fidelity.update(_fidelity_verdict(
@@ -837,16 +882,20 @@ def build_trend(limit: int = 2000) -> dict:
         # инструмент выглядит одинаково авторитетно и когда воспроизводит
         # сегодняшний выход, и когда отвечает про лестницу от 27.07.
         "exit_model": {
-            "ladder": ["breakeven_lock", "capture_band", "mfe_capture", "ride_trail"],
+            "ladder": ["post_tp1_lock", "breakeven_lock", "capture_band", "mfe_capture", "ride_trail"],
             "tp1_partial_share": partials["tp1_share"],
             "tp2_partial_share": partials["tp2_share"],
             "tp2_trigger_share": partials["tp2_trigger"],
+            "post_tp1_lock_frac": partials["post_tp1_lock_frac"],
+            "not_modelled": list(UNMODELLED_TREND_LEGS),
             "trades_with_targets": with_targets,
             "trades_without_targets": len(trades) - with_targets,
-            "note": ("Доли частичных фиксаций берутся живые и одинаковые для всех "
-                     "вариантов — перебирается только лестница. Сделки без "
-                     "геометрии целей считаются по старой лестнице: у строк из "
-                     "файла логгера дистанций до TP1/TP2 нет."),
+            "note": ("Доли частичных фиксаций и замок после TP1 берутся живые и "
+                     "одинаковые для всех вариантов — перебирается только лестница. "
+                     "Сделки без геометрии целей считаются без этих ног: у строк из "
+                     "файла логгера дистанций до TP1/TP2 нет. Отдельного яруса «стоп» "
+                     "нет и не нужно — траектория обрывается фактическим закрытием, "
+                     "поэтому сделку, закрытую стопом, модель книжит её же фактом."),
         },
         "sources": sources,
         "fidelity": fidelity,
@@ -978,6 +1027,13 @@ def _load_trades(regime: str, limit: int) -> tuple[list[dict], int, int]:
             "traj": traj, "final_pct": honest, "booked_pct": _sanitize_float(final_pct, 0.0),
             "symbol": r.get("symbol"), "signal_id": r.get("signal_id"),
             "mfe_pct": lc.get("mfe_pct"), "phantom": is_phantom,
+            # (#replay-post-tp1-lock-2026-09-19) Те же поля, что у основного
+            # стенда: иначе walk-forward проверял бы вне выборки лестницу,
+            # которой в переборе не было, и его «подтверждение» относилось бы
+            # к другой модели.
+            "cost_pct": _cost_pct(r),
+            "tp1_dist_pct": _sanitize_float((r.get("tp_reach") or {}).get("tp1_dist_pct"), 0.0) or None,
+            "tp2_dist_pct": _sanitize_float((r.get("tp_reach") or {}).get("tp2_dist_pct"), 0.0) or None,
         })
     return trades, skipped, phantom
 
@@ -1016,6 +1072,13 @@ def _score(trades: list[dict], params: dict, regime: str) -> float:
             capture_drawdown=params.get("capture_drawdown_pct", 0.30),
             capture_share=params.get("capture_share", 0.40),
             cost_pct=t.get("cost_pct", 0.0),
+            tp1_pct=t.get("tp1_dist_pct"),
+            tp2_pct=t.get("tp2_dist_pct"),
+            tp1_share=(_sanitize_float(getattr(settings, "TP1_PARTIAL_CLOSE_SHARE", 0.5), 0.5)
+                       if bool(getattr(settings, "TP1_PARTIAL_ENABLED", True)) else 0.0),
+            tp2_share=(_sanitize_float(getattr(settings, "TP2_PARTIAL_CLOSE_SHARE", 0.5), 0.5)
+                       if bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True)) else 0.0),
+            post_tp1_lock_frac=_sanitize_float(getattr(settings, "POST_TP1_LOCK_FRAC", 0.0), 0.0),
         )[0]
     return total
 
