@@ -93,8 +93,12 @@ _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Grid", ("GRID_",)),
     ("ML", ("ML_",)),
     # LOOP_ — поведение самого торгового цикла (пульс отчёта о простое и т.п.).
+    # (#limit-entry-2026-09-19) ENTRY_ORDER_TYPE — чем отправляется вход,
+    # рыночным ордером или лимитным. Это способ исполнения, а не зона входа: от
+    # него зависят и комиссия, и то, исполнится ли сделка вообще. В «Прочем»
+    # такой рубильник читался бы как техническая переменная.
     ("Live-исполнение", ("LIVE_", "ENABLE_LIVE", "ROBOT_MODE", "TRADING_MODE", "LOOP_",
-                         "SCAN_SILENCE", "EXCHANGE_RECONCILIATION")),
+                         "SCAN_SILENCE", "EXCHANGE_RECONCILIATION", "ENTRY_ORDER_TYPE")),
     ("Телеграм и отчёты", ("TELEGRAM_", "REPORT_", "DIGEST_", "SUBSCRIPTION_", "BILLING_", "PAYMENT_")),
     # (#memory-probe-2026-09-16) Бюджет Render: замер памяти, потолок журнала
     # egress, кеш readonly-скана дашборда.
