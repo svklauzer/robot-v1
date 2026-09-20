@@ -660,7 +660,7 @@ class Settings(BaseSettings):
     # MAX_ACTIVE_SIGNALS_PER_SYMBOL=1 × 7 символов HTX_SYMBOLS.
     MAX_ACTIVE_SIGNALS: int = 100
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
-    RISK_EQUITY_USDT: float = 3000.0
+    RISK_EQUITY_USDT: float = 300.0
     MAX_USED_MARGIN_PCT: float = 0.85
 
     # (#leak-correlation) Кластерный лимит нетто-направления. Наша вселенная —
@@ -754,7 +754,7 @@ class Settings(BaseSettings):
 
     # ── Плечо ПО ДВИЖКУ (разный риск-профиль → разное плечо) ──────────────────
     # Жёсткий потолок: ни один движок не выставит плечо выше (предохранитель).
-    LIVE_MAX_LEVERAGE: float = 5.0
+    LIVE_MAX_LEVERAGE: float = 10.0
     # FUNDING: дельта-нейтральный хедж (лонг spot + шорт swap равного размера) —
     # ценовой риск захеджирован, поэтому swap-ногу можно вести с бОльшим плечом
     # ради капиталоэффективности. НО: spot и swap в HTX — РАЗНЫЕ счета, маржа НЕ
@@ -782,7 +782,7 @@ class Settings(BaseSettings):
     GRID_MARGIN_ISOLATED_MAX_LEV: float = 1.0
 
     ENABLE_FUTURES: bool = False
-    FUTURES_LEVERAGE: int = 1
+    FUTURES_LEVERAGE: int = 10
     ALLOW_SHORTS: bool = True
     SIGNAL_PROFILE: str = "learning"
     EXECUTION_MARKET: str = "spot"
