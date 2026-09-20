@@ -130,6 +130,11 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
         "by_score": {}, "by_confirmation": {}, "by_sweep_side": {},
         "by_sweep_depth": {}, "by_symbol": {},
     }
+    # (#crt-one-cluster-2026-09-20) Оси разделяют, но каждая по-своему режет
+    # ОДИН И ТОТ ЖЕ набор сделок: замер 20.09 дал −18.4 у score ≥ 70, −17.3 у
+    # сделок с MSS и −15.5 у HYPE при общем итоге −20.9. Три «рычага» или один
+    # кластер — по агрегатам не различить, поэтому отдаём и сами сделки.
+    trades_rows: list[dict[str, Any]] = []
 
     for signal in signals:
         plan = signal.plan_json or {}
@@ -161,6 +166,18 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
         for axis, key in keys.items():
             _add(axes[axis].setdefault(key, _bucket()), **row)
 
+        trades_rows.append({
+            "id": signal.id,
+            "symbol": str(signal.symbol),
+            "score": _f(setup.get("final_score")),
+            "confirmation": confirmation,
+            "sweep": keys["by_sweep_side"],
+            "sweep_depth_pct": _f(setup.get("sweep_depth_pct")),
+            "net_pnl_usdt": round(row["net_pnl"], 4),
+            "net_pnl_per_notional_pct": (round(row["net_pnl"] / row["notional"] * 100, 4)
+                                         if row["notional"] else None),
+        })
+
     result: dict[str, Any] = {
         "status": "ok",
         "strategy": STRATEGY,
@@ -184,6 +201,12 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
                 rows.append({"key": key, **finished})
         rows.sort(key=lambda r: r["net_pnl_per_notional_pct"] if r["net_pnl_per_notional_pct"] is not None else 0.0)
         result[axis] = rows
+
+    # Худшие — первыми: если они совпадают по символу, подтверждению и оценке,
+    # рычаг один, а не три, и чинить надо его.
+    trades_rows.sort(key=lambda r: r["net_pnl_per_notional_pct"]
+                     if r["net_pnl_per_notional_pct"] is not None else 0.0)
+    result["trades"] = trades_rows
 
     result["note"] = (
         "Разрез по собственной геометрии CRT. Главная ось — оценка сетапа: прод "
