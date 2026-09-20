@@ -142,4 +142,8 @@ def test_blueprint_carries_the_entry_order_type():
 
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: ENTRY_ORDER_TYPE", 1)[1].split("- key:", 1)[0]
-    assert 'value: "market"' in block
+    # (#sync-reverted-the-entry-type-2026-09-20) Значение держим в блупринте, а
+    # не только в дашборде: sync возвращает ключи с value: к записанному, и
+    # 20.09 он выключил лимит, включённый владельцем часом раньше.
+    assert f'value: "{settings.ENTRY_ORDER_TYPE}"' in block
+    assert settings.ENTRY_ORDER_TYPE == "limit"

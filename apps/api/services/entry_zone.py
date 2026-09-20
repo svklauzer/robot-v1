@@ -58,6 +58,12 @@ class EntryZoneDecision:
             "ttl_sec": self.ttl_sec,
             "reasons": list(self.reasons),
             "depth": dict(self.depth),
+            # (#sync-reverted-the-entry-type-2026-09-20) Чем вход отправлялся
+            # НА САМОМ ДЕЛЕ. Без этого поля тип ордера задним числом не
+            # восстановить: `mode` описывает, куда зона перенесла цель, а не
+            # чем по ней входили, и отчёт принимал одно за другое — 27 сделок
+            # числились лимитными, войдя по рынку.
+            "order_type": str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower(),
         }
 
 

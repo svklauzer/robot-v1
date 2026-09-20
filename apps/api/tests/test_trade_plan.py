@@ -20,7 +20,10 @@ class DummyHTX:
 
 
 class DummyCostEngine:
-    def estimate(self, symbol, market_type, side, entry_price, exit_price, qty, liquidity, leverage):
+    def estimate(self, symbol, market_type, side, entry_price, exit_price, qty, liquidity,
+                 leverage, entry_liquidity=None):
+        # (#sync-reverted-the-entry-type-2026-09-20) Лимитный вход стал дефолтом,
+        # и сайзинг теперь всегда сообщает ставку входной ноги.
         side_value = str(side).lower()
         if side_value in ["long", "buy"]:
             gross = (exit_price - entry_price) * qty
