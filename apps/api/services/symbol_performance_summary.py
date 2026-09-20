@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from models.bot import Bot
 from models.signal import Signal
+from core.config import settings as _settings
 from services.symbol_performance_guard import SymbolPerformanceGuard
 
 
@@ -60,6 +61,14 @@ class SymbolPerformanceSummaryService:
             "status": "ok",
             "lookback": lookback,
             "window_hours": window_hours,
+            # (#showcase-window-lied-2026-09-20) Окно, по которому робот
+            # РЕАЛЬНО судит символ. Совпадает с window_hours, пока витрину не
+            # попросили шире — тогда расхождение видно сразу, а не по разнице
+            # вердиктов, которую не с чем сверить.
+            "live_window_hours": float(getattr(_settings, "SYMBOL_PERF_WINDOW_HOURS", 168.0)),
+            "matches_live_window": (window_hours is None
+                                    or abs(float(window_hours) - float(getattr(
+                                        _settings, "SYMBOL_PERF_WINDOW_HOURS", 168.0))) < 1e-9),
             "symbols_count": len(items),
             "blocked_count": by_class.get("blocked", 0),
             "reduced_count": by_class.get("reduced", 0),
