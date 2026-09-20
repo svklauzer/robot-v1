@@ -162,7 +162,6 @@ class SymbolPerformanceGuard:
         small_history_stop_multiplier = float(getattr(settings, "SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER", 0.65))
         weak_multiplier = float(getattr(settings, "SYMBOL_PERF_WEAK_MULTIPLIER", 0.45))
         giveback_multiplier = float(getattr(settings, "SYMBOL_PERF_GIVEBACK_MULTIPLIER", 0.60))
-        giveback_trigger = int(getattr(settings, "SYMBOL_PERF_GIVEBACK_TRIGGER", 3))
 
         probe_mult = float(getattr(settings, "SYMBOL_PERF_PROBE_MULTIPLIER", 0.15))
         probe_on = probe_mult > 0
@@ -235,7 +234,7 @@ class SymbolPerformanceGuard:
         # Статистически убыточный В ОКНЕ → probe-режим. У этой ветки СВОЙ порог
         # выборки (block_min_history), поэтому она тоже идёт до small_history:
         # иначе общий min_history глушил бы её вопреки собственному порогу.
-        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol and winrate < block_max_winrate:
+        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol:
             return _restrict("symbol_negative_expectancy")
 
         # Мало истории — судить о символе не по чему. Одиночный стоп информации
@@ -247,7 +246,7 @@ class SymbolPerformanceGuard:
 
         # Статистически убыточный В ОКНЕ → probe-режим.
         # Только при ВНЯТНОМ минусе (за толерансом), не у безубытка.
-        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol and winrate < block_max_winrate:
+        if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol:
             return _restrict("symbol_negative_expectancy")
 
         # Слабый, но не катастрофа — пониженный риск.
@@ -261,10 +260,14 @@ class SymbolPerformanceGuard:
         if total_net_pnl < 0:
             return _mk(True, "symbol_near_breakeven_mild_reduce", giveback_multiplier)
 
-        # Много positive_then_negative — защищаем прибыль раньше.
-        if positive_then_negative_count >= giveback_trigger:
-            return _mk(True, "symbol_gives_back_profit_reduce_risk", giveback_multiplier)
-
+        # (#symbol-gate-inverted-2026-09-20) Ветка «много positive_then_negative
+        # → защищаем прибыль раньше» УДАЛЕНА. Досюда доходят только символы с
+        # неотрицательным результатом (минус разобран ветками выше), поэтому
+        # она по построению била ИСКЛЮЧИТЕЛЬНО по прибыльным. Замер за неделю:
+        # CHIP +14.71 при винрейте 78.6% резался множителем 0.60, XRP +0.69 —
+        # тоже, а HYPE с −18.53 шёл в полный размер, не набрав истории. Гейт
+        # наказывал лучших и пропускал худшего; цена инверсии ≈19 USDT
+        # за неделю при итоге недели того же порядка.
         return _mk(True, "symbol_performance_ok", 1.0)
 
     def to_dict(self, decision: SymbolPerformanceDecision) -> dict:

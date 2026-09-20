@@ -552,6 +552,14 @@ services:
       - key: MAX_DRAWDOWN_PCT
         value: "15"
 
+      # (#mss-is-not-a-confirmation-2026-09-20) Чем подтверждается вход CRT.
+      # "fvg" — только FVG; MSS остаётся бонусом к оценке, но входить по нему
+      # одному нельзя: пять сделок с MSS дали −17.26 USDT при итоге CRT −20.86,
+      # худший бакет «только MSS» — −1.72% на номинал против −0.14% у сделок
+      # с одним FVG.
+      - key: CRT_LTF_CONFIRM
+        value: "fvg"
+
       # ── Symbol guard ──────────────────────────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE
         value: "48.0"
@@ -562,6 +570,16 @@ services:
       - key: SYMBOL_PERF_COOLDOWN_FAILED_SETUPS
         value: "2"
       - key: SYMBOL_PERF_LOOKBACK
+        value: "10"
+      # (#symbol-gate-inverted-2026-09-20) Окно суждения о символе. При сутках
+      # гейт был слеп: 1-3 сделки на символ против MIN_HISTORY=12, замер 20.09
+      # дал blocked 0 / reduced 0 / ok 10, а HYPE с двумя стопами и −9.89 USDT
+      # проходил как «ok». Неделя даёт 6-14 сделок — есть на чём судить.
+      - key: SYMBOL_PERF_WINDOW_HOURS
+        value: "168.0"
+      # Двадцати сделок не набиралось даже за неделю (максимум 14), поэтому
+      # ветка ограничения не срабатывала ни разу.
+      - key: SYMBOL_PERF_BLOCK_MIN_HISTORY
         value: "10"
 
       # ── Production entry gate ─────────────────────────────────────────────
