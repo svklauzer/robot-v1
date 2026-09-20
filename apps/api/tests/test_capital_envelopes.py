@@ -278,7 +278,7 @@ def test_the_trade_size_names_what_actually_limits_it(monkeypatch):
 
     # риск 1000, маржа 390, капитал 3000, доля 600 → режет маржа.
     assert result["usdt"] == pytest.approx(390.0)
-    assert result["binding"] == "маржа на позицию"
+    assert result["binding"] == "margin"
 
 
 def test_a_static_cap_shows_up_as_the_binding_limit(monkeypatch):
@@ -290,7 +290,7 @@ def test_a_static_cap_shows_up_as_the_binding_limit(monkeypatch):
 
     result = env.trade_size_breakdown(3000, 1, stop_pct=1.5)
 
-    assert result["binding"] == "потолок ордера"
+    assert result["binding"] == "order_cap"
     assert result["usdt"] == pytest.approx(250.0)
 
 
@@ -301,5 +301,18 @@ def test_a_disabled_cap_is_shown_as_off_not_as_zero(monkeypatch):
 
     result = env.trade_size_breakdown(3000, 1)
 
-    assert result["limits"]["потолок ордера"] is None
+    assert next(r for r in result["limits"] if r["key"] == "order_cap")["usdt"] is None
     assert result["usdt"] > 0
+
+
+def test_the_limit_keys_are_latin_so_any_client_can_read_them():
+    """Русский текст в КЛЮЧАХ словаря разваливается у клиента, читающего поток
+    не в UTF-8 — первой такой клиенткой оказалась консоль владельца: значения
+    печатались, а ключи приходили мусором. Подпись живёт в отдельном поле."""
+    result = env.trade_size_breakdown(3000, 1)
+
+    assert [r["key"] for r in result["limits"]] == ["risk", "margin", "balance", "order_cap"]
+    assert all(r["key"].isascii() for r in result["limits"])
+    assert all(r["label"] for r in result["limits"])
+    assert result["binding"].isascii()
+    assert sum(int(r["binding"]) for r in result["limits"]) == 1
