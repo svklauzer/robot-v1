@@ -60,11 +60,30 @@ def _entry_price(signal: Signal, plan: dict) -> float | None:
 
 
 def entry_mode(plan: dict) -> str:
-    """Способ входа сделки: market, limit_wall, limit_vwap или unknown."""
+    """Куда зона перенесла ЦЕЛЬ входа: market, limit_wall, limit_vwap, unknown.
+
+    Это НЕ тип ордера. Имена режимов начинаются с `limit_`, потому что цель
+    берётся из книги, но войти по ней можно и рыночным ордером — так и было
+    все 27 сделок 19–20.09.
+    """
     zone_plan = plan.get("entry_zone_plan")
     if not isinstance(zone_plan, dict) or not zone_plan.get("mode"):
         return UNKNOWN
     return str(zone_plan["mode"])
+
+
+def entry_order_type(plan: dict) -> str:
+    """Чем вход отправлялся: limit, market или unknown у сделок до 20.09."""
+    zone_plan = plan.get("entry_zone_plan")
+    if not isinstance(zone_plan, dict) or not zone_plan.get("order_type"):
+        return UNKNOWN
+    return str(zone_plan["order_type"]).lower()
+
+
+def entered_by_limit(plan: dict) -> bool:
+    """Лимитом вход идёт только когда И настройка limit, И зона цель перенесла:
+    при `mode == market` цели нет, и ордер уходит рыночным при любой настройке."""
+    return entry_order_type(plan) == "limit" and entry_mode(plan) not in (MARKET, UNKNOWN)
 
 
 def entry_notional_usdt(signal: Signal, plan: dict) -> float:
@@ -176,11 +195,16 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
 
     overall = _bucket()
     by_mode: dict[str, dict[str, Any]] = {}
+    by_order: dict[str, int] = {}
+    entered_limit = 0
     round_trips: list[float] = []
 
     for signal in signals:
         plan = signal.plan_json or {}
         mode = entry_mode(plan)
+        order = entry_order_type(plan)
+        by_order[order] = by_order.get(order, 0) + 1
+        entered_limit += int(entered_by_limit(plan))
         notional = entry_notional_usdt(signal, plan)
         net_pnl = _f(signal.closed_net_pnl) or 0.0
         vs_target = entry_vs_target_pct(signal, plan)
@@ -205,7 +229,8 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
                 bucket["vs_mid"].append(vs_mid)
 
     trades = overall["trades"]
-    limit_trades = sum(b["trades"] for m, b in by_mode.items() if m not in (MARKET, UNKNOWN))
+    # Зона перенесла цель — это ещё не лимитный вход (см. entry_mode).
+    zone_moved_trades = sum(b["trades"] for m, b in by_mode.items() if m not in (MARKET, UNKNOWN))
     avg_round_trip = round(sum(round_trips) / len(round_trips), 4) if round_trips else None
     maker_saving_pct = None
     taker = _f(getattr(settings, "FUTURES_TAKER_FEE", None))
@@ -220,10 +245,17 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
         "window_hours": window_hours,
         "overall": {
             **finished,
-            "limit_trades": limit_trades,
-            "limit_share_pct": round(limit_trades / trades * 100, 2) if trades else 0.0,
-            "market_trades": by_mode.get(MARKET, {}).get("trades", 0),
-            "unknown_trades": by_mode.get(UNKNOWN, {}).get("trades", 0),
+            # Цель перенесена (режим зоны) — и ОТДЕЛЬНО чем по ней входили.
+            # Раньше здесь стояло одно число под именем limit_trades, и 27
+            # рыночных входов читались как лимитные.
+            "zone_moved_trades": zone_moved_trades,
+            "zone_moved_share_pct": round(zone_moved_trades / trades * 100, 2) if trades else 0.0,
+            "limit_order_trades": by_order.get("limit", 0),
+            "market_order_trades": by_order.get(MARKET, 0),
+            "order_type_unknown_trades": by_order.get(UNKNOWN, 0),
+            "entered_by_limit_trades": entered_limit,
+            "zone_market_trades": by_mode.get(MARKET, {}).get("trades", 0),
+            "zone_unknown_trades": by_mode.get(UNKNOWN, {}).get("trades", 0),
             "avg_round_trip_pct": avg_round_trip,
             "maker_saving_pct": maker_saving_pct,
         },
@@ -240,5 +272,20 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
         note += (f" Сейчас вход {finished['entry_vs_target_pct']:+.3f}% к цели; "
                  f"лимит добавил бы к этому мейкерскую ставку "
                  f"(−{maker_saving_pct:.3f}% от номинала на входе).")
+    # (#sync-reverted-the-entry-type-2026-09-20) Настройка «limit» и вход
+    # лимитом — разные вещи, и 19–20.09 они разошлись почти на двое суток:
+    # sync blueprint вернул ENTRY_ORDER_TYPE к market, а отчёт продолжал
+    # показывать 85% «лимитных» сделок (это был режим ЗОНЫ). Расхождение
+    # ловим здесь, иначе заметить его нечем.
+    if result["entry_order_type"] == "limit" and trades and not entered_limit:
+        result["warning"] = (
+            f"ENTRY_ORDER_TYPE=limit, но ни одна из {trades} сделок не вошла лимитом. "
+            f"Либо настройка не доехала до процесса (sync blueprint возвращает ключи "
+            f"с value: к записанному), либо зона не переносит вход.")
+    elif result["entry_order_type"] != "limit" and zone_moved_trades:
+        result["warning"] = (
+            f"ENTRY_ORDER_TYPE={result['entry_order_type']}: {zone_moved_trades} сделок "
+            f"имеют перенесённую цель зоны, но входят по рынку. Дрейф к цели ниже — "
+            f"это цена рыночного входа, а не результат лимита.")
     result["note"] = note
     return result

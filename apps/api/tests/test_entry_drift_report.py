@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from core.config import settings
 from core.db import Base
 from models.bot import Bot
 from models.signal import Signal
@@ -36,7 +37,8 @@ def _db():
 
 
 def _signal(db, *, side="long", mode="limit_wall", target=1.4097, mid=1.4110,
-            entry=1.4110, qty=100.0, net_pnl=1.0, closed_hours_ago=1.0, round_trip=0.12):
+            entry=1.4110, qty=100.0, net_pnl=1.0, closed_hours_ago=1.0, round_trip=0.12,
+            order_type=None):
     zone_base = target or entry
     db.add(Signal(bot_id=1, symbol="XRP/USDT", side=side, status="closed", exchange="okx",
                   entry_zone_json={"from": zone_base * 0.999, "to": zone_base * 1.001},
@@ -44,7 +46,9 @@ def _signal(db, *, side="long", mode="limit_wall", target=1.4097, mid=1.4110,
                   qty=qty, closed_net_pnl=net_pnl, result_pct=0.5,
                   closed_at=datetime.now(timezone.utc) - timedelta(hours=closed_hours_ago),
                   plan_json={
-                      "entry_zone_plan": ({"mode": mode, "entry_price": target} if mode else None),
+                      "entry_zone_plan": ({"mode": mode, "entry_price": target,
+                                           **({"order_type": order_type} if order_type else {})}
+                                          if mode else None),
                       "entry_depth": {"mid": mid},
                       "lifecycle": {"entry_price": entry},
                       "config": {"market": {"round_trip_pct": round_trip}},
@@ -100,7 +104,8 @@ def test_modes_are_split_and_market_entries_have_no_target():
 
     assert result["by_mode"]["limit_wall"]["entry_vs_target_pct"] is not None
     assert result["by_mode"]["market"]["entry_vs_target_pct"] is None
-    assert result["overall"]["market_trades"] == 1 and result["overall"]["limit_trades"] == 1
+    assert result["overall"]["zone_market_trades"] == 1
+    assert result["overall"]["zone_moved_trades"] == 1
 
 
 def test_maker_saving_is_shown_next_to_the_gain():
@@ -184,3 +189,51 @@ def test_report_says_which_entry_type_produced_the_numbers():
     _signal(db)
 
     assert report(db)["entry_order_type"] in ("market", "limit")
+
+
+# ── настройка «limit» и вход лимитом — разные вещи (#sync-reverted-the-entry-type-2026-09-20) ──
+def test_a_moved_target_is_not_the_same_as_a_limit_order(monkeypatch):
+    """19–20.09 отчёт показал 85% «лимитных» сделок, войдя по рынку все 27:
+    имена режимов зоны начинаются с limit_, и их приняли за тип ордера."""
+    monkeypatch.setattr(settings, "ENTRY_ORDER_TYPE", "market")
+    db = _db()
+    _signal(db, mode="limit_wall", target=1.4097, entry=1.4110, order_type="market")
+
+    overall = report(db)["overall"]
+
+    assert overall["zone_moved_trades"] == 1      # цель зона перенесла
+    assert overall["entered_by_limit_trades"] == 0  # а вошли по рынку
+    assert overall["market_order_trades"] == 1
+
+
+def test_the_config_says_limit_but_nothing_entered_by_limit(monkeypatch):
+    """Ровно та тишина, которую нечем было заметить: настройка включена, а до
+    процесса не доехала — sync blueprint вернул ключ к записанному."""
+    monkeypatch.setattr(settings, "ENTRY_ORDER_TYPE", "limit")
+    db = _db()
+    _signal(db, mode="limit_wall", target=1.4097, entry=1.4110, order_type="market")
+
+    result = report(db)
+
+    assert "не вошла лимитом" in result.get("warning", "")
+
+
+def test_a_real_limit_entry_is_counted_as_one(monkeypatch):
+    monkeypatch.setattr(settings, "ENTRY_ORDER_TYPE", "limit")
+    db = _db()
+    _signal(db, mode="limit_wall", target=1.4097, entry=1.4097, order_type="limit")
+
+    overall = report(db)["overall"]
+
+    assert overall["entered_by_limit_trades"] == 1
+    # Вошли ровно по цели — признак того, что лимит действительно работал.
+    assert overall["entry_vs_target_pct"] == 0.0
+
+
+def test_a_market_zone_never_counts_as_a_limit_entry(monkeypatch):
+    """При mode == market цели нет, и ордер уходит рыночным при любой настройке."""
+    monkeypatch.setattr(settings, "ENTRY_ORDER_TYPE", "limit")
+    db = _db()
+    _signal(db, mode="market", target=None, entry=1.4110, order_type="limit")
+
+    assert report(db)["overall"]["entered_by_limit_trades"] == 0

@@ -171,7 +171,10 @@ def test_the_cap_holds_on_what_is_actually_sent(executor, monkeypatch):
 # ── план сделки: BTC больше не втрое крупнее ────────────────────────────────
 
 class _CostEngine:
-    def estimate(self, symbol, market_type, side, entry_price, exit_price, qty, liquidity, leverage):
+    def estimate(self, symbol, market_type, side, entry_price, exit_price, qty, liquidity,
+                 leverage, entry_liquidity=None):
+        # (#sync-reverted-the-entry-type-2026-09-20) Лимитный вход стал дефолтом,
+        # и сайзинг теперь всегда сообщает ставку входной ноги.
         from types import SimpleNamespace
         gross = (entry_price - exit_price) * qty if str(side).lower() in ("short", "sell") \
             else (exit_price - entry_price) * qty
