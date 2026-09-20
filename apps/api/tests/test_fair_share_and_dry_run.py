@@ -200,3 +200,21 @@ def test_small_history_returns_neutral_multiplier():
     if decision is None:
         pytest.skip("внутренний хелпер недоступен — константы проверены выше")
     assert decision.get("risk_multiplier") == 1.0
+
+
+# ── витрина показывает живое окно (#showcase-window-lied-2026-09-20) ────────
+def test_the_symbol_showcase_defaults_to_the_window_the_robot_uses():
+    """Витрина молча брала 30 дней, пока живое окно было сутками. На 720 ч XRP
+    выглядел убыточным и урезанным, на боевых 168 он прибылен и идёт в полный
+    размер — оператор видел не то, что делает робот."""
+    from pathlib import Path
+
+    router = (Path(__file__).resolve().parents[1] / "routers" / "analytics.py").read_text(encoding="utf-8")
+    block = router.split('def analytics_symbol_performance', 1)[1].split("return", 1)[0]
+
+    # Ищем ЧТЕНИЕ настройки, а не упоминание: история правки живёт в
+    # комментарии рядом и на первой версии этого теста дала ложное падение.
+    code = chr(10).join(line for line in block.splitlines() if not line.strip().startswith("#"))
+
+    assert 'getattr(settings, "SYMBOL_PERF_WINDOW_HOURS"' in code, "витрина обязана брать живое окно"
+    assert "SYMBOL_PERF_SUMMARY_WINDOW_HOURS" not in code, "витринное окно снова разошлось с живым"

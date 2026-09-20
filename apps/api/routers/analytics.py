@@ -696,12 +696,15 @@ def analytics_symbol_performance(lookback: int = 12, window_hours: float | None 
     db = SessionLocal()
     try:
         bot = db.query(Bot).filter(Bot.name == "Main Robot").first()
-        # Витрина шире живого окна (24ч): по умолчанию SYMBOL_PERF_SUMMARY_WINDOW_HOURS
-        # (30 дней), чтобы оператор видел историю, а не пустые no_history. На решения
-        # публикации НЕ влияет — это отдельный read-only вызов.
-        wh = window_hours if window_hours is not None else float(
-            getattr(settings, "SYMBOL_PERF_SUMMARY_WINDOW_HOURS", 720.0)
-        )
+        # (#showcase-window-lied-2026-09-20) Витрина показывает ЖИВОЕ окно.
+        # Прежде она молча брала SYMBOL_PERF_SUMMARY_WINDOW_HOURS (30 дней),
+        # потому что при живом окне в сутки была бы пустой. Причина отпала —
+        # живое окно 168 ч, — а расхождение осталось и врало: на 720 ч XRP
+        # выглядел убыточным и урезанным, на боевых 168 он прибылен и идёт в
+        # полный размер. Оператор видел не то, что делает робот.
+        # Шире — по явному ?window_hours=720.
+        live_window = float(getattr(settings, "SYMBOL_PERF_WINDOW_HOURS", 168.0))
+        wh = window_hours if window_hours is not None else live_window
         return SymbolPerformanceSummaryService().summarize(
             db, bot=bot, lookback=lookback, window_hours=wh,
         )
