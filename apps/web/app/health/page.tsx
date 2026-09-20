@@ -414,15 +414,45 @@ export default function HealthPage() {
             <div>
               <h2 className="text-lg font-semibold text-emerald-200">Конверты капитала</h2>
               <p className="mt-1 text-xs text-emerald-100/60">
-                У каждого контура своя доля эквити. Размеры позиций выводятся из доли —
-                превысить конверт нельзя. Выключенный и пустой контур отдаёт долю направленным.
+                У каждого контура своя доля эквити. Доли и конверты — в МАРЖЕ; нотионал
+                позиций получается умножением на плечо контура. Превысить конверт нельзя.
+                Выключенный и пустой контур отдаёт долю направленным.
               </p>
             </div>
+            {/* (#equity-is-margin-2026-09-20) Раньше здесь стояло одно число, и
+                оно читалось двояко: «3000» — это депозит или уже сумма под
+                управлением? Это КАПИТАЛ, плечо в него не входит. Управляемая
+                сумма — экспозиция, и теперь она стоит рядом с формулой. */}
             <div className="text-right text-sm">
-              <div className="text-emerald-100/60">Эквити</div>
+              <div className="text-emerald-100/60">
+                Эквити <span className="text-emerald-100/40">— капитал, без плеча</span>
+              </div>
               <div className="text-xl font-semibold text-emerald-200">
                 {formatNumber(envelopes.equity_usdt)} USDT
               </div>
+              {envelopes.equity_source && (
+                <div className="text-[11px] text-emerald-100/40">{envelopes.equity_source}</div>
+              )}
+              {envelopes.exposure_usdt != null && (
+                <div className="mt-1 text-xs text-emerald-100/60">
+                  под управлением{" "}
+                  <span className="font-semibold text-emerald-200">
+                    {formatNumber(envelopes.exposure_usdt)} USDT
+                  </span>
+                  <span className="text-emerald-100/40">
+                    {" "}= {formatNumber(envelopes.equity_usdt)} × {envelopes.leverage}×
+                  </span>
+                </div>
+              )}
+              {/* Потолок-предохранитель режет плечо молча: заказанные 10× без
+                  поднятия LIVE_MAX_LEVERAGE дают 5×, и позиции выходят вдвое
+                  меньше ожидаемых. */}
+              {envelopes.leverage_capped && (
+                <div className="mt-1 text-[11px] text-amber-300">
+                  FUTURES_LEVERAGE={envelopes.leverage_configured} обрезано потолком
+                  LIVE_MAX_LEVERAGE={envelopes.leverage_cap} → действует {envelopes.leverage}×
+                </div>
+              )}
               {/* Суммарная занятость по ВСЕМ контурам — то, чего раньше не было
                   видно нигде: used_margin() считал только направленные. */}
               <div className="mt-1 text-xs text-emerald-100/50">
@@ -479,8 +509,17 @@ export default function HealthPage() {
                         {c.effective_pct}%
                       </span>
                       <span className="ml-2 text-emerald-100/50">
-                        · {formatNumber(c.envelope_usdt)} USDT
+                        · {formatNumber(c.envelope_usdt)} USDT маржи
                       </span>
+                      {/* Плечо у контуров разное: направленные под
+                          FUTURES_LEVERAGE, сетка под GRID_LEVERAGE, а у funding
+                          arb спотовая нога фондируется целиком. Общим
+                          множителем его давать нельзя. */}
+                      {c.notional_usdt != null && c.leverage > 1 && (
+                        <span className="ml-1 text-sky-300/70" title={c.leverage_note}>
+                          → {formatNumber(c.notional_usdt)} нотионала ({c.leverage}×)
+                        </span>
+                      )}
                     </span>
                   </div>
 

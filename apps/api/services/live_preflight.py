@@ -220,24 +220,32 @@ class LivePreflight:
         else:
             self._add("capital", OK, "Капитал робота", detail, **data)
 
-    # Пороги, заданные суммой в USDT. Каждый из них калибровался под свой
-    # размер сделки, и при другом капитале сумма перестаёт означать то же
-    # самое: на счёте 300 «запас 1.20 USDT» — это больше процента от позиции,
-    # на счёте 30 000 — ничто. Доля от номинала таким порогом не страдает.
-    ABSOLUTE_THRESHOLDS: tuple[tuple[str, str, str | None], ...] = (
+    # Пороги, заданные суммой в USDT, и БАЗА, с которой каждый сравним.
+    # Первая версия этой проверки мерила все шесть долей от одного номинала и
+    # врала трижды: потолок размера сделки сравнивался сам с собой (всегда
+    # 100%), адаптивные пороги TP1/TP2 попадали в «великоваты», хотя гейт
+    # берёт min(сумма, 1% маржи) и смягчает их сам, а толеранс символа — это
+    # сумма за окно наблюдения, а не прибыль одной сделки.
+    #   notional  — порог на прибыль ОДНОЙ сделки: сравним с её номиналом;
+    #   exposure  — потолок размера: сравним с капиталом × плечо;
+    #   adaptive  — сумма, которую гейт смягчает сам; показываем, не ругаем.
+    ABSOLUTE_THRESHOLDS: tuple[tuple[str, str, str, str | None], ...] = (
         ("ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", "запас экономики сделки",
-         "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT"),
-        ("LIVE_MAX_ORDER_NOTIONAL_USDT", "потолок нотионала ордера",
-         "LIVE_MAX_ORDER_NOTIONAL_PCT"),
-        ("MIN_NET_PNL_TP2_USDT", "минимальная прибыль на TP2", None),
-        ("MIN_NET_PNL_TP1_USDT", "минимальная прибыль на TP1", None),
-        ("MIN_PROTECTIVE_NET_USDT", "порог защитного выхода", None),
-        ("SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT", "толеранс символа около нуля", None),
+         "notional", "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT"),
+        ("MIN_PROTECTIVE_NET_USDT", "порог защитного выхода", "notional", None),
+        ("LIVE_MAX_ORDER_NOTIONAL_USDT", "потолок размера сделки",
+         "exposure", "LIVE_MAX_ORDER_NOTIONAL_PCT"),
+        ("MIN_NET_PNL_TP2_USDT", "минимальная прибыль на TP2", "adaptive", None),
+        ("MIN_NET_PNL_TP1_USDT", "минимальная прибыль на TP1", "adaptive", None),
+        ("SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT", "толеранс символа около нуля",
+         "window_pnl", None),
     )
-    # Выше этой доли номинала абсолютный порог перестаёт быть страховкой и
-    # начинает управлять отбором: сделка проходит или нет из-за суммы,
-    # откалиброванной под другой счёт.
+    # Выше этой доли номинала порог на прибыль сделки перестаёт быть страховкой
+    # и начинает управлять отбором.
     THRESHOLD_WARN_SHARE_PCT = 0.5
+    # Потолок размера, съедающий больше этой доли экспозиции, означает, что
+    # система торгует малой частью счёта, и об этом стоит знать.
+    ORDER_CAP_WARN_SHARE_PCT = 50.0
 
     def _check_absolute_thresholds(self, db, bot, free: float | None) -> None:
         """Насколько пороги-суммы соответствуют размеру сделки на этом счёте.
@@ -253,34 +261,60 @@ class LivePreflight:
             return
 
         leverage = self.executor._leverage_value(getattr(settings, "FUTURES_LEVERAGE", 1))
-        notional = float(settings.max_order_notional(capital, leverage) or 0.0)
-        risk_usdt = capital * float(getattr(settings, "RISK_PER_TRADE_PCT", 0.4)) / 100.0
+        exposure = capital * float(leverage)
+        margin_share = max(0.0, min(float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.2)), 1.0))
+        order_cap = float(settings.max_order_notional(capital, leverage) or 0.0)
+        # Размер сделки — это МИНИМУМ из потолков, а не сам потолок ордера.
+        # Риск-сайзинг сюда не входит: он зависит от дистанции стопа конкретной
+        # сделки, и без неё его не посчитать.
+        notional = min(x for x in (exposure, capital * margin_share * float(leverage),
+                                   order_cap or exposure) if x > 0)
+
+        if notional < 1.0:
+            self._add("absolute_thresholds", WARN, "Пороги-суммы",
+                      f"капитал {round(capital, 2)} USDT — сделка такого размера "
+                      f"({round(notional, 4)} USDT) не состоится ни при каких порогах; "
+                      f"сравнивать их с ней бессмысленно",
+                      thresholds=[], heavy=[], notional_usdt=round(notional, 4))
+            return
 
         rows, heavy = [], []
-        for key, title, replacement in self.ABSOLUTE_THRESHOLDS:
+        for key, title, base, replacement in self.ABSOLUTE_THRESHOLDS:
             value = float(getattr(settings, key, 0.0) or 0.0)
             if value <= 0:
                 continue
-            share = round(value / notional * 100, 4) if notional else None
+            reference = {"notional": notional, "exposure": exposure,
+                         "adaptive": notional, "window_pnl": notional}[base]
+            share = round(value / reference * 100, 4) if reference else None
             replaced = bool(replacement and float(getattr(settings, replacement, 0.0) or 0.0) > 0)
-            row = {"key": key, "title": title, "usdt": value, "share_of_notional_pct": share,
-                   "scaled_by": replacement, "scaling_on": replaced}
+            row = {"key": key, "title": title, "usdt": value, "base": base,
+                   "share_pct": share, "scaled_by": replacement, "scaling_on": replaced}
+            if base == "adaptive":
+                # Гейт берёт min(сумма, 1% маржи) — на малом счёте порог
+                # опускается сам, и претензии к сумме нет.
+                row["effective_usdt"] = round(min(value, notional / float(leverage) * 0.01), 4)
             rows.append(row)
-            # Порог, уже заменённый долей, не претензия: он просто не работает.
-            if not replaced and share is not None and share > self.THRESHOLD_WARN_SHARE_PCT:
+            if replaced or base == "adaptive":
+                continue
+            if base == "notional" and share is not None and share > self.THRESHOLD_WARN_SHARE_PCT:
+                heavy.append(row)
+            elif base == "exposure" and share is not None and share < self.ORDER_CAP_WARN_SHARE_PCT:
                 heavy.append(row)
 
-        detail = (f"размер сделки {round(notional, 2)} USDT, риск {round(risk_usdt, 2)}; "
-                  f"порогов-сумм {len(rows)}")
+        detail = (f"капитал {round(capital, 2)}, плечо {leverage}×, экспозиция "
+                  f"{round(exposure, 2)}; сделка до {round(notional, 2)} USDT")
         if heavy:
-            names = ", ".join(f"{r['key']} ({r['share_of_notional_pct']:.2f}% номинала)" for r in heavy)
+            names = ", ".join(f"{r['key']} ({r['share_pct']:.2f}% {'экспозиции' if r['base'] == 'exposure' else 'номинала'})"
+                              for r in heavy)
             self._add("absolute_thresholds", WARN, "Пороги-суммы",
-                      f"{detail}. Великоваты для этого счёта: {names} — "
-                      f"калибровались под другой размер сделки; у части есть замена долей",
-                      thresholds=rows, heavy=[r["key"] for r in heavy], notional_usdt=round(notional, 2))
+                      f"{detail}. Не по размеру этого счёта: {names} — "
+                      f"калибровались под другой; у части есть замена долей",
+                      thresholds=rows, heavy=[r["key"] for r in heavy],
+                      notional_usdt=round(notional, 2), exposure_usdt=round(exposure, 2))
         else:
             self._add("absolute_thresholds", OK, "Пороги-суммы", detail,
-                      thresholds=rows, heavy=[], notional_usdt=round(notional, 2))
+                      thresholds=rows, heavy=[],
+                      notional_usdt=round(notional, 2), exposure_usdt=round(exposure, 2))
 
     def _capital_usdt(self, db, bot, free: float | None) -> float:
         if free is None:
