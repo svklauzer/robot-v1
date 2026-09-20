@@ -277,11 +277,21 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
     # sync blueprint вернул ENTRY_ORDER_TYPE к market, а отчёт продолжал
     # показывать 85% «лимитных» сделок (это был режим ЗОНЫ). Расхождение
     # ловим здесь, иначе заметить его нечем.
-    if result["entry_order_type"] == "limit" and trades and not entered_limit:
+    unknown_order = by_order.get(UNKNOWN, 0)
+    if result["entry_order_type"] == "limit" and trades and unknown_order == trades:
+        # Признак пишется в план при СОЗДАНИИ сигнала, поэтому у всего, что было
+        # запланировано до деплоя, его нет. Это не «лимит не работает» — это
+        # «судить не по чему», и путать одно с другим значит чинить исправное.
         result["warning"] = (
-            f"ENTRY_ORDER_TYPE=limit, но ни одна из {trades} сделок не вошла лимитом. "
-            f"Либо настройка не доехала до процесса (sync blueprint возвращает ключи "
-            f"с value: к записанному), либо зона не переносит вход.")
+            f"Все {trades} сделок закрыты без признака типа входа: они планировались "
+            f"до деплоя, в котором признак появился. Лимит проверяется только по "
+            f"сделкам, СОЗДАННЫМ после него.")
+    elif result["entry_order_type"] == "limit" and trades and not entered_limit:
+        result["warning"] = (
+            f"ENTRY_ORDER_TYPE=limit, но ни одна из {trades - unknown_order} сделок с "
+            f"известным типом входа не вошла лимитом. Либо настройка не доехала до "
+            f"процесса (sync blueprint возвращает ключи с value: к записанному), "
+            f"либо зона не переносит вход.")
     elif result["entry_order_type"] != "limit" and zone_moved_trades:
         result["warning"] = (
             f"ENTRY_ORDER_TYPE={result['entry_order_type']}: {zone_moved_trades} сделок "

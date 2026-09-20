@@ -206,6 +206,21 @@ def test_a_moved_target_is_not_the_same_as_a_limit_order(monkeypatch):
     assert overall["market_order_trades"] == 1
 
 
+def test_trades_planned_before_the_deploy_are_not_evidence(monkeypatch):
+    """Признак типа входа пишется при СОЗДАНИИ сигнала: у всего, что было
+    запланировано до деплоя, его нет. Это «судить не по чему», а не «лимит не
+    работает» — путать одно с другим значит чинить исправное."""
+    monkeypatch.setattr(settings, "ENTRY_ORDER_TYPE", "limit")
+    db = _db()
+    _signal(db, mode="limit_wall", target=1.4097, entry=1.4110)   # без order_type
+
+    result = report(db)
+
+    assert result["overall"]["order_type_unknown_trades"] == 1
+    assert "планировались" in result["warning"]
+    assert "не доехала" not in result["warning"]
+
+
 def test_the_config_says_limit_but_nothing_entered_by_limit(monkeypatch):
     """Ровно та тишина, которую нечем было заметить: настройка включена, а до
     процесса не доехала — sync blueprint вернул ключ к записанному."""
@@ -216,6 +231,7 @@ def test_the_config_says_limit_but_nothing_entered_by_limit(monkeypatch):
     result = report(db)
 
     assert "не вошла лимитом" in result.get("warning", "")
+    assert "не доехала" in result["warning"]
 
 
 def test_a_real_limit_entry_is_counted_as_one(monkeypatch):
