@@ -408,3 +408,41 @@ def test_the_effective_leverage_is_reported_not_the_configured_one(monkeypatch):
 
     assert check["exposure_usdt"] == 3000.0
     assert check["effective_leverage"] < 2.0, check
+
+
+def test_the_anti_drain_limit_never_silently_outranks_the_general_one():
+    """(#risk-one-percent-2026-09-20) Дневных лимита ДВА, и anti-drain строже.
+    Пока он был 2% против общих 3%, поднятие общего не меняло ничего: робот
+    вставал по anti-drain. Настройка выглядит поднятой, поведение прежнее."""
+    from core.config import Settings
+
+    general = Settings.model_fields["MAX_DAILY_LOSS_PCT"].default
+    anti_drain = Settings.model_fields["ANTI_DRAIN_MAX_DAILY_LOSS_PCT"].default
+
+    assert anti_drain >= general, (
+        f"anti-drain {anti_drain}% сработает раньше общего {general}% и заменит его собой")
+
+
+def test_the_risk_pair_is_pinned_in_the_blueprint():
+    """Обе настройки торговые — значит живут и в config.py, и в render.yaml."""
+    blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
+    from core.config import Settings
+
+    for key in ("RISK_PER_TRADE_PCT", "MAX_DAILY_LOSS_PCT", "ANTI_DRAIN_MAX_DAILY_LOSS_PCT"):
+        block = blueprint.split(f"key: {key}", 1)[1].split("- key:", 1)[0]
+        default = float(Settings.model_fields[key].default)
+        written = float(block.split('value: "', 1)[1].split('"', 1)[0])
+        assert written == default, f"{key}: блупринт {written}, код {default}"
+
+
+def test_five_simultaneous_stops_do_not_exceed_the_daily_limit():
+    """Портфельный потолок и дневной лимит должны сходиться: пять позиций по
+    риску не могут стоить больше, чем робот готов потерять за день."""
+    from core.config import Settings
+
+    risk = float(Settings.model_fields["RISK_PER_TRADE_PCT"].default)
+    positions = int(Settings.model_fields["ANTI_DRAIN_MAX_OPEN_POSITIONS"].default)
+    daily = float(Settings.model_fields["MAX_DAILY_LOSS_PCT"].default)
+
+    assert risk * positions <= daily, (
+        f"{positions} стопов подряд = {risk * positions}% против лимита {daily}%")
