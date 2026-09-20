@@ -237,6 +237,22 @@ class SymbolPerformanceGuard:
         if closed_count >= block_min_history and total_net_pnl < -weak_pnl_tol:
             return _restrict("symbol_negative_expectancy")
 
+        # (#severe-loss-needs-less-proof-2026-09-20) Крупный убыток не ждёт
+        # полной выборки: чем больше ущерб, тем меньше нужно доказательств.
+        # Замер 20.09 на боевом окне — HYPE с −21.04 USDT шёл в ПОЛНЫЙ размер,
+        # потому что у него 9 сделок против min_history=10. Худший символ не
+        # судился из-за одной недостающей сделки, и так могло тянуться неделями:
+        # окно скользит, история то набирается, то выпадает.
+        #
+        # Порог — ДОЛЯ капитала, не сумма: она растёт со счётом и не требует
+        # правки конфига при пополнении.
+        severe_pct = float(getattr(settings, "SYMBOL_PERF_SEVERE_LOSS_PCT", 0.0) or 0.0)
+        severe_min_history = int(getattr(settings, "SYMBOL_PERF_SEVERE_MIN_HISTORY", 5) or 5)
+        if severe_pct > 0 and closed_count >= severe_min_history:
+            equity = float(getattr(settings, "RISK_EQUITY_USDT", 0.0) or 0.0)
+            if equity > 0 and total_net_pnl < -(equity * severe_pct / 100.0):
+                return _mk(True, "symbol_severe_loss_reduce_risk", weak_multiplier)
+
         # Мало истории — судить о символе не по чему. Одиночный стоп информации
         # не несёт: множитель нейтральный (см. SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER).
         if closed_count < min_history:
