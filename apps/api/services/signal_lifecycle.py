@@ -400,7 +400,8 @@ class SignalLifecycleManager:
             self._update_lifecycle_metrics(db, signal, safe_metric_price)
 
         if signal.status == "published":
-            if self._price_in_entry_zone(price, entry_from, entry_to):
+            entry_ready, entry_fill_price = self.entry_trigger(signal, price, entry_from, entry_to)
+            if entry_ready:
                 execution = ExecutionEngine(db, exchange=signal.exchange)
 
                 fresh = self.freshness.validate_signal(
@@ -444,7 +445,7 @@ class SignalLifecycleManager:
                 result = await execution.open_paper_position(
                     bot=bot,
                     signal=signal,
-                    entry_price=price,
+                    entry_price=entry_fill_price,
                     balance_usdt=balance_usdt,
                 )
 
@@ -1217,6 +1218,30 @@ class SignalLifecycleManager:
         high = max(entry_from, entry_to)
         return low <= price <= high
 
+    @staticmethod
+    def limit_target_price(signal) -> float | None:
+        from services.entry_zone import limit_target_price as _target
+
+        return _target(getattr(signal, "plan_json", None))
+
+    def entry_trigger(self, signal, price: float, entry_from: float,
+                      entry_to: float) -> tuple[bool, float]:
+        """Пора ли открывать и по какой цене.
+
+        Рыночный вход срабатывает от касания коридора и книжится по текущей
+        цене: именно так и ведёт себя рыночный ордер. Лимитный ждёт, пока цена
+        дойдёт до самой цели, и книжится по ней — цена может пройти мимо
+        ближней границы коридора и не дойти до цели, и тогда сделки нет. Разница
+        в 0.06-0.10% на вход (#entry-drift-2026-09-19), и она же — причина, по
+        которой часть сигналов лимитом не исполнится.
+        """
+        target = self.limit_target_price(signal)
+        if target is None:
+            return self._price_in_entry_zone(price, entry_from, entry_to), float(price)
+        reached = (float(price) <= target if str(signal.side or "").lower() == "long"
+                   else float(price) >= target)
+        return reached, target
+
     def _hit_tp(self, side: str, price: float, tp: float) -> bool:
         if side == "long":
             return price >= tp
@@ -1733,6 +1758,8 @@ class SignalLifecycleManager:
 
         for signal in stale_signals:
             signal.status = "expired"
+            signal.closed_reason = ("limit_not_filled" if self.limit_target_price(signal)
+                                    else signal.closed_reason)
 
             self.decisions.record(
                 db,
@@ -1749,7 +1776,12 @@ class SignalLifecycleManager:
                     "tp": signal.tp_json,
                     "grade": signal.grade,
                     "expires_at": str(signal.expires_at),
-                    "reason": "entry_zone_not_reached_before_expiry",
+                    # (#limit-entry-2026-09-19) У лимитного входа это не «зона не
+                    # достигнута», а «ордер не исполнился». Без отдельной причины
+                    # долю неисполнений лимитом не отличить от обычного протухания.
+                    "reason": ("limit_not_filled" if self.limit_target_price(signal)
+                               else "entry_zone_not_reached_before_expiry"),
+                    "limit_target": self.limit_target_price(signal),
                 },
             )
 

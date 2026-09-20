@@ -228,6 +228,26 @@ def evaluate(
     )
 
 
+def limit_target_price(plan_json: dict | None) -> float | None:
+    """Цена лимитного входа сделки, если входим лимитом (#limit-entry-2026-09-19).
+
+    None — входим по рынку: либо так настроено (`ENTRY_ORDER_TYPE`), либо зона
+    вход не переносила и цели нет. Функция живёт здесь, а не в жизненном цикле
+    сигнала: предмет — зона входа, и спрашивают о нём и сопровождение, и
+    исполнитель.
+    """
+    if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() != "limit":
+        return None
+    zone = ((plan_json or {}).get("entry_zone_plan") or {})
+    if str(zone.get("mode") or "market") == "market":
+        return None
+    try:
+        target = float(zone.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return target or None
+
+
 def is_stale(decision: EntryZoneDecision, age_sec: float) -> bool:
     """Протух ли перенесённый вход.
 

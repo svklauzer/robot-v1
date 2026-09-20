@@ -30,6 +30,11 @@ class CostPreview:
 
     fee_rate: float
     fee_source: str
+    # (#limit-entry-2026-09-19) Ставка входа отдельно: лимитный вход платит
+    # мейкерскую. Значения по умолчанию сохраняют прежнюю форму CostPreview
+    # для всех, кто собирает её позиционно.
+    entry_fee_rate: float | None = None
+    entry_fee_source: str | None = None
 
 
 class CostEngine:
@@ -92,6 +97,7 @@ class CostEngine:
         exit_price: float,
         qty: float,
         liquidity: str = "taker",
+        entry_liquidity: str | None = None,
         holding_funding_periods: int = 1,
         leverage: int | None = None,
         hold_hours: float | None = None,
@@ -114,13 +120,27 @@ class CostEngine:
             market_type=market_type,
             liquidity=liquidity,
         )
+        # (#limit-entry-2026-09-19) Ноги могут стоить по-разному. Лимитный вход
+        # платит мейкерскую ставку и не платит спред — он не забирает
+        # ликвидность, а предоставляет её. Выход остаётся рыночным: стоп и
+        # защитные ветки бьют по стакану. Пока вход тейкерский, обе ставки
+        # совпадают и формула сводится к прежней.
+        entry_rate, entry_fee_source = (
+            self.fee_rate(symbol=symbol, market_type=market_type, liquidity=entry_liquidity)
+            if entry_liquidity and entry_liquidity != liquidity
+            else (fee_rate_value, fee_source)
+        )
+        entry_is_maker = str(entry_liquidity or liquidity).lower() == "maker"
 
-        entry_fee = entry_notional * fee_rate_value
+        entry_fee = entry_notional * entry_rate
         exit_fee = exit_notional * fee_rate_value
 
         # Проскальзывание на ОБЕИХ ногах: выход рыночным ордером проскальзывает
         # так же, как вход. Раньше начислялось только на вход — недосчёт вдвое.
-        slippage_buffer = (entry_notional + exit_notional) * settings.SLIPPAGE_BUFFER_PCT
+        # Лимитный вход исполняется по своей цене или не исполняется вовсе,
+        # поэтому на нём проскальзывания нет.
+        slipping_notional = exit_notional if entry_is_maker else (entry_notional + exit_notional)
+        slippage_buffer = slipping_notional * settings.SLIPPAGE_BUFFER_PCT
 
         side_value = str(side or "").lower().strip()
 
@@ -178,6 +198,8 @@ class CostEngine:
             net_pnl_pct=round(net_pnl_pct, 4),
 
             fee_rate=round(fee_rate_value, 8),
+            entry_fee_rate=round(entry_rate, 8),
+            entry_fee_source=entry_fee_source,
             fee_source=fee_source,
         )
 

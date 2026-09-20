@@ -255,6 +255,16 @@ class TradePlanBuilder:
                 reason="unsupported_side",
             )
 
+        # (#limit-entry-2026-09-19) Ставка входа: лимитный вход платит
+        # мейкерскую и не платит спред. Гейты допуска считают экономику сделки
+        # по этим же издержкам, поэтому знать способ входа надо ЗДЕСЬ, а не
+        # только при закрытии.
+        # Аргумент добавляется, только когда вход действительно мейкерский:
+        # при рыночном входе вызов остаётся прежним до последнего аргумента.
+        entry_fee_kwargs = ({"entry_liquidity": "maker"}
+                            if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() == "limit"
+                            else {})
+
         tp1_preview = self.cost_engine.estimate(
             symbol=symbol,
             market_type=market_type,
@@ -264,6 +274,7 @@ class TradePlanBuilder:
             qty=qty,
             liquidity="taker",
             leverage=leverage_value,
+            **entry_fee_kwargs,
         )
 
         tp2_preview = self.cost_engine.estimate(
@@ -275,6 +286,7 @@ class TradePlanBuilder:
             qty=qty,
             liquidity="taker",
             leverage=leverage_value,
+            **entry_fee_kwargs,
         )
 
         stop_preview = self.cost_engine.estimate(
@@ -286,6 +298,7 @@ class TradePlanBuilder:
             qty=qty,
             liquidity="taker",
             leverage=leverage_value,
+            **entry_fee_kwargs,
         )
 
         net_risk = abs(stop_preview.net_pnl)
