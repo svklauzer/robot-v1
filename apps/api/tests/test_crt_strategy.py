@@ -19,9 +19,15 @@ from core.config import settings
 from services.crt_strategy import CRTStrategyService, _dynamic_tp2_rr
 
 
-def test_crt_ltf_confirm_default_is_either():
-    """Регрессионная защита: значение не должно снова тихо стать "both"."""
-    assert str(settings.CRT_LTF_CONFIRM).lower() == "either"
+def test_crt_requires_fvg_and_mss_alone_is_not_enough():
+    """(#mss-is-not-a-confirmation-2026-09-20) Было "either" — вход годился и
+    по одному MSS. Замер недели: пять сделок с MSS дали −17.26 USDT при итоге
+    CRT −20.86, убыточны четыре из пяти, а бакет «только MSS» худший (−1.72%
+    на номинал) против −0.14% у одиннадцати сделок с одним FVG.
+
+    Регрессионная защита остаётся: значение не должно тихо стать "both" — это
+    вдвое режет поток сетапов — и не должно вернуться к "either"."""
+    assert str(settings.CRT_LTF_CONFIRM).lower() == "fvg"
 
 
 # ── _dynamic_tp2_rr: юнит-тесты ──────────────────────────────────────────
