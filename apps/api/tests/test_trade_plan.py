@@ -38,13 +38,16 @@ def test_trade_plan_limits_single_position_margin_share():
     old_fut = settings.ENABLE_FUTURES
     old_market = settings.EXECUTION_MARKET
     old_notional = settings.LIVE_MAX_ORDER_NOTIONAL_USDT
+    old_notional_pct = settings.LIVE_MAX_ORDER_NOTIONAL_PCT
     try:
         settings.MAX_POSITION_MARGIN_PCT = 0.35
         settings.ENABLE_FUTURES = False
         settings.EXECUTION_MARKET = "spot"
-        # Тест проверяет марж-долю, а не кэп нотионала — отключаем кэп, иначе он
-        # доминирует (25 USDT дал бы qty 0.25).
+        # Тест проверяет марж-долю, а не кэп нотионала — отключаем ОБА кэпа,
+        # иначе доминирует любой из них (25 USDT дал бы qty 0.25, а доля
+        # экспозиции с 20.09 действует по умолчанию).
         settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 0.0
+        settings.LIVE_MAX_ORDER_NOTIONAL_PCT = 0.0
 
         plan = builder.build_plan(
             symbol="BTC/USDT",
@@ -65,6 +68,7 @@ def test_trade_plan_limits_single_position_margin_share():
         settings.ENABLE_FUTURES = old_fut
         settings.EXECUTION_MARKET = old_market
         settings.LIVE_MAX_ORDER_NOTIONAL_USDT = old_notional
+        settings.LIVE_MAX_ORDER_NOTIONAL_PCT = old_notional_pct
 
 
 def test_trade_plan_notional_never_exceeds_live_cap_any_coin():
@@ -78,9 +82,12 @@ def test_trade_plan_notional_never_exceeds_live_cap_any_coin():
     old_market = settings.EXECUTION_MARKET
     old_fut = settings.ENABLE_FUTURES
     old_notional = settings.LIVE_MAX_ORDER_NOTIONAL_USDT
+    old_notional_pct = settings.LIVE_MAX_ORDER_NOTIONAL_PCT
     try:
         settings.EXECUTION_MARKET = "spot"
         settings.ENABLE_FUTURES = False
+        # Проверяется аварийный абсолютный путь: доля замещает его, когда задана.
+        settings.LIVE_MAX_ORDER_NOTIONAL_PCT = 0.0
         settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 25.0
 
         # Дорогая монета (BTC ~65000), дешёвая (ADA ~0.65), разные стопы.
@@ -102,6 +109,7 @@ def test_trade_plan_notional_never_exceeds_live_cap_any_coin():
         settings.EXECUTION_MARKET = old_market
         settings.ENABLE_FUTURES = old_fut
         settings.LIVE_MAX_ORDER_NOTIONAL_USDT = old_notional
+        settings.LIVE_MAX_ORDER_NOTIONAL_PCT = old_notional_pct
 
 
 def test_trade_plan_rejects_low_expected_net_pnl_targets():

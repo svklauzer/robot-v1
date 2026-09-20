@@ -18,6 +18,7 @@ from tests.test_live_margin_mode import SYMBOL, _Client
 
 def _executor(monkeypatch, mode: str, client=None) -> tuple[LiveExecutor, _Client, list]:
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: mode))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0)
     monkeypatch.setattr(settings, "LIVE_SET_LEVERAGE", True)
     monkeypatch.setattr(settings, "LIVE_MARGIN_MODE", "cross")
@@ -99,6 +100,7 @@ def test_dry_run_shows_what_live_would_refuse(monkeypatch, kwargs, reason):
 
 def test_dry_run_flags_the_notional_cap(monkeypatch):
     ex, _client, events = _executor(monkeypatch, "dry_run")
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 100.0)
 
     res = _open(ex)                                           # 150 × 1.4 = 210 > 100

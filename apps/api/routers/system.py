@@ -235,6 +235,10 @@ def system_capital_envelopes():
             # меньше ожидаемых. Видно это иначе только по размеру сделок.
             "leverage_capped": bool(float(configured_lev) > directional_lev),
             "exposure_usdt": round(equity * directional_lev, 2),
+            # (#no-static-position-size-2026-09-20) Чем ограничен размер ОДНОЙ
+            # сделки. Пока потолком стояли абсолютные 250 USDT, ответом почти
+            # всегда был именно он, и увидеть это было негде.
+            "trade_size": envelopes.trade_size_breakdown(equity, directional_lev),
             "used_total_usdt": round(total_used, 2),
             "used_total_pct": round(total_used / equity * 100.0, 2) if equity > 0 else 0.0,
             "configured_total_pct": round(sum(configured.values()), 2),

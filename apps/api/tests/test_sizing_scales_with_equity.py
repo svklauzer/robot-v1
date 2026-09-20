@@ -90,7 +90,11 @@ def test_blueprint_carries_the_setting():
 
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: LIVE_MAX_ORDER_NOTIONAL_PCT", 1)[1].split("- key:", 1)[0]
-    assert 'value: "0"' in block
+    assert f'value: "{settings.LIVE_MAX_ORDER_NOTIONAL_PCT:.0f}"' in block
+    # (#no-static-position-size-2026-09-20) И абсолютный потолок выключен: он
+    # держал размер позиции суммой, не растущей ни со счётом, ни с плечом.
+    absolute = blueprint.split("key: LIVE_MAX_ORDER_NOTIONAL_USDT", 1)[1].split("- key:", 1)[0]
+    assert 'value: "0"' in absolute
 
 
 # ── запас экономики сделки: доля номинала вместо суммы ──────────────────────
@@ -163,3 +167,36 @@ def test_loop_and_decision_card_carry_the_share():
 
     assert "min_expected_edge_after_costs_pct=" in inspect.getsource(robot_loop)
     assert '"min_edge_after_costs_pct"' in inspect.getsource(decision_config)
+
+
+# ── статики в размере позиции быть не должно (#no-static-position-size-2026-09-20) ──
+def test_the_position_size_is_not_pinned_to_a_sum_by_default():
+    """Владелец возражал против жёсткого размера раз за разом, и всё это время
+    абсолютные 250 оставались настоящим потолком: при эквити 3000 они резали
+    сделку до 250 там, где маржевый лимит разрешал 390."""
+    assert settings.LIVE_MAX_ORDER_NOTIONAL_USDT == 0.0
+    assert settings.LIVE_MAX_ORDER_NOTIONAL_PCT > 0
+
+
+def test_the_cap_grows_with_the_account_and_with_leverage():
+    """Смысл доли: одна настройка обслуживает любой депозит и любое плечо."""
+    small = settings.max_order_notional(300, 1)
+    bigger_account = settings.max_order_notional(3000, 1)
+    more_leverage = settings.max_order_notional(300, 5)
+
+    assert bigger_account == pytest.approx(small * 10)
+    assert more_leverage == pytest.approx(small * 5)
+
+
+def test_an_absolute_cap_can_no_longer_silently_outrank_the_share():
+    """Доля замещает абсолют, когда капитал известен: иначе забытая сумма в
+    дашборде Render вернула бы жёсткий размер, и заметно это было бы только
+    по размеру сделок."""
+    import core.config as config_module
+
+    saved = config_module.settings.LIVE_MAX_ORDER_NOTIONAL_USDT
+    try:
+        config_module.settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 250.0
+        assert settings.max_order_notional(3000, 1) == pytest.approx(600.0)
+    finally:
+        config_module.settings.LIVE_MAX_ORDER_NOTIONAL_USDT = saved

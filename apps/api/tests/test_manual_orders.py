@@ -136,6 +136,7 @@ def test_a_live_fill_drops_the_cached_balance(monkeypatch):
     from tests.test_live_margin_mode import SYMBOL, _Client
 
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0)
     ex = LiveExecutor.__new__(LiveExecutor)
     ex.client = _Client()

@@ -133,6 +133,7 @@ def test_hedge_builder_sizes_from_capital_envelope(monkeypatch):
     from services import capital_envelopes as env
 
     # Тест про долю капитала, а не про кэп нотионала ордера — изолируем от него.
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0, raising=False)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 10000.0, raising=False)
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
 
@@ -147,6 +148,7 @@ def test_explicit_notional_overrides_share(monkeypatch):
     """Ручное открытие через API задаёт размер явно и долей не перебивается."""
     from services.funding_arbitrage import HedgeBuilder
 
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0, raising=False)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 10000.0, raising=False)
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
     built = HedgeBuilder().build(_Opportunity(), notional_usdt=75.0)
@@ -158,6 +160,7 @@ def test_hedge_builder_respects_live_order_notional_cap(monkeypatch):
     live отклонил бы ордер, а бумага насчитала бы полный размер."""
     from services.funding_arbitrage import HedgeBuilder
 
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0, raising=False)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 25.0, raising=False)
     monkeypatch.setattr(arb_capital, "available_equity", lambda: 2000.0)
     built = HedgeBuilder().build(_Opportunity(), notional_usdt=200.0)

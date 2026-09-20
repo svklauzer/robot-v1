@@ -715,26 +715,25 @@ class Settings(BaseSettings):
     LIVE_MARGIN_MODE: str = "cross"           # cross | isolated (swap)
     LIVE_FILL_POLL_TIMEOUT_SEC: float = 10.0  # ждать подтверждения филла
     LIVE_FILL_POLL_INTERVAL_SEC: float = 1.0
-    # Предохранитель: макс. нотионал ОДНОГО ордера (USDT). 0 → выкл.
-    # (#live-notional-parity-2026-08-04) Кэп ЗАВЕДЁН В САЙЗИНГ (trade_plan и
-    # funding_arbitrage), поэтому бумага и live берут один размер, и ни один
-    # ордер не упирается в кэп на отправке. 250 покрывает обычный сайзинг
-    # (trend/scalp $123–190, арб $100), а экстрим (dynamic all-in ~$807,
-    # арб-макс $500) ужимает до здорового потолка на ордер. Было 25 — это
-    # ужимало КАЖДУЮ позицию в 5–8 раз (ADA-ордер $188.92 в live отклонялся бы).
-    LIVE_MAX_ORDER_NOTIONAL_USDT: float = 250.0
+    # Предохранитель: макс. нотионал ОДНОГО ордера АБСОЛЮТНОЙ СУММОЙ. 0 → выкл.
+    # (#no-static-position-size-2026-09-20) ВЫКЛЮЧЕН. Держался на 250 и всё это
+    # время оставался настоящим потолком размера позиции: при эквити 3000 он
+    # резал сделку до 250 там, где маржевый лимит разрешал 390. Сумма не растёт
+    # ни со счётом, ни с плечом — на 30 000 она держала бы тот же размер, что и
+    # на 300, то есть ровно то поведение, против которого владелец возражал
+    # раз за разом. Заменён долей ниже. Оставлен в коде как аварийный
+    # предохранитель для конфигураций, где капитал неизвестен, а не как
+    # рабочая настройка: включать обратно значит снова закрепить размер.
+    LIVE_MAX_ORDER_NOTIONAL_USDT: float = 0.0
     # (#sizing-scales-with-equity-2026-09-19) Тот же потолок, но ДОЛЕЙ от
-    # экспозиции (капитал × плечо). Абсолютные 250 не масштабируются ни с
-    # депозитом, ни с плечом: на счёте 300 с плечом 5 они режут позицию до
-    # шестой части доступного, а на счёте 30 000 ограничивают систему тем же
-    # размером, что и на 300. Владельцу нужно обратное — «сколько на счету,
-    # тем и торгуем, с ростом позиций».
-    # Доля задаётся в процентах экспозиции и ЗАМЕЩАЕТ абсолютный потолок,
-    # когда > 0. Ноль по умолчанию: включение меняет размер позиций, то есть
-    # эпоху замера, и делается отдельным решением.
-    # Ориентир: 100 / ANTI_DRAIN_MAX_OPEN_POSITIONS = равная доля экспозиции на
-    # каждую из одновременных позиций (при 5 позициях это 20%).
-    LIVE_MAX_ORDER_NOTIONAL_PCT: float = 0.0
+    # экспозиции (капитал × плечо) — и теперь это ЕДИНСТВЕННЫЙ действующий.
+    # 20% = 100 / ANTI_DRAIN_MAX_OPEN_POSITIONS: равная доля экспозиции на
+    # каждую из пяти одновременных позиций. Растёт со счётом и с плечом сам,
+    # правок конфига при пополнении не требует.
+    # Фактический размер сделки всё равно задаёт минимум из четырёх: риск на
+    # сделку, свободный капитал, MAX_POSITION_MARGIN_PCT × плечо и эта доля.
+    # Доля здесь — предохранитель от узкого стопа, а не регулятор размера.
+    LIVE_MAX_ORDER_NOTIONAL_PCT: float = 20.0
     # Сайзинг от РЕАЛЬНОГО баланса биржи (fetch_balance), а не от RISK_EQUITY_USDT.
     # В live эквити = свободный USDT соответствующего счёта в моменте (SPOT и
     # USDT-M фьючерсы — РАЗНЫЕ счета HTX). Растёт с пополнениями владельца и
@@ -2548,13 +2547,21 @@ class Settings(BaseSettings):
         # Типовой нотионал = эквити × MAX_POSITION_MARGIN_PCT (плечо 1).
         # Ловим рассогласование на старте, а не по логам отказов.
         if self.ENABLE_LIVE_ORDERS:
-            typical_notional = float(self.RISK_EQUITY_USDT) * float(self.MAX_POSITION_MARGIN_PCT)
-            if float(self.LIVE_MAX_ORDER_NOTIONAL_USDT) < typical_notional:
+            # (#no-static-position-size-2026-09-20) Типовой нотионал считаем С
+            # ПЛЕЧОМ: без него проверка сравнивала маржу с потолком нотионала и
+            # пропускала кэп, режущий каждый ордер во столько раз, каким было
+            # плечо. И спрашиваем потолок у общей формулы — доля от экспозиции
+            # сравнивает себя сама с собой и всегда проходит, а абсолют ловится.
+            lev = max(1.0, min(float(self.FUTURES_LEVERAGE or 1), float(self.LIVE_MAX_LEVERAGE)))
+            typical_notional = float(self.RISK_EQUITY_USDT) * float(self.MAX_POSITION_MARGIN_PCT) * lev
+            cap = float(self.max_order_notional(self.RISK_EQUITY_USDT, lev) or 0.0)
+            if 0 < cap < typical_notional:
                 blockers.append(
-                    f"LIVE_MAX_ORDER_NOTIONAL_USDT={self.LIVE_MAX_ORDER_NOTIONAL_USDT:.0f} is below the "
-                    f"typical position notional ~{typical_notional:.0f} USDT "
-                    f"(RISK_EQUITY_USDT x MAX_POSITION_MARGIN_PCT): every live order would be rejected. "
-                    f"Either raise the cap or lower position sizing for the ramp-up stage"
+                    f"order notional cap {cap:.0f} USDT is below the typical position notional "
+                    f"~{typical_notional:.0f} USDT (RISK_EQUITY_USDT x MAX_POSITION_MARGIN_PCT x "
+                    f"leverage {lev:g}): every live order would be rejected. Raise "
+                    f"LIVE_MAX_ORDER_NOTIONAL_PCT (or clear the absolute "
+                    f"LIVE_MAX_ORDER_NOTIONAL_USDT), or lower position sizing"
                 )
             if float(self.LIVE_MAX_LEVERAGE) > 1.0 and not self.ENABLE_FUTURES:
                 blockers.append("LIVE_MAX_LEVERAGE > 1 requires ENABLE_FUTURES=true")

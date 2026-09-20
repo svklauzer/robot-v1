@@ -263,3 +263,43 @@ def test_the_leverage_keys_are_pinned_in_the_blueprint():
     # тогда, когда владелец поднял его на бирже.
     lev = blueprint.split("key: FUTURES_LEVERAGE", 1)[1].split("- key:", 1)[0]
     assert "sync: false" in lev
+
+
+# ── из чего складывается размер сделки (#no-static-position-size-2026-09-20) ──
+def test_the_trade_size_names_what_actually_limits_it(monkeypatch):
+    """Вопрос «почему позиция такого размера» возвращался раз за разом, потому
+    что ответ был размазан по сайзингу, конфигу и предохранителю."""
+    monkeypatch.setattr(settings, "RISK_PER_TRADE_PCT", 0.5)
+    monkeypatch.setattr(settings, "MAX_POSITION_MARGIN_PCT", 0.13)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 20.0)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0)
+
+    result = env.trade_size_breakdown(3000, 1, stop_pct=1.5)
+
+    # риск 1000, маржа 390, капитал 3000, доля 600 → режет маржа.
+    assert result["usdt"] == pytest.approx(390.0)
+    assert result["binding"] == "маржа на позицию"
+
+
+def test_a_static_cap_shows_up_as_the_binding_limit(monkeypatch):
+    """Ровно это и происходило до 20.09: потолком был кэп, а не экономика."""
+    monkeypatch.setattr(settings, "RISK_PER_TRADE_PCT", 0.5)
+    monkeypatch.setattr(settings, "MAX_POSITION_MARGIN_PCT", 0.13)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 250.0)
+
+    result = env.trade_size_breakdown(3000, 1, stop_pct=1.5)
+
+    assert result["binding"] == "потолок ордера"
+    assert result["usdt"] == pytest.approx(250.0)
+
+
+def test_a_disabled_cap_is_shown_as_off_not_as_zero(monkeypatch):
+    """Ноль в списке потолков читался бы как «размер сделки ноль»."""
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0)
+
+    result = env.trade_size_breakdown(3000, 1)
+
+    assert result["limits"]["потолок ордера"] is None
+    assert result["usdt"] > 0

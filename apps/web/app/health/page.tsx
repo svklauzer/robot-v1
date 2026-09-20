@@ -468,6 +468,47 @@ export default function HealthPage() {
             </div>
           </div>
 
+          {/* (#no-static-position-size-2026-09-20) Чем ограничен размер ОДНОЙ
+              сделки. Пока потолком стояли абсолютные 250 USDT, ответом почти
+              всегда был именно кэп — и увидеть это было негде, отчего вопрос
+              «почему позиция такого размера» возвращался раз за разом. */}
+          {envelopes.trade_size && (
+            <div className="mb-4 rounded-xl border border-sky-900/50 bg-sky-950/20 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="text-sm text-emerald-100">Размер одной сделки</span>
+                <span className="text-sm">
+                  <span className="font-semibold text-emerald-200">
+                    до {formatNumber(envelopes.trade_size.usdt)} USDT
+                  </span>
+                  {envelopes.trade_size.share_of_exposure_pct != null && (
+                    <span className="ml-2 text-emerald-100/50">
+                      · {envelopes.trade_size.share_of_exposure_pct}% экспозиции
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                {Object.entries(envelopes.trade_size.limits || {}).map(([name, value]) => (
+                  <span
+                    key={name}
+                    className={
+                      name === envelopes.trade_size.binding
+                        ? "text-sky-300"
+                        : "text-emerald-100/40"
+                    }
+                  >
+                    {name}: {value == null ? "выкл" : formatNumber(value as number)}
+                    {name === envelopes.trade_size.binding && " ← режет"}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-1 text-[11px] text-emerald-100/30">
+                Размер = минимум из четырёх. Риск-потолок посчитан для типового стопа{" "}
+                {envelopes.trade_size.stop_pct_assumed}% — у каждой сделки он свой.
+              </div>
+            </div>
+          )}
+
           <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
             <MiniStat label="Задано всего" value={`${envelopes.configured_total_pct}%`} tone="good" />
             {/* Больше 100% — контуры обещают больше, чем есть на счёте */}
