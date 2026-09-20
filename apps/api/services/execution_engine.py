@@ -365,7 +365,7 @@ class ExecutionEngine:
                     f"Статус: {live.get('status')}\n"
                     f"Ошибка: {live.get('error')}\n\n"
                     f"Ордер на биржу не прошёл. Позиция НЕ заведена, kill-switch включён.\n"
-                    f"Проверьте баланс, LIVE_MAX_ORDER_NOTIONAL_USDT и права ключа."
+                    f"Проверьте баланс, LIVE_MAX_ORDER_NOTIONAL_PCT и права ключа."
                 ),
             )
         except Exception as exc:  # noqa: BLE001

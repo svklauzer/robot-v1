@@ -150,6 +150,7 @@ def test_the_cap_holds_on_what_is_actually_sent(executor, monkeypatch):
     """Кэп проверяется на плановом объёме — значит, отправленный обязан с ним
     совпадать. Раньше XRP проходил кэп как 142 USDT и уходил как 14 180."""
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 250.0)
     captured = {}
 
@@ -181,6 +182,7 @@ def test_btc_swap_plan_respects_the_notional_cap(okx, monkeypatch):
     from services.trade_plan import TradePlanBuilder
 
     monkeypatch.setattr(settings, "ENABLE_FUTURES", True)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 250.0)
     builder = TradePlanBuilder.__new__(TradePlanBuilder)
     builder.htx = okx

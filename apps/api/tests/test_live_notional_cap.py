@@ -22,6 +22,10 @@ from services.live_executor import LiveExecutor
 @pytest.fixture
 def executor(monkeypatch):
     ex = LiveExecutor.__new__(LiveExecutor)
+    # (#no-static-position-size-2026-09-20) Долю гасим явно: с 20.09 она
+    # действует по умолчанию и замещает абсолют. Здесь проверяется именно
+    # аварийный абсолютный путь — он остался для конфигураций без капитала.
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 25.0)
     return ex
 
@@ -96,6 +100,7 @@ def test_swap_order_is_submitted_in_contracts(monkeypatch):
     отправленные как есть 1000 открыли бы позицию в десять раз больше.
     """
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 100000.0)
 
     captured = {}
@@ -127,6 +132,7 @@ def test_swap_order_is_submitted_in_contracts(monkeypatch):
 def test_swap_order_is_refused_when_contract_size_unknown(monkeypatch):
     """Угадывать размер контракта нельзя: ошибка кратна, а не процентна."""
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 100000.0)
 
     class _Client:
@@ -154,6 +160,7 @@ def test_swap_order_is_refused_when_contract_size_unknown(monkeypatch):
 def test_spot_order_keeps_base_units(monkeypatch):
     """На споте объём — это монеты, никакого пересчёта быть не должно."""
     monkeypatch.setattr(LiveExecutor, "effective_mode", classmethod(lambda cls: "live"))
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
     monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 100000.0)
 
     captured = {}
@@ -250,7 +257,8 @@ def test_production_blocker_still_guards_the_mismatch():
         APP_ENV="development", ENABLE_LIVE_ORDERS=True, TRADING_MODE="live_limited",
         ROBOT_MODE="live", TELEGRAM_BOT_TOKEN="t",
         RISK_EQUITY_USDT=950.0, MAX_POSITION_MARGIN_PCT=0.13,
-        LIVE_MAX_ORDER_NOTIONAL_USDT=25.0, LIVE_MAX_LEVERAGE=1.0,
+        LIVE_MAX_ORDER_NOTIONAL_USDT=25.0, LIVE_MAX_ORDER_NOTIONAL_PCT=0.0,
+        LIVE_MAX_LEVERAGE=1.0,
     ).production_blockers()
 
-    assert any("LIVE_MAX_ORDER_NOTIONAL_USDT" in b for b in blockers)
+    assert any("order notional cap" in b for b in blockers)

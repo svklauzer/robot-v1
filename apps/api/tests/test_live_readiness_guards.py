@@ -22,27 +22,42 @@ def _live_settings(**over):
     return Settings(**base)
 
 
+# (#no-static-position-size-2026-09-20) Абсолютный кэп выключен по умолчанию и
+# оставлен аварийным. Эти три случая проверяют именно его, поэтому долю в них
+# гасим явно — иначе она замещает абсолют и блокер не о чем предупреждать.
 def test_notional_cap_below_position_size_blocks_live():
-    """Дефолтный кэп 25 USDT против типового нотионала ~124 — в первый же день
-    live КАЖДЫЙ ордер был бы отклонён. Ловим до старта, а не по логам."""
-    blockers = _live_settings(LIVE_MAX_ORDER_NOTIONAL_USDT=25.0).production_blockers()
+    """Кэп 25 USDT против типового нотионала ~124 — в первый же день live
+    КАЖДЫЙ ордер был бы отклонён. Ловим до старта, а не по логам."""
+    blockers = _live_settings(LIVE_MAX_ORDER_NOTIONAL_USDT=25.0,
+                              LIVE_MAX_ORDER_NOTIONAL_PCT=0.0).production_blockers()
 
-    assert any("LIVE_MAX_ORDER_NOTIONAL_USDT" in b for b in blockers), blockers
+    assert any("order notional cap" in b for b in blockers), blockers
 
 
 def test_notional_cap_above_position_size_passes():
-    blockers = _live_settings(LIVE_MAX_ORDER_NOTIONAL_USDT=150.0).production_blockers()
+    blockers = _live_settings(LIVE_MAX_ORDER_NOTIONAL_USDT=150.0,
+                              LIVE_MAX_ORDER_NOTIONAL_PCT=0.0).production_blockers()
 
-    assert not any("LIVE_MAX_ORDER_NOTIONAL_USDT" in b for b in blockers), blockers
+    assert not any("order notional cap" in b for b in blockers), blockers
+
+
+def test_a_share_of_exposure_never_trips_the_blocker():
+    """Доля растёт вместе с типовым размером позиции и по построению не может
+    оказаться ниже него — ради этого её и вводили."""
+    blockers = _live_settings(LIVE_MAX_ORDER_NOTIONAL_USDT=0.0,
+                              LIVE_MAX_ORDER_NOTIONAL_PCT=20.0).production_blockers()
+
+    assert not any("order notional cap" in b for b in blockers), blockers
 
 
 def test_small_position_sizing_also_satisfies_a_small_cap():
     """Второй легальный путь на этап ramp-up — снизить размер позиции."""
     blockers = _live_settings(
-        LIVE_MAX_ORDER_NOTIONAL_USDT=25.0, MAX_POSITION_MARGIN_PCT=0.02
+        LIVE_MAX_ORDER_NOTIONAL_USDT=25.0, LIVE_MAX_ORDER_NOTIONAL_PCT=0.0,
+        MAX_POSITION_MARGIN_PCT=0.02
     ).production_blockers()
 
-    assert not any("LIVE_MAX_ORDER_NOTIONAL_USDT" in b for b in blockers), blockers
+    assert not any("order notional cap" in b for b in blockers), blockers
 
 
 def test_leverage_requires_futures():

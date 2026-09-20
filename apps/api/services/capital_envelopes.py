@@ -218,3 +218,47 @@ def arb_leg_notional(equity: float | None = None, db=None) -> float:
     capital_per_notional = 2.0  # спот + своп
     envelope = envelope_usdt(ARB, equity=equity, db=db)
     return round(envelope / (hedges * capital_per_notional), 2)
+
+
+# ── из чего складывается размер сделки (#no-static-position-size-2026-09-20) ──
+def trade_size_breakdown(equity: float, leverage: float,
+                         stop_pct: float = 1.5) -> dict:
+    """Четыре потолка и минимум из них — то, чем ограничен размер позиции.
+
+    Зачем отдельной функцией: владелец раз за разом упирался в вопрос «почему
+    позиция такого размера», а ответ был размазан по сайзингу, конфигу и
+    предохранителю в исполнителе. Пока статикой стояли 250 USDT, ответом чаще
+    всего был именно кэп — и это не было видно нигде.
+
+    `stop_pct` — типовая дистанция до стопа: риск-потолок без неё не посчитать,
+    она своя у каждой сделки, и число здесь ориентировочное.
+    """
+    from core.config import settings
+
+    equity = max(0.0, float(equity or 0.0))
+    leverage = max(1.0, float(leverage or 1.0))
+    stop = max(0.01, float(stop_pct or 1.5))
+
+    by_risk = equity * float(getattr(settings, "RISK_PER_TRADE_PCT", 0.5)) / 100.0 / (stop / 100.0)
+    by_margin = equity * float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.13)) * leverage
+    by_balance = equity * leverage
+    by_cap = float(settings.max_order_notional(equity, leverage) or 0.0)
+
+    limits = {
+        "риск на сделку": round(by_risk, 2),
+        "маржа на позицию": round(by_margin, 2),
+        "свободный капитал": round(by_balance, 2),
+        "потолок ордера": round(by_cap, 2) if by_cap > 0 else None,
+    }
+    active = {k: v for k, v in limits.items() if v is not None and v > 0}
+    binding = min(active, key=active.get) if active else None
+    return {
+        "usdt": round(active[binding], 2) if binding else 0.0,
+        "binding": binding,
+        "limits": limits,
+        "stop_pct_assumed": stop,
+        # Доля экспозиции, которой окажется одна сделка: владелец меряет плечо
+        # именно так («при 300 и 5× управляю 1500»).
+        "share_of_exposure_pct": (round(active[binding] / (equity * leverage) * 100, 2)
+                                  if binding and equity > 0 else None),
+    }
