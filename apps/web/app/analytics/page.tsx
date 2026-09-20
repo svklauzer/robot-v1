@@ -657,6 +657,7 @@ const SYMBOL_REASON_LABELS: Record<string, string> = {
   no_history: "нет закрытий в окне",
   small_history_ok: "мало истории — ок",
   small_history_last_stop_reduce_risk: "после стопа — риск снижен",
+  small_history_last_stop_no_change: "после стопа — размер без изменений",
   symbol_near_breakeven_mild_reduce: "около безубытка — лёгкое снижение",
   symbol_gives_back_profit_reduce_risk: "отдаёт прибыль — риск снижен",
   symbol_negative_expectancy_blocked: "отрицательное ожидание — блок",

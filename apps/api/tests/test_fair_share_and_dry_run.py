@@ -255,3 +255,19 @@ def test_the_severe_threshold_is_a_share_not_a_sum():
     block = guard.split("SYMBOL_PERF_SEVERE_LOSS_PCT", 1)[1].split("return", 1)[0]
 
     assert "RISK_EQUITY_USDT" in block, "порог обязан считаться от капитала"
+
+
+def test_the_reason_matches_what_actually_happens_to_the_size():
+    """(#reason-must-match-the-action-2026-09-20) Множитель после одного стопа
+    равен 1.0 с июля, а причина называлась `..._reduce_risk` — витрина писала
+    «риск снижен» там, где не менялось ничего."""
+    from pathlib import Path
+
+    guard = (Path(__file__).resolve().parents[1] / "services" / "symbol_performance_guard.py").read_text(encoding="utf-8")
+
+    assert "small_history_last_stop_no_change" in guard
+    if settings.SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER >= 1.0:
+        web = Path(__file__).resolve().parents[3] / "apps" / "web" / "app" / "analytics" / "page.tsx"
+        assert "small_history_last_stop_no_change" in web.read_text(encoding="utf-8"), (
+            "фронт не знает причины — покажет сырой ключ"
+        )
