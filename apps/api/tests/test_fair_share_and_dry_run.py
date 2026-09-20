@@ -152,7 +152,11 @@ def test_guard_requires_a_statistically_meaningful_sample():
     assert settings.SYMBOL_PERF_MIN_HISTORY >= 10, (
         "гвард снова судит символ по горстке сделок"
     )
-    assert settings.SYMBOL_PERF_BLOCK_MIN_HISTORY >= 15, (
+    # (#symbol-gate-inverted-2026-09-20) Было 15. Столько сделок на символ не
+    # набирается даже за неделю (максимум 14 при окне 168 ч), поэтому ветка
+    # ограничения не срабатывала ни разу — blocked всегда ноль. Требование
+    # «осмысленная выборка» осталось, но привязано к достижимому числу.
+    assert settings.SYMBOL_PERF_BLOCK_MIN_HISTORY >= 12, (
         "блокировка символа на малой выборке — это шум, а не риск-менеджмент"
     )
     assert settings.SYMBOL_PERF_BLOCK_MIN_HISTORY > settings.SYMBOL_PERF_MIN_HISTORY

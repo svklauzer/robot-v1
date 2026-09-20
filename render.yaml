@@ -578,9 +578,12 @@ services:
       - key: SYMBOL_PERF_WINDOW_HOURS
         value: "168.0"
       # Двадцати сделок не набиралось даже за неделю (максимум 14), поэтому
-      # ветка ограничения не срабатывала ни разу.
-      - key: SYMBOL_PERF_BLOCK_MIN_HISTORY
+      # ветка ограничения не срабатывала ни разу. Порог держим ВЫШЕ
+      # MIN_HISTORY: ограничить символ должно быть труднее, чем урезать.
+      - key: SYMBOL_PERF_MIN_HISTORY
         value: "10"
+      - key: SYMBOL_PERF_BLOCK_MIN_HISTORY
+        value: "12"
 
       # ── Production entry gate ─────────────────────────────────────────────
       - key: PROD_GATE_A_PLUS_MIN_SETUP
