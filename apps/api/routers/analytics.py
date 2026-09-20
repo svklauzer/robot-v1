@@ -933,3 +933,21 @@ def analytics_entry_drift(limit: int = 500, window_hours: float | None = None):
         return _entry_drift(db, limit=limit, window_hours=window_hours)
     finally:
         db.close()
+
+
+@router.get("/crt-quality", dependencies=[Depends(require_owner_action)])
+def analytics_crt_quality(limit: int = 500, window_hours: float | None = None):
+    """(#crt-quality-2026-09-20) Где внутри CRT деньги.
+
+    CRT — единственный убыточный движок на чистой неделе OKX, и пять его
+    порогов в проде ослаблены против дефолта. «CRT теряет» и «теряет
+    определённая часть CRT» ведут к разным решениям; отличить их можно только
+    разрезом по собственной геометрии движка.
+    """
+    from services.crt_quality_report import report as _crt
+
+    db = SessionLocal()
+    try:
+        return _crt(db, limit=limit, window_hours=window_hours)
+    finally:
+        db.close()
