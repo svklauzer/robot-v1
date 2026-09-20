@@ -1005,6 +1005,7 @@ class RobotLoop:
                     min_net_rr_tp1=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP1", 0.40) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP1", 0.40)),
                     min_net_rr_tp2=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_NET_RR_TP2", 0.85) if is_range else getattr(settings, "ANTI_DRAIN_MIN_NET_RR_TP2", 0.85)),
                     min_expected_edge_after_costs_usdt=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.0) if is_range else getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0.80)),
+                    min_expected_edge_after_costs_pct=float(getattr(settings, "SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0) if is_range else getattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0)),
                     # Динамический бюджет ВЛАДЕЕТ пер-позишн размером: одинокий
                     # кандидат может занять всю free (до 70%), поэтому пер-позишн
                     # кап поднимаем до общего потолка — иначе anti-drain срежет его

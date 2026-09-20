@@ -242,32 +242,56 @@ export default function AnalyticsPage() {
           </Panel>
         </section>
 
-        {/* (#entry-drift-2026-09-19) Зона входа переносит сделку к цене лучше
-            рынка, и бумага книжит её как исполненную. Live шлёт рыночный ордер и
-            пишет фактический филл — этой форы там не будет. Разрыв копится на
-            каждой перенесённой сделке и сопоставим со всей стоимостью оборота,
-            поэтому он должен быть виден рядом с экономикой, а не всплыть после
-            переключения рубильников. */}
+        {/* (#entry-drift-2026-09-19) Сигнал ждёт, пока цена сама придёт в
+            коридор зоны, и открывается по ней же — одинаково в бумаге и в live.
+            Цена входит в коридор с одной стороны, поэтому факт входа
+            оказывается у дальней от цели границы. Это и есть выигрыш, который
+            забрал бы лимитный ордер по цене цели; рядом — мейкерская ставка,
+            вторая половина того же перехода. */}
         {entryDrift?.status === "ok" && (
           <section className="rounded-2xl border border-amber-900/70 bg-amber-950/10 p-5">
             <h2 className="mb-1 text-xl font-semibold text-amber-200">
-              Фора бумаги на входе
+              Цена входа: цель против факта
             </h2>
             <p className="mb-4 text-sm text-emerald-100/50">
-              Насколько бумажная цена входа лучше рыночной. Выборка:{" "}
-              {entryDrift.sample_count ?? "—"} закрытых
+              Что дал бы переход на лимитный ордер. Выборка: {entryDrift.sample_count ?? "—"} закрытых
               {entryDrift.window_hours ? ` за ${entryDrift.window_hours} ч` : " за всю историю"}.
             </p>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <Metric
-                  label="Входов перенесено с рынка"
-                  value={`${(entryDrift.overall?.limit_share_pct ?? 0).toFixed(1)}% (${entryDrift.overall?.limit_trades ?? 0} из ${entryDrift.sample_count ?? 0})`}
+                  label="Вход против цели зоны"
+                  value={`${(entryDrift.overall?.entry_vs_target_pct ?? 0).toFixed(3)}% от номинала`}
+                  warn={(entryDrift.overall?.entry_vs_target_pct ?? 0) < 0}
                 />
                 <Metric
-                  label="Фора на сделку"
-                  value={`${(entryDrift.overall?.avg_drift_pct_all_trades ?? 0).toFixed(3)}% от номинала`}
-                  warn
+                  label="Вход против рынка на планировании"
+                  value={`${(entryDrift.overall?.entry_vs_mid_pct ?? 0).toFixed(3)}% — это ожидание коридора уже даёт`}
+                  good={(entryDrift.overall?.entry_vs_mid_pct ?? 0) > 0}
+                />
+                <Metric
+                  label="Входов с перенесённой целью"
+                  value={`${(entryDrift.overall?.limit_share_pct ?? 0).toFixed(1)}% (${entryDrift.overall?.limit_trades ?? 0} из ${entryDrift.sample_count ?? 0})`}
+                />
+              </div>
+              <div>
+                <Metric
+                  label="Выигрыш лимита по цене"
+                  value={`${(entryDrift.overall?.limit_gain_usdt ?? 0).toFixed(2)} USDT`}
+                  good={(entryDrift.overall?.limit_gain_usdt ?? 0) > 0}
+                />
+                <Metric
+                  label="На сделку"
+                  value={`${(entryDrift.overall?.limit_gain_per_trade_usdt ?? 0).toFixed(3)} USDT`}
+                />
+                <Metric
+                  label="Плюс мейкерская ставка"
+                  value={
+                    entryDrift.overall?.maker_saving_pct != null
+                      ? `−${entryDrift.overall.maker_saving_pct.toFixed(3)}% от номинала на входе`
+                      : "—"
+                  }
+                  good
                 />
                 <Metric
                   label="Стоимость оборота"
@@ -276,32 +300,6 @@ export default function AnalyticsPage() {
                       ? `${entryDrift.overall.avg_round_trip_pct.toFixed(3)}% от номинала`
                       : "—"
                   }
-                />
-                <Metric
-                  label="Сделок уже в live"
-                  value={`${entryDrift.overall?.live_trades ?? 0} — у них цена по факту филла`}
-                />
-              </div>
-              <div>
-                <Metric
-                  label="Фора всего"
-                  value={`${(entryDrift.overall?.edge_usdt ?? 0).toFixed(2)} USDT`}
-                  warn
-                />
-                <Metric
-                  label="Net (как посчитала бумага)"
-                  value={`${(entryDrift.overall?.net_pnl_usdt ?? 0).toFixed(2)} USDT`}
-                  good={(entryDrift.overall?.net_pnl_usdt ?? 0) > 0}
-                />
-                <Metric
-                  label="Net без форы"
-                  value={`${(entryDrift.overall?.net_pnl_without_edge_usdt ?? 0).toFixed(2)} USDT`}
-                  warn={(entryDrift.overall?.net_pnl_without_edge_usdt ?? 0) < 0}
-                />
-                <Metric
-                  label="Фора на сделку в деньгах"
-                  value={`${(entryDrift.overall?.edge_per_trade_usdt ?? 0).toFixed(3)} USDT`}
-                  warn
                 />
               </div>
             </div>
@@ -312,19 +310,18 @@ export default function AnalyticsPage() {
                   className="rounded-lg border border-emerald-950/60 bg-black/20 px-3 py-1.5 text-xs text-emerald-100/70"
                 >
                   <span className="font-semibold text-emerald-200">{mode}</span> ×{item.trades}
-                  {item.avg_drift_pct ? ` · ${item.avg_drift_pct.toFixed(3)}%` : ""}
-                  {item.edge_usdt ? ` · ${item.edge_usdt.toFixed(2)} USDT` : ""}
+                  {item.entry_vs_target_pct != null ? ` · к цели ${item.entry_vs_target_pct.toFixed(3)}%` : ""}
+                  {item.limit_gain_usdt ? ` · ${item.limit_gain_usdt.toFixed(2)} USDT` : ""}
                 </span>
               ))}
             </div>
             <p className="mt-3 text-xs text-yellow-200/80">{entryDrift.note}</p>
 
             {/* (#entry-mode-quality-2026-09-19) Сам разрыв по деньгам ещё не
-                отвечает, хуже ли рыночный вход ПО СУЩЕСТВУ: перенесённый
-                получает фору, которой у рыночного нет. Отвечает edge_ratio —
+                отвечает, хуже ли рыночный вход ПО СУЩЕСТВУ. Отвечает edge_ratio —
                 отношение хода в нашу сторону к ходу против, оно от цены
-                подарка не зависит. Рядом результат без форы и он же,
-                нормированный на номинал: рыночные сделки крупнее. */}
+                исполнения не зависит. Рядом результат, нормированный на номинал:
+                рыночные сделки крупнее. */}
             {(mfeMae?.by_entry_mode || []).length > 0 && (
               <div className="mt-5 border-t border-emerald-950 pt-4">
                 <h3 className="mb-1 text-sm font-semibold text-emerald-200">
@@ -351,8 +348,8 @@ export default function AnalyticsPage() {
                       <span className={Number(m.edge_ratio ?? 0) >= 1 ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
                         edge {m.edge_ratio ?? "—"}
                       </span>
-                      <span className={Number(m.net_pnl_without_edge_usdt ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}>
-                        без форы {Number(m.net_pnl_without_edge_usdt ?? 0).toFixed(2)} USDT
+                      <span className={Number(m.net_pnl_usdt ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}>
+                        {Number(m.net_pnl_usdt ?? 0).toFixed(2)} USDT
                       </span>
                       <span className={Number(m.net_pnl_per_notional_pct ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}>
                         {m.net_pnl_per_notional_pct != null ? `${m.net_pnl_per_notional_pct.toFixed(3)}% номинала` : "—"}

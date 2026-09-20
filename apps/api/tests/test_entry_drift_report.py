@@ -1,15 +1,20 @@
-"""Фора лимитного входа (#entry-drift-2026-09-19).
+"""Цена входа: цель против факта (#entry-drift-2026-09-19).
 
-Зона входа переносит сделку к цене ЛУЧШЕ рынка, бумага книжит её как
-исполненную, а live шлёт рыночный ордер и пишет фактический филл. Отчёт должен
-показывать размер этой разницы — иначе бумажный результат переносят на live как
-есть.
+Первая версия этого отчёта считала, что бумага книжит вход по цене зоны и
+получает фору, которой не будет в live. Проверка по коду это опровергла:
+`signal_lifecycle` держит сигнал в `published`, ждёт, пока ТЕКУЩАЯ цена попадёт
+в коридор зоны, и открывает позицию по ней же — одинаково в бумаге и в live.
+
+Что осталось верным и важным: цена входит в коридор с одной стороны, поэтому
+факт входа систематически оказывается у дальней от цели границы. Ровно это и
+забрал бы лимитный ордер по цене цели.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,89 +35,101 @@ def _db():
     return db
 
 
-def _signal(db, *, mode="limit_wall", drift=0.2, qty=100.0, entry=2.0, net_pnl=1.0,
-            execution="paper", round_trip=0.12, closed_hours_ago=1.0):
-    plan = {
-        "entry_zone_plan": {"mode": mode, "drift_pct": drift},
-        "execution": {"mode": execution},
-        "lifecycle": {"entry_price": entry},
-        "config": {"market": {"round_trip_pct": round_trip}},
-    }
-    db.add(Signal(bot_id=1, symbol="XRP/USDT", side="long", status="closed", exchange="okx",
-                  entry_zone_json={"from": entry * 0.999, "to": entry * 1.001},
+def _signal(db, *, side="long", mode="limit_wall", target=1.4097, mid=1.4110,
+            entry=1.4110, qty=100.0, net_pnl=1.0, closed_hours_ago=1.0, round_trip=0.12):
+    zone_base = target or entry
+    db.add(Signal(bot_id=1, symbol="XRP/USDT", side=side, status="closed", exchange="okx",
+                  entry_zone_json={"from": zone_base * 0.999, "to": zone_base * 1.001},
                   stop_price=entry * 0.98, tp_json={"tp1": entry * 1.02, "tp2": entry * 1.05},
                   qty=qty, closed_net_pnl=net_pnl, result_pct=0.5,
                   closed_at=datetime.now(timezone.utc) - timedelta(hours=closed_hours_ago),
-                  plan_json=plan))
+                  plan_json={
+                      "entry_zone_plan": ({"mode": mode, "entry_price": target} if mode else None),
+                      "entry_depth": {"mid": mid},
+                      "lifecycle": {"entry_price": entry},
+                      "config": {"market": {"round_trip_pct": round_trip}},
+                  }))
     db.commit()
 
 
-def test_limit_entry_edge_is_counted_in_usdt():
+def test_long_entering_above_the_target_is_reported_as_worse():
+    """Лонг падает к коридору сверху и входит у верхней границы — хуже цели."""
     db = _db()
-    _signal(db, mode="limit_wall", drift=0.2, qty=100.0, entry=2.0, net_pnl=1.0)
+    _signal(db, side="long", target=1.4097, entry=1.4110)
 
     overall = report(db)["overall"]
 
-    # 200 USDT номинала × 0.2% = 0.4 USDT форы, которой в live не будет.
-    assert overall["edge_usdt"] == 0.4
-    assert overall["net_pnl_usdt"] == 1.0
-    assert overall["net_pnl_without_edge_usdt"] == 0.6
-    assert overall["limit_trades"] == 1 and overall["limit_share_pct"] == 100.0
+    # (1.4097 − 1.4110) / 1.4097 = −0.092%
+    assert overall["entry_vs_target_pct"] == pytest.approx(-0.0922, abs=1e-3)
 
 
-def test_market_entry_has_no_edge():
+def test_short_entering_below_the_target_is_worse_too():
+    """У шорта выгода противоположна по знаку цены, но смысл тот же."""
     db = _db()
-    _signal(db, mode="market", drift=0.0, net_pnl=1.0)
+    _signal(db, side="short", target=1.4110, entry=1.4097)
+
+    assert report(db)["overall"]["entry_vs_target_pct"] == pytest.approx(-0.0921, abs=1e-3)
+
+
+def test_limit_gain_is_what_the_target_price_would_have_added():
+    db = _db()
+    # Номинал 141.1; вход хуже цели на 0.0922% → выигрыш ≈ 0.130 USDT.
+    _signal(db, side="long", target=1.4097, entry=1.4110, qty=100.0)
 
     overall = report(db)["overall"]
 
-    assert overall["edge_usdt"] == 0.0
-    assert overall["market_trades"] == 1 and overall["limit_trades"] == 0
-    assert overall["net_pnl_without_edge_usdt"] == overall["net_pnl_usdt"]
+    assert overall["limit_gain_usdt"] == pytest.approx(0.130, abs=0.005)
+    assert overall["limit_gain_per_trade_usdt"] == overall["limit_gain_usdt"]
 
 
-def test_trade_executed_live_keeps_its_real_fill():
-    """В live цена в учёте — фактический филл, форы там нет и вычитать нечего."""
+def test_waiting_for_the_corridor_is_measured_against_the_planning_mid():
+    """Отдельная величина: что уже даёт ожидание коридора. Она достаётся и
+    бумаге, и live, и с переходом на лимит никуда не денется."""
     db = _db()
-    _signal(db, mode="limit_wall", drift=0.5, execution="live", net_pnl=2.0)
+    _signal(db, side="long", mid=1.4200, entry=1.4110, target=1.4097)
 
-    overall = report(db)["overall"]
-
-    assert overall["edge_usdt"] == 0.0 and overall["live_trades"] == 1
-    assert overall["net_pnl_without_edge_usdt"] == 2.0
+    assert report(db)["overall"]["entry_vs_mid_pct"] == pytest.approx(0.634, abs=1e-2)
 
 
-def test_edge_is_split_by_entry_mode():
+def test_modes_are_split_and_market_entries_have_no_target():
     db = _db()
-    _signal(db, mode="limit_wall", drift=0.3, qty=100.0, entry=1.0, net_pnl=1.0)
-    _signal(db, mode="limit_vwap", drift=0.1, qty=100.0, entry=1.0, net_pnl=1.0)
-    _signal(db, mode="market", drift=0.0, qty=100.0, entry=1.0, net_pnl=1.0)
+    _signal(db, mode="limit_wall", target=1.4097, entry=1.4110)
+    _signal(db, mode="market", target=None, entry=1.4110)
 
     result = report(db)
 
-    assert result["by_mode"]["limit_wall"]["edge_usdt"] == 0.3
-    assert result["by_mode"]["limit_vwap"]["edge_usdt"] == 0.1
-    assert result["by_mode"]["market"]["edge_usdt"] == 0.0
-    # Средняя фора считается по ВСЕМ сделкам: рыночные входы разбавляют её так
-    # же, как разбавляют реальный портфель.
-    assert result["overall"]["avg_drift_pct_all_trades"] == round(0.4 / 3, 4)
+    assert result["by_mode"]["limit_wall"]["entry_vs_target_pct"] is not None
+    assert result["by_mode"]["market"]["entry_vs_target_pct"] is None
+    assert result["overall"]["market_trades"] == 1 and result["overall"]["limit_trades"] == 1
 
 
-def test_edge_is_comparable_with_the_round_trip():
-    """Фора и стоимость оборота меряются одним и тем же — долей номинала."""
+def test_maker_saving_is_shown_next_to_the_gain():
+    """Переход на лимит даёт две вещи сразу: цену цели и мейкерскую ставку."""
     db = _db()
-    _signal(db, mode="limit_wall", drift=0.12, round_trip=0.12)
+    _signal(db)
 
-    result = report(db)
+    overall = report(db)["overall"]
 
-    assert result["overall"]["avg_round_trip_pct"] == 0.12
-    assert "round-trip" in result["note"] and "лимитным ордером" in result["note"]
+    assert overall["maker_saving_pct"] == pytest.approx(0.03, abs=1e-6)
+    assert overall["avg_round_trip_pct"] == 0.12
+
+
+def test_note_does_not_claim_a_paper_bonus():
+    """Прежний текст утверждал, что у бумаги есть фора. Её нет: вход
+    открывается по текущей цене и в бумаге, и в live."""
+    db = _db()
+    _signal(db)
+
+    note = report(db)["note"]
+
+    assert "фора" not in note.lower()
+    assert "в бумаге, и в live" in note
 
 
 def test_window_cuts_off_older_trades():
     db = _db()
-    _signal(db, drift=0.2, closed_hours_ago=200.0)
-    _signal(db, drift=0.2, closed_hours_ago=1.0)
+    _signal(db, closed_hours_ago=200.0)
+    _signal(db, closed_hours_ago=1.0)
 
     assert report(db)["sample_count"] == 2
     assert report(db, window_hours=168)["sample_count"] == 1
@@ -120,13 +137,14 @@ def test_window_cuts_off_older_trades():
 
 def test_endpoint_is_owner_only():
     router = (Path(__file__).resolve().parents[1] / "routers" / "analytics.py").read_text(encoding="utf-8")
+    head = router.split('@router.get("/entry-drift"', 1)[1].split("\n", 1)[0]
     block = router.split('@router.get("/entry-drift"', 1)[1].split("\n@router.", 1)[0]
-    assert "require_owner_action" in router.split('@router.get("/entry-drift"', 1)[1].split("\n", 1)[0]
+    assert "require_owner_action" in head
     assert "entry_drift_report" in block
 
 
 def test_analytics_page_shows_the_gap():
     page = (Path(__file__).resolve().parents[2] / "web" / "app" / "analytics" / "page.tsx").read_text(encoding="utf-8")
     assert "/analytics/entry-drift" in page
-    for field in ("edge_usdt", "net_pnl_without_edge_usdt", "limit_share_pct", "avg_drift_pct_all_trades"):
+    for field in ("entry_vs_target_pct", "entry_vs_mid_pct", "limit_gain_usdt", "maker_saving_pct"):
         assert field in page, field

@@ -190,7 +190,10 @@ class LivePreflight:
         capital = free + robot_margin
         leverage = self.executor._leverage_value(getattr(settings, "FUTURES_LEVERAGE", 1))
         max_margin = capital * max(0.0, min(float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.2)), 1.0))
-        cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
+        # (#sizing-scales-with-equity-2026-09-19) Потолок ордера спрашиваем у
+        # конфига с капиталом и плечом: когда он задан долей экспозиции, цифра
+        # в preflight обязана быть той же, что получит сайзинг.
+        cap = float(settings.max_order_notional(capital, leverage) or 0.0)
         max_notional = max_margin * float(leverage)
         if cap > 0:
             max_notional = min(max_notional, cap)
@@ -199,6 +202,9 @@ class LivePreflight:
             "capital_usdt": round(capital, 2), "leverage": leverage,
             "risk_per_trade_usdt": round(capital * float(getattr(settings, "RISK_PER_TRADE_PCT", 0.4)) / 100, 2),
             "max_position_margin_usdt": round(max_margin, 2), "max_order_notional_usdt": round(max_notional, 2),
+            "order_cap_usdt": round(cap, 2),
+            "order_cap_scales_with_equity": float(
+                getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0) or 0.0) > 0,
             "accounts": self.executor.execution_accounts(),
         }
         detail = (f"капитал {data['capital_usdt']} USDT = свободно {data['free_usdt']} + маржа позиций "

@@ -15,6 +15,12 @@ class AntiDrainConfig:
     min_net_rr_tp1: float = 0.55
     min_net_rr_tp2: float = 0.90
     min_expected_edge_after_costs_usdt: float = 1.20
+    # (#sizing-scales-with-equity-2026-09-19) Тот же запас, но ДОЛЕЙ номинала.
+    # Абсолютные 1.20 USDT привязывают гейт к депозиту, под который его
+    # калибровали: на счёте 300 (номинал сделки ~90) они требуют запаса больше
+    # процента от позиции и блокируют почти всё, а на счёте 30 000 не значат
+    # ничего. Доля замещает абсолют, когда > 0.
+    min_expected_edge_after_costs_pct: float = 0.0
     max_position_margin_pct: float = 12.0
     max_used_margin_pct: float = 30.0
     max_open_positions: int = 2
@@ -97,6 +103,14 @@ def should_open_signal(signal: Any, account_state: Any, cfg: AntiDrainConfig) ->
     if net_rr_tp2 < cfg.min_net_rr_tp2:
         return False, "blocked_low_net_rr_tp2"
     econ_ref = net_pnl_tp2 if cfg.economics_use_tp2 else net_pnl_tp1
-    if econ_ref < abs(net_pnl_stop) + cfg.min_expected_edge_after_costs_usdt:
+    # Запас сверх риска: долей номинала, если она задана. Номинал берём из
+    # маржи и плеча сделки — плечо меняет размер позиции, а вместе с ним и
+    # масштаб издержек, от которых этот запас и защищает.
+    leverage = max(1.0, float(_get(signal, "leverage", 1) or 1))
+    notional = required_margin * leverage
+    edge_floor = cfg.min_expected_edge_after_costs_usdt
+    if cfg.min_expected_edge_after_costs_pct > 0 and notional > 0:
+        edge_floor = notional * cfg.min_expected_edge_after_costs_pct / 100.0
+    if econ_ref < abs(net_pnl_stop) + edge_floor:
         return False, "blocked_bad_trade_economics"
     return True, "allowed_anti_drain_ok"

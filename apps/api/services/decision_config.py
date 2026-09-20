@@ -77,6 +77,14 @@ def snapshot(
                 _g("SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0) if is_scalp
                 else _g("ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 0)
             ),
+            # (#sizing-scales-with-equity-2026-09-19) Доля номинала замещает
+            # абсолютный запас, когда задана. В карточке сделки должно быть
+            # видно, каким порогом её судили: иначе при разборе «почему не
+            # вошли» читают не ту цифру.
+            "min_edge_after_costs_pct": float(
+                _g("SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0) if is_scalp
+                else _g("ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0)
+            ),
             "max_open_positions": int(_g("ANTI_DRAIN_MAX_OPEN_POSITIONS", 0) or 0),
             "max_used_margin_pct": float(_g("ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT", 0)),
         },

@@ -137,7 +137,10 @@ class TradePlanBuilder:
         # бумага и live берут один размер, и ни один ордер не упирается в кэп на
         # отправке. cap<=0 — выключено. Применяется в ОБОИХ режимах намеренно:
         # смысл кэпа на этапе ramp-up — маленькие ордера и там, и там.
-        _notional_cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
+        # (#sizing-scales-with-equity-2026-09-19) Потолок считает конфиг: когда
+        # он задан долей экспозиции, он растёт вместе со счётом и плечом, а не
+        # держит систему на размере, откалиброванном под другой депозит.
+        _notional_cap = float(settings.max_order_notional(balance_usdt, leverage_value) or 0.0)
         qty_by_notional_cap = (_notional_cap / entry_price) if _notional_cap > 0 else float("inf")
 
         # Берём меньшее, чтобы не открыть позицию больше допустимого размера.
