@@ -145,5 +145,8 @@ def test_blueprint_carries_the_entry_order_type():
     # (#sync-reverted-the-entry-type-2026-09-20) Значение держим в блупринте, а
     # не только в дашборде: sync возвращает ключи с value: к записанному, и
     # 20.09 он выключил лимит, включённый владельцем часом раньше.
-    assert f'value: "{settings.ENTRY_ORDER_TYPE}"' in block
-    assert settings.ENTRY_ORDER_TYPE == "limit"
+    from core.config import Settings
+
+    default_type = Settings.model_fields["ENTRY_ORDER_TYPE"].default
+    assert f'value: "{default_type}"' in block
+    assert default_type == "limit"

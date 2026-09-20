@@ -82,11 +82,16 @@ def test_monitor_scan_persists_candidate_when_funding_edge_is_positive():
 
 
 def test_hedge_builder_and_paper_close_log_pnl():
+    """(#any-deposit-any-leverage-2026-09-20) Предмет теста — арифметика
+    начисления фандинга, а не размер ноги. Прежде нотионал был вшит числом 100
+    и кэп глушился руками; смена депозита с 3000 на 300 такой тест ломает.
+    Теперь нога берётся у того же предохранителя, что и в проде, а ожидания
+    считаются от неё — сходится при любом депозите."""
     db = _db_session()
-    # Тест про PnL при нотионале 100 — изолируем от кэпа ордера, иначе он
-    # ужмёт ногу до 25 и qty/накопление не сойдутся.
-    _old_cap = settings.LIVE_MAX_ORDER_NOTIONAL_USDT
-    settings.LIVE_MAX_ORDER_NOTIONAL_USDT = 1000.0
+    # Просим заведомо много и берём то, что построитель выдал: ногу режут сразу
+    # три ограничителя (доля капитала, FUNDING_ARB_MAX_NOTIONAL_USDT, потолок
+    # ордера), и предсказывать их произведение в тесте значит повторять прод.
+    requested = max(float(settings.RISK_EQUITY_USDT), 1000.0)
     try:
         opportunity = FundingArbOpportunity(
             symbol="BTC/USDT",
@@ -103,13 +108,16 @@ def test_hedge_builder_and_paper_close_log_pnl():
         db.add(opportunity)
         db.flush()
 
-        hedge = HedgeBuilder().build(opportunity, notional_usdt=100)
+        hedge = HedgeBuilder().build(opportunity, notional_usdt=requested)
+        notional = hedge["notional_usdt"]
         assert hedge["hedge_side"] == "spot_long_perp_short"
-        assert hedge["spot_qty"] == 1.0
+        assert notional > 0
+        # spot_price = 100 → qty = нотионал / 100.
+        assert hedge["spot_qty"] == pytest.approx(notional / 100.0)
         assert hedge["break_even_periods"] is not None
 
         engine = FundingArbEngine()
-        position = engine.open_paper(db, opportunity.id, notional_usdt=100)
+        position = engine.open_paper(db, opportunity.id, notional_usdt=requested)
         assert position.status == "open"
         assert position.entry_funding_rate == 0.001
 
@@ -127,14 +135,14 @@ def test_hedge_builder_and_paper_close_log_pnl():
         # теперь учитывается: начисление идёт по средней (вход+выход)/2, а не по
         # ставке входа за весь срок. Прежнее значение 0.2 завышало результат на
         # 82% — ровно тот перекос, из-за которого движок выглядел прибыльным.
-        # entry 0.001, exit 0.0001, 2 периода, notional 100:
-        #   было:  0.001  × 100 × 2 = 0.20
-        #   стало: 0.00055 × 100 × 2 = 0.11
-        assert closed.funding_collected == pytest.approx(0.11)
+        # entry 0.001, exit 0.0001, 2 периода: средняя ставка 0.00055.
+        #   было:  ставка входа × нотионал × 2
+        #   стало: средняя      × нотионал × 2 — на 82% меньше, и ровно этот
+        #   перекос делал движок прибыльным на бумаге.
+        assert closed.funding_collected == pytest.approx(0.00055 * position.notional_usdt * 2)
         assert closed.realized_pnl is not None
         assert closed.realized_pnl > 0
     finally:
-        settings.LIVE_MAX_ORDER_NOTIONAL_USDT = _old_cap
         db.close()
 
 

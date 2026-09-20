@@ -254,11 +254,18 @@ def test_the_leverage_keys_are_pinned_in_the_blueprint():
     закреплён значением, само плечо оставлено дашборду."""
     from pathlib import Path
 
+    from core.config import Settings
+
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
+    # (#any-deposit-any-leverage-2026-09-20) Сверяем с ДЕФОЛТОМ класса, а не с
+    # действующим значением: последнее перекрывается окружением, и тогда тест
+    # падал бы при любом запуске с другим плечом — проверяя окружение вместо
+    # того, что блупринт и код говорят одно и то же.
+    default_cap = Settings.model_fields["LIVE_MAX_LEVERAGE"].default
 
     assert "key: FUTURES_LEVERAGE" in blueprint
     cap = blueprint.split("key: LIVE_MAX_LEVERAGE", 1)[1].split("- key:", 1)[0]
-    assert f'value: "{settings.LIVE_MAX_LEVERAGE:.0f}"' in cap
+    assert f'value: "{default_cap:.0f}"' in cap
     # Значение плеча синком не возвращается: иначе оно откатывалось бы ровно
     # тогда, когда владелец поднял его на бирже.
     lev = blueprint.split("key: FUTURES_LEVERAGE", 1)[1].split("- key:", 1)[0]

@@ -308,17 +308,40 @@ def _executor(monkeypatch, client: _Client) -> LiveExecutor:
     return ex
 
 
+# (#any-deposit-any-leverage-2026-09-20) Эти тесты о режиме маржи, плече и
+# формате ордера — не о размере. Прежде в них стояли фиксированные 150 XRP
+# (210 USDT), и смена депозита с 3000 на 300 уронила одиннадцать из них: объём
+# оказался выше предохранителя. Числа депозита и плеча тестам знать неоткуда —
+# объём считается из ДЕЙСТВУЮЩЕЙ конфигурации той же формулой, что у робота,
+# и любое сочетание «депозит × плечо» проходит.
+PRICE = 1.4
+CONTRACT = 100.0
+
+
+def _lev(leverage=None) -> float:
+    """Плечо, которое робот реально поставит на бирже."""
+    return LiveExecutor._leverage_value(leverage)
+
+
+def _qty(leverage=None, share=0.5) -> float:
+    """Объём заведомо внутри предохранителя при любом депозите и плече."""
+    equity = float(settings.RISK_EQUITY_USDT)
+    cap = float(settings.max_order_notional(equity, _lev(leverage)) or 0.0)
+    notional = cap * share if cap > 0 else equity * _lev(leverage) * 0.1
+    return round(notional / PRICE, 6)
+
+
 def _open(ex, side="sell", **kw):
     kw.setdefault("margin_mode", "isolated")
-    kw.setdefault("leverage", 1)
-    return ex.place_market(SYMBOL, side, 150.0, market_type="swap", reference_price=1.4,
-                           purpose="trend_open", **kw)
+    kw.setdefault("leverage", settings.FUTURES_LEVERAGE)
+    return ex.place_market(SYMBOL, side, _qty(kw["leverage"]), market_type="swap",
+                           reference_price=PRICE, purpose="trend_open", **kw)
 
 
 def _close(ex, side="buy", **kw):
     kw.setdefault("margin_mode", "isolated")
-    return ex.place_market(SYMBOL, side, 150.0, market_type="swap", reduce_only=True,
-                           reference_price=1.4, purpose="trend_close", **kw)
+    return ex.place_market(SYMBOL, side, _qty(), market_type="swap", reduce_only=True,
+                           reference_price=PRICE, purpose="trend_close", **kw)
 
 
 def test_open_sets_leverage_then_sends_isolated(monkeypatch):
@@ -326,9 +349,9 @@ def test_open_sets_leverage_then_sends_isolated(monkeypatch):
     res = _open(_executor(monkeypatch, client))
 
     assert res.ok and res.sent
-    assert client.leverage_calls == [(SYMBOL, 1, "isolated", None)]
+    assert client.leverage_calls == [(SYMBOL, _lev(), "isolated", None)]
     assert client.orders[0]["params"] == {"clientOrderId": res.client_order_id, "marginMode": "isolated"}
-    assert client.orders[0]["amount"] == pytest.approx(1.5)
+    assert client.orders[0]["amount"] == pytest.approx(_qty() / CONTRACT)
 
 
 def test_leverage_failure_refuses_the_open(monkeypatch):
@@ -357,7 +380,7 @@ def test_long_short_account_gets_position_side(monkeypatch):
     _open(ex, side="sell")
     _close(ex, side="buy")
 
-    assert client.leverage_calls == [(SYMBOL, 1, "isolated", "short")]
+    assert client.leverage_calls == [(SYMBOL, _lev(), "isolated", "short")]
     opened, closed = (o["params"] for o in client.orders)
     assert opened["positionSide"] == "short"
     assert closed["positionSide"] == "short" and "reduceOnly" not in closed
@@ -392,12 +415,15 @@ def test_leverage_is_set_before_every_entry(monkeypatch):
     client = _Client()
     ex = _executor(monkeypatch, client)
 
-    _open(ex)
-    _open(ex)
-    _open(ex, leverage=2)
+    other = max(1, int(_lev()) - 1)   # любое плечо, отличное от действующего
 
-    assert client.leverage_calls == [(SYMBOL, 1, "isolated", None), (SYMBOL, 1, "isolated", None),
-                                     (SYMBOL, 2, "isolated", None)]
+    _open(ex)
+    _open(ex)
+    _open(ex, leverage=other)
+
+    assert client.leverage_calls == [(SYMBOL, _lev(), "isolated", None),
+                                     (SYMBOL, _lev(), "isolated", None),
+                                     (SYMBOL, other, "isolated", None)]
 
 
 def test_leverage_above_the_cap_refuses_the_entry(monkeypatch):
@@ -467,7 +493,7 @@ def test_spot_order_skips_margin_and_position_mode(monkeypatch):
     client = _Client()
     ex = _executor(monkeypatch, client)
 
-    res = ex.place_market("XRP/USDT", "buy", 150.0, market_type="spot", reference_price=1.4,
+    res = ex.place_market("XRP/USDT", "buy", _qty(1), market_type="spot", reference_price=PRICE,
                           purpose="trend_open", margin_mode=None, leverage=1)
 
     assert res.ok

@@ -90,7 +90,9 @@ def test_blueprint_carries_the_setting():
 
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: LIVE_MAX_ORDER_NOTIONAL_PCT", 1)[1].split("- key:", 1)[0]
-    assert f'value: "{settings.LIVE_MAX_ORDER_NOTIONAL_PCT:.0f}"' in block
+    from core.config import Settings
+
+    assert f'value: "{Settings.model_fields["LIVE_MAX_ORDER_NOTIONAL_PCT"].default:.0f}"' in block
     # (#no-static-position-size-2026-09-20) И абсолютный потолок выключен: он
     # держал размер позиции суммой, не растущей ни со счётом, ни с плечом.
     absolute = blueprint.split("key: LIVE_MAX_ORDER_NOTIONAL_USDT", 1)[1].split("- key:", 1)[0]
@@ -174,8 +176,10 @@ def test_the_position_size_is_not_pinned_to_a_sum_by_default():
     """Владелец возражал против жёсткого размера раз за разом, и всё это время
     абсолютные 250 оставались настоящим потолком: при эквити 3000 они резали
     сделку до 250 там, где маржевый лимит разрешал 390."""
-    assert settings.LIVE_MAX_ORDER_NOTIONAL_USDT == 0.0
-    assert settings.LIVE_MAX_ORDER_NOTIONAL_PCT > 0
+    from core.config import Settings
+
+    assert Settings.model_fields["LIVE_MAX_ORDER_NOTIONAL_USDT"].default == 0.0
+    assert Settings.model_fields["LIVE_MAX_ORDER_NOTIONAL_PCT"].default > 0
 
 
 def test_the_cap_grows_with_the_account_and_with_leverage():
