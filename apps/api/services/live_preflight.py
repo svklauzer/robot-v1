@@ -77,6 +77,7 @@ class LivePreflight:
         self._check_exchange_activity(client, universe, robot_trades)
         self._check_paper_positions(paper_trades)
         self._check_absolute_thresholds(db, bot, free)
+        self._check_risk_fits_the_daily_limit(db, bot, free)
         self._check_kill_switch(bot)
         self._check_gates(db)
 
@@ -315,6 +316,57 @@ class LivePreflight:
             self._add("absolute_thresholds", OK, "Пороги-суммы", detail,
                       thresholds=rows, heavy=[],
                       notional_usdt=round(notional, 2), exposure_usdt=round(exposure, 2))
+
+    # Меньше трёх стопов до дневного лимита — робот останавливается раньше,
+    # чем серия успевает отработать, и настройки просто не работают вместе.
+    MIN_STOPS_BEFORE_DAILY_LIMIT = 3.0
+
+    def _check_risk_fits_the_daily_limit(self, db, bot, free: float | None) -> None:
+        """Сходятся ли риск на сделку и дневной лимит убытка.
+
+        (#any-deposit-any-leverage-2026-09-20) Обе настройки — доли капитала, и
+        по отдельности каждая выглядит разумной. Вместе они задают, сколько
+        стопов подряд робот переживёт за день, и это число нигде не
+        показывалось: при риске 1.5% и лимите 3% их ровно два.
+        """
+        capital = self._capital_usdt(db, bot, free)
+        risk_pct = float(getattr(settings, "RISK_PER_TRADE_PCT", 0.0) or 0.0)
+        daily_pct = float(getattr(settings, "MAX_DAILY_LOSS_PCT", 0.0) or 0.0)
+        if not capital or risk_pct <= 0 or daily_pct <= 0:
+            self._add("risk_vs_daily_limit", INFO, "Риск против дневного лимита",
+                      "одна из настроек выключена — сравнивать нечего")
+            return
+
+        stops = daily_pct / risk_pct
+        leverage = self.executor._leverage_value(getattr(settings, "FUTURES_LEVERAGE", 1))
+        # Сколько экспозиции робот реально займёт: размер сделки от риска,
+        # умноженный на предел одновременных позиций.
+        positions = int(getattr(settings, "ANTI_DRAIN_MAX_OPEN_POSITIONS", 5) or 5)
+        typical_stop_pct = 1.5
+        by_risk = capital * risk_pct / 100.0 / (typical_stop_pct / 100.0)
+        size = min(by_risk,
+                   capital * float(getattr(settings, "MAX_POSITION_MARGIN_PCT", 0.13)) * leverage,
+                   float(settings.max_order_notional(capital, leverage) or by_risk) or by_risk)
+        exposure = capital * leverage
+        used_pct = round(size * positions / exposure * 100, 1) if exposure else None
+
+        data = {"stops_before_daily_limit": round(stops, 1),
+                "risk_per_trade_pct": risk_pct, "max_daily_loss_pct": daily_pct,
+                "typical_trade_usdt": round(size, 2),
+                "exposure_usdt": round(exposure, 2),
+                "exposure_used_pct": used_pct,
+                # Плечо, которое система использует ПО ФАКТУ: заданное 10× при
+                # 13% занятой экспозиции — это 1.3×, и ощущение масштаба ложное.
+                "effective_leverage": round(size * positions / capital, 2) if capital else None}
+        detail = (f"риск {risk_pct}% против лимита {daily_pct}% — {stops:.1f} стопов подряд; "
+                  f"сделка ~{size:.0f} USDT, {positions} позиций занимают {used_pct}% "
+                  f"экспозиции {exposure:.0f} (фактическое плечо {data['effective_leverage']}×)")
+        if stops < self.MIN_STOPS_BEFORE_DAILY_LIMIT:
+            self._add("risk_vs_daily_limit", WARN, "Риск против дневного лимита",
+                      f"{detail}. Робот остановится раньше, чем серия отработает: "
+                      f"поднимать риск без дневного лимита бессмысленно", **data)
+        else:
+            self._add("risk_vs_daily_limit", OK, "Риск против дневного лимита", detail, **data)
 
     def _capital_usdt(self, db, bot, free: float | None) -> float:
         if free is None:
