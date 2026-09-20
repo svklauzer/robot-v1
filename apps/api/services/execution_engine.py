@@ -223,8 +223,21 @@ class ExecutionEngine:
         # оставлять систему с позицией, которой на бирже нет — иначе все
         # последующие reduceOnly-выходы уходят в пустоту, а PnL книжится по
         # несуществующей сделке.
+        # Цена цели живёт в плане сделки; при рыночном входе её там нет, и
+        # исполнитель получит None — то есть прежний путь.
+        from services.entry_zone import limit_target_price as _limit_target
+
+        _limit_price = _limit_target(signal.plan_json)
+        # Лимитные аргументы добавляются, ТОЛЬКО когда лимит действительно есть:
+        # при рыночном входе вызов остаётся прежним до последнего аргумента.
+        _limit_kwargs = (
+            {"limit_price": _limit_price,
+             "ttl_sec": ((signal.plan_json or {}).get("entry_zone_plan") or {}).get("ttl_sec")}
+            if _limit_price else {}
+        )
         live = self._submit_live(open_side, signal.symbol, order_qty, entry_price,
-                                 reduce_only=False, purpose="trend_open", route=route)
+                                 reduce_only=False, purpose="trend_open", route=route,
+                                 **_limit_kwargs)
 
         # (#live-close-safety-2026-09-16) В live исключение внутри live-слоя —
         # тоже отказ: иначе бумага заводила позицию, которой на бирже нет, и все
@@ -303,7 +316,7 @@ class ExecutionEngine:
 
         self.db.add(order)
         self.db.add(position)
-        self._mark_execution(signal, live)
+        self._mark_execution(signal, live, entry_liquidity="maker" if _limit_price else "taker")
         self.db.flush()
 
         return {
@@ -432,6 +445,9 @@ class ExecutionEngine:
             exit_price=exit_fill,
             qty=close_qty,
             liquidity="taker",
+            # Вход мог быть лимитным — тогда он стоил мейкерской ставки и не
+            # платил спред. Выход всегда рыночный.
+            entry_liquidity=((signal.plan_json or {}).get("execution") or {}).get("entry_liquidity"),
             holding_funding_periods=1 if route.market_type != "spot" else 0,
             leverage=route.leverage,
             # (#funding-settlements-2026-09-12) Закрываемая доля платит расчёты,
@@ -574,6 +590,9 @@ class ExecutionEngine:
             exit_price=exit_fill,
             qty=float(position.qty),
             liquidity="taker",
+            # Вход мог быть лимитным — тогда он стоил мейкерской ставки и не
+            # платил спред. Выход всегда рыночный.
+            entry_liquidity=((signal.plan_json or {}).get("execution") or {}).get("entry_liquidity"),
             holding_funding_periods=1 if route.market_type != "spot" else 0,
             leverage=route.leverage,
             # (#funding-settlements-2026-09-12) Остаток платит все расчёты от
@@ -639,7 +658,7 @@ class ExecutionEngine:
     # ── live: закрытие и расхождения (#live-close-safety-2026-09-16) ─────────
 
     @staticmethod
-    def _mark_execution(signal: Signal, live: dict | None) -> None:
+    def _mark_execution(signal: Signal, live: dict | None, entry_liquidity: str = "taker") -> None:
         """(#manual-orders-2026-09-16) Где открыта позиция: на бирже (live) или
         только в учёте (paper/dry_run). Закрывать и страховать на бирже робот
         имеет право только то, что сам там открыл: позиция, открытая в paper и
@@ -652,6 +671,10 @@ class ExecutionEngine:
             "mode": mode,
             "exchange_order_id": (live or {}).get("exchange_order_id"),
             "opened_at": datetime.now(timezone.utc).isoformat(),
+            # (#limit-entry-2026-09-19) Чем платили за вход. Настройка может
+            # перевернуться между открытием и закрытием, а издержки закрытой
+            # сделки обязаны отражать то, как она открывалась НА САМОМ ДЕЛЕ.
+            "entry_liquidity": entry_liquidity,
         }
         signal.plan_json = plan
         try:
@@ -888,7 +911,8 @@ class ExecutionEngine:
             return float(qty), meta
 
     def _submit_live(self, side: str, symbol: str, qty: float, ref_price: float,
-                     reduce_only: bool, purpose: str, route=None) -> dict | None:
+                     reduce_only: bool, purpose: str, route=None,
+                     limit_price: float | None = None, ttl_sec: float | None = None) -> dict | None:
         """Маршрутизация ордера тренда через безопасное ядро LIVE_EXECUTOR.
 
         off → пропуск (чистая бумага, как сейчас). dry_run → логирует «что бы
@@ -906,14 +930,29 @@ class ExecutionEngine:
             # его в СПОТОВЫЙ рынок, и своп-логика (плечо, reduceOnly, шорт)
             # применялась к площадке, которая её не поддерживает.
             route = route or route_from_payload(None, symbol, side)
-            res = LIVE_EXECUTOR.place_market(
-                route.exchange_symbol, side, float(qty),
-                market_type=route.market_type,
-                reduce_only=reduce_only, reference_price=float(ref_price),
-                leverage=route.leverage,
-                margin_mode=route.margin_mode,
-                purpose=purpose,
-            )
+            # (#limit-entry-2026-09-19) Вход лимитом, когда так решено и когда у
+            # сделки есть цена цели. Выход всегда рыночный: стоп и защитные
+            # ветки обязаны исполниться, а не ждать своей цены.
+            if limit_price and not reduce_only:
+                res = LIVE_EXECUTOR.place_limit(
+                    route.exchange_symbol, side, float(qty),
+                    market_type=route.market_type,
+                    limit_price=float(limit_price),
+                    ttl_sec=float(ttl_sec or getattr(settings, "ENTRY_ZONE_TTL_SEC", 45.0)),
+                    reduce_only=False,
+                    leverage=route.leverage,
+                    margin_mode=route.margin_mode,
+                    purpose=purpose,
+                )
+            else:
+                res = LIVE_EXECUTOR.place_market(
+                    route.exchange_symbol, side, float(qty),
+                    market_type=route.market_type,
+                    reduce_only=reduce_only, reference_price=float(ref_price),
+                    leverage=route.leverage,
+                    margin_mode=route.margin_mode,
+                    purpose=purpose,
+                )
             if not res.ok and LIVE_EXECUTOR.is_live():
                 from core.logging import get_logger, log_event
                 import logging as _logging

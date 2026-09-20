@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from core.config import settings
 from models.signal import Signal
 
 MARKET = "market"
@@ -124,6 +125,38 @@ def _finish(bucket: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fill_rate(db, window_hours: float | None, limit: int) -> dict[str, Any]:
+    """Доля сигналов, дошедших до сделки (#limit-entry-2026-09-19).
+
+    Лимитный вход платит за лучшую цену тем, что исполняется не всегда: цена
+    должна дойти до самой цели. Без этой доли переход на лимит нечем оценивать —
+    выигрыш на цене может не покрыть потерянные сделки.
+    """
+    query = db.query(Signal).order_by(Signal.id.desc()).limit(limit)
+    rows = query.all()
+    if window_hours is not None and float(window_hours) > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=float(window_hours))
+        rows = [
+            s for s in rows
+            if s.created_at is not None
+            and (s.created_at if s.created_at.tzinfo else s.created_at.replace(tzinfo=timezone.utc)) >= cutoff
+        ]
+
+    published = len(rows)
+    reached = sum(1 for s in rows if str(s.status) not in ("published", "expired", "rejected"))
+    unfilled_limit = sum(1 for s in rows
+                         if str(s.status) == "expired" and str(s.closed_reason or "") == "limit_not_filled")
+    expired_other = sum(1 for s in rows if str(s.status) == "expired") - unfilled_limit
+    return {
+        "signals": published,
+        "reached_entry": reached,
+        "fill_rate_pct": round(reached / published * 100, 2) if published else None,
+        "limit_not_filled": unfilled_limit,
+        "expired_other": expired_other,
+        "still_waiting": sum(1 for s in rows if str(s.status) == "published"),
+    }
+
+
 def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str, Any]:
     limit = min(max(int(limit or 500), 20), 5000)
     signals = (
@@ -175,8 +208,6 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
     limit_trades = sum(b["trades"] for m, b in by_mode.items() if m not in (MARKET, UNKNOWN))
     avg_round_trip = round(sum(round_trips) / len(round_trips), 4) if round_trips else None
     maker_saving_pct = None
-    from core.config import settings
-
     taker = _f(getattr(settings, "FUTURES_TAKER_FEE", None))
     maker = _f(getattr(settings, "FUTURES_MAKER_FEE", None))
     if taker is not None and maker is not None:
@@ -197,6 +228,8 @@ def report(db, limit: int = 500, window_hours: float | None = None) -> dict[str,
             "maker_saving_pct": maker_saving_pct,
         },
         "by_mode": {mode: _finish(bucket) for mode, bucket in sorted(by_mode.items())},
+        "fill_rate": _fill_rate(db, window_hours, limit),
+        "entry_order_type": str(getattr(settings, "ENTRY_ORDER_TYPE", "market")),
     }
 
     note = ("Сигнал ждёт, пока цена сама придёт в коридор зоны, и открывается по ней "
