@@ -370,3 +370,41 @@ def test_unknown_capital_says_so_instead_of_guessing():
     check = _check(_run(_Exchange(balance_error=PermissionError("50113"))), "absolute_thresholds")
 
     assert check["status"] == "info" and "капитал неизвестен" in check["detail"]
+
+
+# ── риск против дневного лимита (#any-deposit-any-leverage-2026-09-20) ──────
+def test_the_daily_limit_can_stop_the_robot_after_two_stops(monkeypatch):
+    """Обе настройки — доли капитала, и по отдельности выглядят разумными.
+    Вместе они задают, сколько стопов подряд робот переживёт, и это число
+    нигде не показывалось."""
+    monkeypatch.setattr(settings, "RISK_PER_TRADE_PCT", 1.5)
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 3.0)
+
+    check = _check(_run(_Exchange(free=300.0)), "risk_vs_daily_limit")
+
+    assert check["status"] == "warn"
+    assert check["stops_before_daily_limit"] == 2.0
+
+
+def test_a_workable_pair_is_not_a_complaint(monkeypatch):
+    monkeypatch.setattr(settings, "RISK_PER_TRADE_PCT", 0.4)
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 3.0)
+
+    check = _check(_run(_Exchange(free=300.0)), "risk_vs_daily_limit")
+
+    assert check["status"] == "ok"
+    assert check["stops_before_daily_limit"] == 7.5
+
+
+def test_the_effective_leverage_is_reported_not_the_configured_one(monkeypatch):
+    """Заданное плечо 10× при занятых 13% экспозиции — это 1.3×, и ощущение
+    масштаба ложное: размер сделки режет риск, а не плечо."""
+    monkeypatch.setattr(settings, "RISK_PER_TRADE_PCT", 0.4)
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 3.0)
+    monkeypatch.setattr(settings, "FUTURES_LEVERAGE", 10)
+    monkeypatch.setattr(settings, "LIVE_MAX_LEVERAGE", 10.0)
+
+    check = _check(_run(_Exchange(free=300.0)), "risk_vs_daily_limit")
+
+    assert check["exposure_usdt"] == 3000.0
+    assert check["effective_leverage"] < 2.0, check

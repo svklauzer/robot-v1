@@ -778,11 +778,25 @@ class LiveExecutor:
         # предохранитель размера (нотионал). Капитал спрашиваем ТОЛЬКО когда
         # потолок задан долей: иначе это лишний запрос баланса на каждый ордер.
         if float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0) or 0.0) > 0:
+            # (#cap-used-leverage-one-2026-09-20) Плечо берём ДЕЙСТВУЮЩЕЕ, а не
+            # сырой аргумент. Вызов без явного плеча (закрытие, ручной ордер,
+            # часть путей исполнения) давал здесь None → потолок считался по
+            # плечу 1, хотя позиция открывается под FUTURES_LEVERAGE. На счёте
+            # 300 с плечом 10 это 60 USDT вместо 600: предохранитель отклонял
+            # каждый обычный ордер, и выглядело это как отказ биржи.
             cap = float(settings.max_order_notional(
-                self.effective_equity_usdt(market_type), leverage) or 0.0)
+                self.effective_equity_usdt(market_type),
+                self._leverage_value(leverage)) or 0.0)
         else:
             cap = float(getattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
-        over_cap = bool(cap > 0 and reference_price and amount * float(reference_price) > cap)
+        # (#exit-is-never-capped-2026-09-20) Предохранитель ограничивает ПРИЁМ
+        # риска, а не выход из него. Позиция, открытая при другом капитале или
+        # плече, крупнее нынешнего потолка — и закрытие по ней отклонялось бы
+        # тем же кэпом: позиция в ловушке, стоп не исполняется, сопровождение
+        # мертво. Открытые сделки сопровождаются по своим условиям, новые
+        # открываются по текущим.
+        over_cap = bool(not reduce_only and cap > 0 and reference_price
+                        and amount * float(reference_price) > cap)
 
         # (#dry-run-cap-2026-07-26) В LIVE кэп блокирует отправку — это его работа.
         # В DRY_RUN блокировать нельзя: весь смысл режима в том, чтобы прогнать
