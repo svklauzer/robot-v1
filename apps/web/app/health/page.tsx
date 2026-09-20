@@ -487,18 +487,17 @@ export default function HealthPage() {
                   )}
                 </span>
               </div>
+              {/* (#latin-keys-in-json-2026-09-20) Подпись приходит полем label,
+                  ключ остаётся латинским: русский текст в ключах словаря
+                  разваливается у любого клиента, читающего поток не в UTF-8. */}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-                {Object.entries(envelopes.trade_size.limits || {}).map(([name, value]) => (
+                {(envelopes.trade_size.limits || []).map((row: any) => (
                   <span
-                    key={name}
-                    className={
-                      name === envelopes.trade_size.binding
-                        ? "text-sky-300"
-                        : "text-emerald-100/40"
-                    }
+                    key={row.key}
+                    className={row.binding ? "text-sky-300" : "text-emerald-100/40"}
                   >
-                    {name}: {value == null ? "выкл" : formatNumber(value as number)}
-                    {name === envelopes.trade_size.binding && " ← режет"}
+                    {row.label}: {row.usdt == null ? "выкл" : formatNumber(row.usdt)}
+                    {row.binding && " ← режет"}
                   </span>
                 ))}
               </div>

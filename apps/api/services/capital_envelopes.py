@@ -244,21 +244,29 @@ def trade_size_breakdown(equity: float, leverage: float,
     by_balance = equity * leverage
     by_cap = float(settings.max_order_notional(equity, leverage) or 0.0)
 
-    limits = {
-        "риск на сделку": round(by_risk, 2),
-        "маржа на позицию": round(by_margin, 2),
-        "свободный капитал": round(by_balance, 2),
-        "потолок ордера": round(by_cap, 2) if by_cap > 0 else None,
-    }
-    active = {k: v for k, v in limits.items() if v is not None and v > 0}
-    binding = min(active, key=active.get) if active else None
+    # (#latin-keys-in-json-2026-09-20) Ключи — латиницей, подпись отдельным
+    # полем. Русский текст в КЛЮЧАХ словаря разваливается у любого клиента,
+    # который читает поток не в UTF-8, и первым же таким клиентом оказалась
+    # консоль владельца: значения печатались, а ключи приходили мусором.
+    limits = [
+        {"key": "risk", "label": "риск на сделку", "usdt": round(by_risk, 2)},
+        {"key": "margin", "label": "маржа на позицию", "usdt": round(by_margin, 2)},
+        {"key": "balance", "label": "свободный капитал", "usdt": round(by_balance, 2)},
+        {"key": "order_cap", "label": "потолок ордера",
+         "usdt": round(by_cap, 2) if by_cap > 0 else None},
+    ]
+    active = [row for row in limits if row["usdt"] is not None and row["usdt"] > 0]
+    tightest = min(active, key=lambda row: row["usdt"]) if active else None
+    for row in limits:
+        row["binding"] = bool(tightest and row["key"] == tightest["key"])
     return {
-        "usdt": round(active[binding], 2) if binding else 0.0,
-        "binding": binding,
+        "usdt": round(tightest["usdt"], 2) if tightest else 0.0,
+        "binding": tightest["key"] if tightest else None,
+        "binding_label": tightest["label"] if tightest else None,
         "limits": limits,
         "stop_pct_assumed": stop,
         # Доля экспозиции, которой окажется одна сделка: владелец меряет плечо
         # именно так («при 300 и 5× управляю 1500»).
-        "share_of_exposure_pct": (round(active[binding] / (equity * leverage) * 100, 2)
-                                  if binding and equity > 0 else None),
+        "share_of_exposure_pct": (round(tightest["usdt"] / (equity * leverage) * 100, 2)
+                                  if tightest and equity > 0 else None),
     }
