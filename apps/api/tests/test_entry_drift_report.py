@@ -148,3 +148,39 @@ def test_analytics_page_shows_the_gap():
     assert "/analytics/entry-drift" in page
     for field in ("entry_vs_target_pct", "entry_vs_mid_pct", "limit_gain_usdt", "maker_saving_pct"):
         assert field in page, field
+
+
+# ── доля исполнений: чем лимит платит за лучшую цену ────────────────────────
+def _published(db, *, status="published", reason=None, hours_ago=1.0):
+    db.add(Signal(bot_id=1, symbol="XRP/USDT", side="long", status=status, exchange="okx",
+                  entry_zone_json={"from": 1.40, "to": 1.41}, stop_price=1.38,
+                  tp_json={"tp1": 1.43, "tp2": 1.45}, qty=100.0, closed_reason=reason,
+                  created_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+                  plan_json={"entry_zone_plan": {"mode": "limit_wall", "entry_price": 1.4097}}))
+    db.commit()
+
+
+def test_fill_rate_separates_unfilled_limits_from_other_expiries():
+    """Лимит платит за цену тем, что исполняется не всегда. Без этой доли
+    переход на лимит нечем оценивать: выигрыш на цене может не покрыть
+    потерянные сделки."""
+    db = _db()
+    _signal(db)                                              # дошла до сделки
+    _published(db, status="expired", reason="limit_not_filled")
+    _published(db, status="expired", reason="entry_zone_not_reached_before_expiry")
+    _published(db, status="published")                       # ещё ждёт
+
+    fill = report(db)["fill_rate"]
+
+    assert fill["signals"] == 4 and fill["reached_entry"] == 1
+    assert fill["limit_not_filled"] == 1 and fill["expired_other"] == 1
+    assert fill["still_waiting"] == 1
+    assert fill["fill_rate_pct"] == 25.0
+
+
+def test_report_says_which_entry_type_produced_the_numbers():
+    """Цифры отчёта относятся к способу входа, который стоял в тот момент."""
+    db = _db()
+    _signal(db)
+
+    assert report(db)["entry_order_type"] in ("market", "limit")

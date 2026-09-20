@@ -301,6 +301,22 @@ export default function AnalyticsPage() {
                       : "—"
                   }
                 />
+                {/* Чем лимит платит за лучшую цену: цена должна дойти до самой
+                    цели, иначе сделки нет вовсе. Без этой доли выигрыш на цене
+                    не с чем сопоставить. */}
+                <Metric
+                  label="Дошло до сделки"
+                  value={
+                    entryDrift.fill_rate?.fill_rate_pct != null
+                      ? `${entryDrift.fill_rate.fill_rate_pct.toFixed(1)}% (${entryDrift.fill_rate.reached_entry} из ${entryDrift.fill_rate.signals})`
+                      : "—"
+                  }
+                />
+                <Metric
+                  label="Лимит не исполнился"
+                  value={`${entryDrift.fill_rate?.limit_not_filled ?? 0} · вход: ${entryDrift.entry_order_type ?? "—"}`}
+                  warn={(entryDrift.fill_rate?.limit_not_filled ?? 0) > 0}
+                />
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
