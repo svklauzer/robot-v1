@@ -584,6 +584,14 @@ services:
         value: "10"
       - key: SYMBOL_PERF_BLOCK_MIN_HISTORY
         value: "12"
+      # (#severe-loss-needs-less-proof-2026-09-20) Крупный убыток по символу не
+      # ждёт полной выборки: доля капитала, а не сумма. 5% при депозите 300 —
+      # это 15 USDT, пять стопов по риску 1%. Замер: HYPE с −21.04 (7%) шёл в
+      # полный размер, не добрав ОДНОЙ сделки до min_history=10.
+      - key: SYMBOL_PERF_SEVERE_LOSS_PCT
+        value: "5.0"
+      - key: SYMBOL_PERF_SEVERE_MIN_HISTORY
+        value: "5"
 
       # ── Production entry gate ─────────────────────────────────────────────
       - key: PROD_GATE_A_PLUS_MIN_SETUP

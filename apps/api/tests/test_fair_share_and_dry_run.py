@@ -218,3 +218,40 @@ def test_the_symbol_showcase_defaults_to_the_window_the_robot_uses():
 
     assert 'getattr(settings, "SYMBOL_PERF_WINDOW_HOURS"' in code, "витрина обязана брать живое окно"
     assert "SYMBOL_PERF_SUMMARY_WINDOW_HOURS" not in code, "витринное окно снова разошлось с живым"
+
+
+# ── крупный убыток не ждёт выборки (#severe-loss-needs-less-proof-2026-09-20) ──
+def _guard_verdict(monkeypatch, *, closed: int, pnl: float, equity: float = 300.0):
+    """Вердикт гварда по символу — через прямой вызов ветки решений."""
+    from types import SimpleNamespace
+
+    from services.symbol_performance_guard import SymbolPerformanceGuard
+
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", equity)
+    guard = SymbolPerformanceGuard()
+    monkeypatch.setattr(guard, "_collect", lambda **kw: SimpleNamespace(
+        closed_count=closed, wins=closed // 2, losses=closed - closed // 2,
+        winrate=50.0, total_net_pnl=pnl, stop_loss_count=1, failed_setup_count=0,
+        positive_then_negative_count=0, last_closed_reason="stop_loss",
+        losing_streak=1, expectancy_usdt=pnl / max(closed, 1),
+    ), raising=False)
+    return guard
+
+
+def test_a_severe_loss_is_trimmed_before_the_history_threshold():
+    """HYPE с −21.04 USDT шёл в ПОЛНЫЙ размер: 9 сделок против min_history=10.
+    Худший символ не судился из-за одной недостающей сделки."""
+    assert settings.SYMBOL_PERF_SEVERE_LOSS_PCT > 0, "порог крупного убытка выключен"
+    assert settings.SYMBOL_PERF_SEVERE_MIN_HISTORY < settings.SYMBOL_PERF_MIN_HISTORY, (
+        "ветка крупного убытка обязана срабатывать РАНЬШЕ обычного порога истории"
+    )
+
+
+def test_the_severe_threshold_is_a_share_not_a_sum():
+    """Сумма не растёт со счётом: на 300 она одна, на 30 000 — та же."""
+    from pathlib import Path
+
+    guard = (Path(__file__).resolve().parents[1] / "services" / "symbol_performance_guard.py").read_text(encoding="utf-8")
+    block = guard.split("SYMBOL_PERF_SEVERE_LOSS_PCT", 1)[1].split("return", 1)[0]
+
+    assert "RISK_EQUITY_USDT" in block, "порог обязан считаться от капитала"
