@@ -31,6 +31,24 @@ class LiveSafetyService:
         )
         return round(sum(float(signal.closed_net_pnl or 0.0) for signal in signals), 6)
 
+    def open_unrealized_usdt(self, db: Session, bot_id: int | None = None) -> float:
+        """Плавающий результат открытых позиций — то, что будет потеряно, если
+        всё закроется сейчас.
+
+        (#breaker-sees-only-closed-2026-09-20) Предохранитель считал ТОЛЬКО
+        закрытые сделки, и открытый минус был ему не виден. Позиции копили
+        убыток молча, а при одновременном срабатывании стопов дневной
+        результат прыгал через порог: 20.09 лимит 3% поймал факт на 5.97%.
+        Порог при этом обещал одно, а на деле стоил «лимит + весь открытый
+        риск» — при пяти позициях по 1% это до 5 процентных пунктов сверху.
+        """
+        from models.position import Position
+
+        query = db.query(Position).filter(Position.status == "open")
+        if bot_id is not None:
+            query = query.filter(Position.bot_id == bot_id)
+        return round(sum(float(p.unrealized_pnl or 0.0) for p in query.all()), 6)
+
     def trades_opened_today(self, db: Session, hours: int = 24) -> int:
         """(#max-trades-per-day-2026-07-25) Сколько сделок открыто за окно.
 
@@ -49,7 +67,11 @@ class LiveSafetyService:
 
     def snapshot(self, db: Session, bot: Bot | None, equity_usdt: float | None = None, hours: int = 24) -> dict:
         config = dict(bot.config_json or {}) if bot else {}
-        daily_net_pnl = self.daily_net_pnl_usdt(db, hours=hours)
+        realized_net_pnl = self.daily_net_pnl_usdt(db, hours=hours)
+        # Плавающий минус открытых позиций входит в лимит: иначе порог
+        # срабатывает уже по факту, на величину одновременно открытого риска.
+        unrealized = self.open_unrealized_usdt(db, bot_id=bot.id if bot else None)
+        daily_net_pnl = round(realized_net_pnl + unrealized, 6)
         equity = self._equity_usdt(equity_usdt)
         daily_loss_pct = round(max(0.0, -daily_net_pnl / equity * 100), 4)
         max_daily_loss_pct = float(settings.MAX_DAILY_LOSS_PCT)
@@ -78,6 +100,10 @@ class LiveSafetyService:
             "kill_switch_reason": config.get("kill_switch_reason"),
             "kill_switch_updated_at": config.get("kill_switch_updated_at"),
             "daily_net_pnl_usdt": daily_net_pnl,
+            # Раздельно: закрытое — факт, плавающее — то, что ещё может
+            # отыграться. Одним числом их не различить, а решения разные.
+            "realized_net_pnl_usdt": realized_net_pnl,
+            "unrealized_net_pnl_usdt": unrealized,
             "daily_loss_pct": daily_loss_pct,
             "max_daily_loss_pct": max_daily_loss_pct,
             "daily_loss_blocked": daily_loss_blocked,

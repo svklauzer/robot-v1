@@ -84,6 +84,11 @@ class _CountQuery:
     def count(self):
         return self._n
 
+    def all(self):
+        # (#breaker-sees-only-closed-2026-09-20) Предохранитель спрашивает ещё
+        # и открытые позиции — здесь их нет, и тест проверяет счётчик сделок.
+        return []
+
 
 class _CountDB:
     def __init__(self, n):

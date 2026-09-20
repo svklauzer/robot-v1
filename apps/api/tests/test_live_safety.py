@@ -7,6 +7,7 @@ from core.config import settings
 from core.db import Base
 from models.audit_event import AuditEvent
 from models.bot import Bot
+from models.position import Position
 from models.signal import Signal
 from models.user import User
 from services.live_safety import LiveSafetyService
@@ -14,7 +15,8 @@ from services.live_safety import LiveSafetyService
 
 def _db_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(bind=engine, tables=[User.__table__, Bot.__table__, Signal.__table__, AuditEvent.__table__])
+    Base.metadata.create_all(bind=engine, tables=[User.__table__, Bot.__table__, Signal.__table__,
+                                                  AuditEvent.__table__, Position.__table__])
     Session = sessionmaker(bind=engine)
     return Session()
 
@@ -114,3 +116,56 @@ def test_kill_switch_smoke_exercises_enable_disable_and_can_be_rolled_back():
         assert db.query(AuditEvent).count() == 0
     finally:
         db.close()
+
+
+# ── плавающий убыток входит в лимит (#breaker-sees-only-closed-2026-09-20) ──
+def _open_position(db, *, pnl: float, bot_id: int = 1):
+    """bot_id по умолчанию совпадает с ботом из _create_running_bot."""
+    db.add(Position(bot_id=bot_id, symbol="XRP/USDT", side="long", qty=100.0,
+                    entry_price=1.4, mark_price=1.3, unrealized_pnl=pnl, status="open"))
+    db.commit()
+
+
+def test_the_breaker_counts_the_floating_loss_too(monkeypatch):
+    """Предохранитель видел только закрытые сделки, и открытый минус копился
+    молча: 20.09 лимит 3% поймал факт на 5.97%. Порог обещал одно, а стоил
+    «лимит + весь открытый риск»."""
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 6)
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    db = _db_session()
+    bot = _create_running_bot(db)
+    _open_position(db, pnl=-20.0)   # 6.67% от 300 — ещё ни одной закрытой сделки
+
+    state = LiveSafetyService().snapshot(db, bot)
+
+    assert state["unrealized_net_pnl_usdt"] == -20.0
+    assert state["realized_net_pnl_usdt"] == 0.0
+    assert state["daily_loss_blocked"] is True
+
+
+def test_a_floating_profit_does_not_mask_a_realized_loss(monkeypatch):
+    """Обратная сторона: плавающий плюс не должен отменять уже понесённый
+    убыток — но и вычитать его из лимита нечестно, пока он не зафиксирован.
+    Считаем суммарно: это ответ на вопрос «сколько потеряю, закрывшись сейчас»."""
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 6)
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    db = _db_session()
+    bot = _create_running_bot(db)
+    _open_position(db, pnl=+5.0)
+
+    state = LiveSafetyService().snapshot(db, bot)
+
+    assert state["daily_net_pnl_usdt"] == 5.0
+    assert state["daily_loss_blocked"] is False
+
+
+def test_positions_of_another_bot_are_not_counted(monkeypatch):
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PCT", 6)
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    db = _db_session()
+    bot = _create_running_bot(db)
+    _open_position(db, pnl=-50.0, bot_id=99)
+
+    state = LiveSafetyService().snapshot(db, bot)
+
+    assert state["unrealized_net_pnl_usdt"] == 0.0
