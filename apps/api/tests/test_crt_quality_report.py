@@ -129,3 +129,21 @@ def test_endpoint_is_owner_only():
     router = (Path(__file__).resolve().parents[1] / "routers" / "analytics.py").read_text(encoding="utf-8")
     head = router.split('@router.get("/crt-quality"', 1)[1].split("\n", 1)[0]
     assert "require_owner_action" in head
+
+
+def test_the_trades_themselves_are_returned_to_tell_axes_apart():
+    """(#crt-one-cluster-2026-09-20) Замер 20.09 показал разделение сразу по
+    трём осям — оценка, подтверждение, символ. По агрегатам не различить, три
+    это рычага или один кластер сделок, попавший во все три среза."""
+    db = _db()
+    _crt(db, symbol="HYPE/USDT", score=72.0, mss=True, fvg=False, net_pnl=-15.0, qty=100.0, entry=2.0)
+    _crt(db, symbol="LTC/USDT", score=48.0, mss=False, fvg=True, net_pnl=+3.0, qty=100.0, entry=2.0)
+
+    rows = report(db)["trades"]
+
+    assert len(rows) == 2
+    worst = rows[0]           # худшие первыми
+    assert worst["symbol"] == "HYPE/USDT"
+    assert worst["score"] == 72.0
+    assert worst["confirmation"] == "только MSS"
+    assert worst["net_pnl_per_notional_pct"] == -7.5
