@@ -254,3 +254,50 @@ def test_live_execution_mode_is_pinned_in_the_blueprint():
     blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
     block = blueprint.split("key: LIVE_EXECUTION_MODE", 1)[1].split("- key:", 1)[0]
     assert "value: dry_run" in block
+
+
+# ── пороги, заданные суммой (#sizing-scales-with-equity-2026-09-19) ─────────
+def test_absolute_thresholds_are_measured_against_the_trade_size(monkeypatch):
+    """Сумма, откалиброванная под один счёт, на другом означает не то же самое.
+    Долю от номинала видно сразу, до первой пустой ленты решений."""
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 250.0)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0)
+
+    check = _check(_run(_Exchange(free=600.0)), "absolute_thresholds")
+    edge = next(r for r in check["thresholds"] if r["key"] == "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT")
+
+    # Размер сделки здесь 250 (потолок нотионала): 1.20 / 250 = 0.48%.
+    assert edge["share_of_notional_pct"] == pytest.approx(0.48, abs=1e-3)
+    assert check["notional_usdt"] == 250.0
+
+
+def test_a_threshold_too_heavy_for_the_account_is_flagged(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 90.0)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0)
+
+    check = _check(_run(_Exchange(free=300.0)), "absolute_thresholds")
+
+    # 1.20 на номинал 90 — это 1.33%, то есть порог управляет отбором.
+    assert check["status"] == "warn"
+    assert "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT" in check["heavy"]
+
+
+def test_a_threshold_already_replaced_by_a_share_is_not_a_complaint(monkeypatch):
+    """Если доля включена, сумма просто не работает — претензии к ней нет."""
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 90.0)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
+    monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.48)
+
+    check = _check(_run(_Exchange(free=300.0)), "absolute_thresholds")
+    edge = next(r for r in check["thresholds"] if r["key"] == "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT")
+
+    assert edge["scaling_on"] is True
+    assert "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT" not in check["heavy"]
+
+
+def test_unknown_capital_says_so_instead_of_guessing():
+    check = _check(_run(_Exchange(balance_error=PermissionError("50113"))), "absolute_thresholds")
+
+    assert check["status"] == "info" and "капитал неизвестен" in check["detail"]
