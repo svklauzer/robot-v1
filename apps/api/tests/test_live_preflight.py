@@ -257,23 +257,80 @@ def test_live_execution_mode_is_pinned_in_the_blueprint():
 
 
 # ── пороги, заданные суммой (#sizing-scales-with-equity-2026-09-19) ─────────
+def _sized(monkeypatch, *, margin_pct=0.13, order_cap=250.0, leverage=1):
+    """Размер сделки на счёте задают три потолка сразу, а не один."""
+    monkeypatch.setattr(settings, "MAX_POSITION_MARGIN_PCT", margin_pct)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", order_cap)
+    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0)
+    monkeypatch.setattr(settings, "FUTURES_LEVERAGE", leverage)
+
+
 def test_absolute_thresholds_are_measured_against_the_trade_size(monkeypatch):
     """Сумма, откалиброванная под один счёт, на другом означает не то же самое.
     Долю от номинала видно сразу, до первой пустой ленты решений."""
-    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 250.0)
+    _sized(monkeypatch, margin_pct=0.5, order_cap=250.0)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0)
 
-    check = _check(_run(_Exchange(free=600.0)), "absolute_thresholds")
+    check = _check(_run(_Exchange(free=500.0)), "absolute_thresholds")
     edge = next(r for r in check["thresholds"] if r["key"] == "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT")
 
-    # Размер сделки здесь 250 (потолок нотионала): 1.20 / 250 = 0.48%.
-    assert edge["share_of_notional_pct"] == pytest.approx(0.48, abs=1e-3)
+    # Сделка = min(экспозиция 500, маржевый потолок 250, потолок ордера 250) = 250.
     assert check["notional_usdt"] == 250.0
+    assert edge["share_pct"] == pytest.approx(0.48, abs=1e-3)
+
+
+def test_the_trade_size_is_the_smallest_ceiling_not_the_order_cap(monkeypatch):
+    """Первая версия брала за номинал сам потолок ордера и завышала размер
+    сделки втрое, когда сильнее режет маржевый потолок."""
+    _sized(monkeypatch, margin_pct=0.13, order_cap=250.0)
+
+    check = _check(_run(_Exchange(free=600.0)), "absolute_thresholds")
+
+    # 600 × 0.13 × 1 = 78 — это меньше потолка ордера, значит оно и есть размер.
+    assert check["notional_usdt"] == pytest.approx(78.0, abs=1e-2)
+
+
+def test_the_order_cap_is_not_compared_against_itself(monkeypatch):
+    """Дефект первой версии: потолок размера сделки мерился долей от размера
+    сделки, то есть от себя — всегда ровно 100% и всегда «великоват»."""
+    _sized(monkeypatch, margin_pct=1.0, order_cap=250.0, leverage=5)
+
+    check = _check(_run(_Exchange(free=300.0)), "absolute_thresholds")
+    cap = next(r for r in check["thresholds"] if r["key"] == "LIVE_MAX_ORDER_NOTIONAL_USDT")
+
+    # База у потолка — экспозиция (300 × 5 = 1500), а не номинал: 250/1500 ≈ 16.7%.
+    assert cap["base"] == "exposure"
+    assert cap["share_pct"] == pytest.approx(16.6667, abs=1e-3)
+
+
+def test_an_order_cap_throttling_the_account_is_flagged(monkeypatch):
+    """250 при экспозиции 1500 — система торгует шестой частью доступного."""
+    _sized(monkeypatch, margin_pct=1.0, order_cap=250.0, leverage=5)
+
+    check = _check(_run(_Exchange(free=300.0)), "absolute_thresholds")
+
+    assert check["status"] == "warn"
+    assert "LIVE_MAX_ORDER_NOTIONAL_USDT" in check["heavy"]
+    assert check["exposure_usdt"] == 1500.0
+
+
+def test_an_adaptive_threshold_is_shown_but_not_blamed(monkeypatch):
+    """Гейт берёт min(сумма, 1% маржи): на малом счёте порог опускается сам, и
+    претензии к сумме нет. Первая версия ругалась и на него."""
+    _sized(monkeypatch, margin_pct=0.5, order_cap=250.0)
+    monkeypatch.setattr(settings, "MIN_NET_PNL_TP2_USDT", 1.5)
+
+    check = _check(_run(_Exchange(free=500.0)), "absolute_thresholds")
+    tp2 = next(r for r in check["thresholds"] if r["key"] == "MIN_NET_PNL_TP2_USDT")
+
+    assert tp2["base"] == "adaptive"
+    assert tp2["effective_usdt"] == pytest.approx(1.5, abs=1e-3)  # min(1.5, 250 × 1%)
+    assert "MIN_NET_PNL_TP2_USDT" not in check["heavy"]
 
 
 def test_a_threshold_too_heavy_for_the_account_is_flagged(monkeypatch):
-    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 90.0)
+    _sized(monkeypatch, margin_pct=0.3, order_cap=90.0)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.0)
 
@@ -286,7 +343,7 @@ def test_a_threshold_too_heavy_for_the_account_is_flagged(monkeypatch):
 
 def test_a_threshold_already_replaced_by_a_share_is_not_a_complaint(monkeypatch):
     """Если доля включена, сумма просто не работает — претензии к ней нет."""
-    monkeypatch.setattr(settings, "LIVE_MAX_ORDER_NOTIONAL_USDT", 90.0)
+    _sized(monkeypatch, margin_pct=0.3, order_cap=90.0)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT", 1.20)
     monkeypatch.setattr(settings, "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT", 0.48)
 
@@ -295,6 +352,18 @@ def test_a_threshold_already_replaced_by_a_share_is_not_a_complaint(monkeypatch)
 
     assert edge["scaling_on"] is True
     assert "ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT" not in check["heavy"]
+
+
+def test_an_empty_account_says_so_instead_of_reporting_percentages(monkeypatch):
+    """На счёте 0.01 USDT сделка не состоится ни при каких порогах, и доли от
+    неё — шум: на них владелец пошёл бы чинить исправное."""
+    _sized(monkeypatch, margin_pct=0.13, order_cap=250.0)
+
+    check = _check(_run(_Exchange(free=0.01)), "absolute_thresholds")
+
+    assert check["status"] == "warn"
+    assert "не состоится" in check["detail"]
+    assert check["thresholds"] == []
 
 
 def test_unknown_capital_says_so_instead_of_guessing():

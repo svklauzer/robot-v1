@@ -195,3 +195,71 @@ def test_no_db_is_treated_as_holding(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_FUNDING_ARB", False, raising=False)
     shares = env.effective_shares(db=None)
     assert shares[env.ARB] == env.configured_shares()[env.ARB]
+
+
+# ── капитал против экспозиции (#equity-is-margin-2026-09-20) ────────────────
+def _envelopes():
+    from routers.system import system_capital_envelopes
+
+    return system_capital_envelopes()
+
+
+def test_equity_is_capital_and_exposure_is_what_leverage_makes_of_it(monkeypatch):
+    """Панель показывала одно число, и «3000» читалось и как депозит, и как
+    сумма под управлением. Это капитал; управляемая сумма — произведение."""
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    monkeypatch.setattr(settings, "FUTURES_LEVERAGE", 5)
+    monkeypatch.setattr(settings, "LIVE_MAX_LEVERAGE", 10.0)
+
+    result = _envelopes()
+
+    assert result["equity_usdt"] == 300.0
+    assert result["equity_is_margin"] is True
+    assert result["leverage"] == 5
+    assert result["exposure_usdt"] == 1500.0
+
+
+def test_the_leverage_cap_is_visible_when_it_bites(monkeypatch):
+    """Потолок-предохранитель режет FUTURES_LEVERAGE молча: заказанные 10× без
+    поднятия LIVE_MAX_LEVERAGE дают 5×, и позиции выходят вдвое меньше."""
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    monkeypatch.setattr(settings, "FUTURES_LEVERAGE", 10)
+    monkeypatch.setattr(settings, "LIVE_MAX_LEVERAGE", 5.0)
+
+    result = _envelopes()
+
+    assert result["leverage_capped"] is True
+    assert result["leverage_configured"] == 10 and result["leverage"] == 5
+    assert result["exposure_usdt"] == 1500.0  # не 3000, которых владелец ждёт
+
+
+def test_contour_leverage_is_per_contour_not_a_single_multiplier(monkeypatch):
+    """У funding arb спотовая нога фондируется целиком — плеча на ней нет по
+    построению, и общий множитель приписал бы контуру чужой размер."""
+    monkeypatch.setattr(settings, "RISK_EQUITY_USDT", 300.0)
+    monkeypatch.setattr(settings, "FUTURES_LEVERAGE", 5)
+    monkeypatch.setattr(settings, "LIVE_MAX_LEVERAGE", 10.0)
+
+    rows = {c["contour"]: c for c in _envelopes()["contours"]}
+
+    assert rows[env.DIRECTIONAL]["leverage"] == 5
+    assert rows[env.ARB]["leverage"] == 1
+    assert rows[env.DIRECTIONAL]["notional_usdt"] == pytest.approx(
+        rows[env.DIRECTIONAL]["envelope_usdt"] * 5, abs=1e-2)
+
+
+def test_the_leverage_keys_are_pinned_in_the_blueprint():
+    """Плечо — множитель размера каждой позиции, и до 20.09 его не было ни в
+    блупринте, ни где-либо ещё, кроме дефолта config.py. Предохранитель
+    закреплён значением, само плечо оставлено дашборду."""
+    from pathlib import Path
+
+    blueprint = (Path(__file__).resolve().parents[3] / "render.yaml").read_text(encoding="utf-8")
+
+    assert "key: FUTURES_LEVERAGE" in blueprint
+    cap = blueprint.split("key: LIVE_MAX_LEVERAGE", 1)[1].split("- key:", 1)[0]
+    assert f'value: "{settings.LIVE_MAX_LEVERAGE:.0f}"' in cap
+    # Значение плеча синком не возвращается: иначе оно откатывалось бы ровно
+    # тогда, когда владелец поднял его на бирже.
+    lev = blueprint.split("key: FUTURES_LEVERAGE", 1)[1].split("- key:", 1)[0]
+    assert "sync: false" in lev

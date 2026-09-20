@@ -163,15 +163,34 @@ def system_capital_envelopes():
     """
     from services import capital_envelopes as envelopes
     from services.arb_capital import available_equity
+    from services.live_executor import LIVE_EXECUTOR
 
     db = SessionLocal()
     try:
         equity = available_equity()
         shares = envelopes.effective_shares(db=db)
         configured = envelopes.configured_shares()
+        # (#equity-is-margin-2026-09-20) Эквити здесь — КАПИТАЛ (маржа), плечо в
+        # него не входит: в бумаге это RISK_EQUITY_USDT целиком, в live —
+        # свободные USDT счёта. Конверт контура — тоже маржа. Нотионал, которым
+        # контур реально двигает рынок, получается умножением на плечо, и до сих
+        # пор нигде не показывался: одно и то же число «3000» читалось и как
+        # депозит, и как управляемая сумма.
+        configured_lev = float(getattr(settings, "FUTURES_LEVERAGE", 1) or 1)
+        directional_lev = float(LIVE_EXECUTOR._leverage_value(configured_lev))
+        grid_lev = max(1.0, float(getattr(settings, "GRID_LEVERAGE", 1.0) or 1.0))
 
         contours = []
         total_used = 0.0
+        # Плечо у контуров РАЗНОЕ, и общим множителем его давать нельзя:
+        # направленные идут свопом под FUTURES_LEVERAGE, сетка — под своим
+        # GRID_LEVERAGE, а у funding arb спотовая нога фондируется целиком, и
+        # плеча на ней нет по построению.
+        contour_leverage = {
+            envelopes.DIRECTIONAL: (directional_lev, "своп под FUTURES_LEVERAGE"),
+            envelopes.ARB: (1.0, "спотовая нога фондируется целиком — плеча нет"),
+            envelopes.GRID: (grid_lev, "GRID_LEVERAGE"),
+        }
         for key, label in (
             (envelopes.DIRECTIONAL, "Направленные (тренд/скальп/range/CRT)"),
             (envelopes.ARB, "Funding arb"),
@@ -179,6 +198,7 @@ def system_capital_envelopes():
         ):
             pct = float(shares.get(key, 0.0))
             envelope = round(equity * pct / 100.0, 2)
+            lev, lev_note = contour_leverage[key]
             used = envelopes.used_usdt(key, db=db)
             if used is not None:
                 total_used += used
@@ -188,6 +208,10 @@ def system_capital_envelopes():
                 "configured_pct": configured.get(key, 0.0),
                 "effective_pct": pct,
                 "envelope_usdt": envelope,
+                # Конверт — маржа; нотионал — то, чем контур двигает рынок.
+                "leverage": int(lev) if float(lev).is_integer() else lev,
+                "leverage_note": lev_note,
+                "notional_usdt": round(envelope * lev, 2),
                 "used_usdt": round(used, 2) if used is not None else None,
                 # Превышение конверта фактом — сигнал, что контур занял больше,
                 # чем ему отведено (возможен, если позиции открыты до правки долей).
@@ -197,6 +221,20 @@ def system_capital_envelopes():
 
         return {
             "equity_usdt": round(equity, 2),
+            # Чем эквити НЕ является — чтобы число не читалось как управляемая сумма.
+            "equity_is_margin": True,
+            "equity_source": ("свободные USDT счёта исполнения"
+                              if LIVE_EXECUTOR.is_live() and bool(getattr(settings, "LIVE_SIZE_FROM_BALANCE", True))
+                              else "RISK_EQUITY_USDT (бумажный капитал)"),
+            "leverage": int(directional_lev) if directional_lev.is_integer() else directional_lev,
+            "leverage_configured": (int(configured_lev) if float(configured_lev).is_integer()
+                                    else configured_lev),
+            "leverage_cap": float(getattr(settings, "LIVE_MAX_LEVERAGE", 5.0)),
+            # Потолок-предохранитель режет FUTURES_LEVERAGE молча: заказанные 10×
+            # без поднятия LIVE_MAX_LEVERAGE дадут 5×, и позиции выйдут вдвое
+            # меньше ожидаемых. Видно это иначе только по размеру сделок.
+            "leverage_capped": bool(float(configured_lev) > directional_lev),
+            "exposure_usdt": round(equity * directional_lev, 2),
             "used_total_usdt": round(total_used, 2),
             "used_total_pct": round(total_used / equity * 100.0, 2) if equity > 0 else 0.0,
             "configured_total_pct": round(sum(configured.values()), 2),
