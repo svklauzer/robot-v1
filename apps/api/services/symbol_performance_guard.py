@@ -257,6 +257,13 @@ class SymbolPerformanceGuard:
         # не несёт: множитель нейтральный (см. SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER).
         if closed_count < min_history:
             if last_closed_reason == "stop_loss":
+                # (#reason-must-match-the-action-2026-09-20) Имя причины
+                # следует за ДЕЙСТВИЕМ. Множитель здесь давно равен 1.0 (после
+                # одного стопа размер не режем — решение июля), а причина
+                # продолжала называться `..._reduce_risk`: витрина писала
+                # «риск снижен» там, где не менялось ничего.
+                if small_history_stop_multiplier >= 1.0:
+                    return _mk(True, "small_history_last_stop_no_change", 1.0)
                 return _mk(True, "small_history_last_stop_reduce_risk", small_history_stop_multiplier)
             return _mk(True, "small_history_ok", 1.0)
 
