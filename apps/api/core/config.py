@@ -1811,7 +1811,7 @@ class Settings(BaseSettings):
     # изменена, старые метки устаревают). На live (is_live_enabled) exploration
     # АВТО-ВЫКЛЮЧЕН — гейт режет без исключений, реальные деньги не платят за
     # обучение. Размер пробы: ML_EXPLORE_SIZE_MULT поверх ml-оси 0.5 → ~25% бюджета.
-    ML_EXPLORE_ENABLED: bool = True
+    ML_EXPLORE_ENABLED: bool = False
     ML_EXPLORE_EVERY_N: int = 3
     ML_EXPLORE_SIZE_MULT: float = 0.5
 
