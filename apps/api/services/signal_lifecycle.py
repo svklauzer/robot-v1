@@ -758,28 +758,45 @@ class SignalLifecycleManager:
                         signal.plan_json = plan
                         flag_modified(signal, "plan_json")
 
-                # BREAKEVEN STOP: после TP1 стоп сдвигается на entry + fee buffer.
-                # Гарантирует нулевой убыток если цена откатится после TP1.
+                # ── BREAKEVEN / ATR RATCHET STOP AFTER TP1 ──
                 _be_position = self._get_open_position_for_signal(db, signal)
                 _be_entry = float(_be_position.entry_price) if _be_position else float((entry_from + entry_to) / 2)
-                # Буфер безубытка — по ставке рынка ЭТОЙ сделки: спот 0.2%,
-                # своп 0.05%. Общая ставка на все сделки сдвигала бы безубыток
-                # лонгов на четверть нужного расстояния.
+                
+                # Извлекаем ставку рынка этой сделки
                 _be_rate, _ = exit_policy._fee_rate(signal.symbol, self._market_type(signal))
                 _be_fee = float(_be_rate) * 2 + float(getattr(settings, "SLIPPAGE_BUFFER_PCT", 0.0002))
-                if side == "long":
-                    _be_new_stop = round(_be_entry * (1 + _be_fee), 8)
-                    if _be_new_stop > float(signal.stop_price):
-                        signal.stop_price = _be_new_stop
-                else:
-                    _be_new_stop = round(_be_entry * (1 - _be_fee), 8)
-                    if _be_new_stop < float(signal.stop_price):
-                        signal.stop_price = _be_new_stop
+                _be_new_stop = round(_be_entry * (1 + _be_fee), 8) if side == "long" else round(_be_entry * (1 - _be_fee), 8)
 
-                # (#post-tp1-lock-2026-09-11) Стоп остатка на доле дистанции TP1
-                # вместо безубытка. Записывается в план: по записи и причина
-                # закрытия отличает этот стоп от безубытка, и разбор видит,
-                # по какому правилу жила сделка.
+                # Проверяем, включен ли режим динамического дыхания ATR
+                use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
+                _lifecycle_ctx = (signal.plan_json or {}).get("lifecycle") or {}
+                _live_atr = float(self._tz_context(signal, _lifecycle_ctx).get("atr", 0.0) if use_atr else 0.0)
+
+                if use_atr and _live_atr > 0:
+                    # КРИТИЧЕСКИЙ ФИКС: Вместо удушения в безубыток, ставим стоп остатка на расстоянии ATR * 1.0 от TP1
+                    # Это защищает сделку от превращения в лосс, но дает ей дышать на откатах после де-риска!
+                    _atr_buffer = _live_atr * float(getattr(settings, "ATR_FAILED_SETUP_SOFT_MULT", 1.0))
+                    if side == "long":
+                        _elastic_stop = round(float(tp1) - _atr_buffer, 8)
+                        # Стоп подтягивается только вверх, но не выше расчетного безубытка на первом этапе
+                        _elastic_stop = max(_elastic_stop, _be_new_stop)
+                        if _elastic_stop > float(signal.stop_price):
+                            signal.stop_price = _elastic_stop
+                    else:
+                        _elastic_stop = round(float(tp1) + _atr_buffer, 8)
+                        _elastic_stop = min(_elastic_stop, _be_new_stop)
+                        if _elastic_stop < float(signal.stop_price):
+                            signal.stop_price = _elastic_stop
+                else:
+                    # Legacy-откат, если ATR выключен или не рассчитан
+                    if side == "long":
+                        if _be_new_stop > float(signal.stop_price):
+                            signal.stop_price = _be_new_stop
+                    else:
+                        if _be_new_stop < float(signal.stop_price):
+                            signal.stop_price = _be_new_stop
+
+                # Резервный замок post_tp1_lock (теперь безопасно регулируется фракталом 0.25 из Render)
                 _lock_stop = self._post_tp1_lock_stop(
                     side, _be_entry, float(tp1), float(signal.stop_price),
                     float(getattr(settings, "POST_TP1_LOCK_FRAC", 0.0) or 0.0),
