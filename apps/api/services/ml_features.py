@@ -44,39 +44,17 @@ CVD_MIN_TRADES: int = 10
 # При изменении списка старая модель становится несовместимой: см.
 # FEATURE_VERSION ниже, по нему обучение отбраковывает устаревшие артефакты.
 FEATURE_NAMES: list[str] = [
-    "confidence",
-    "grade_ord",            # A+=3 A=2 B=1 C=0
-    "side_is_short",        # 1 short / 0 long
-    "net_rr_tp1",
-    "net_rr_tp2",
-    # Асимметрия наград: RR до TP2 относительно TP1. Высокая = сетап рассчитан
-    # на runner, низкая = вся надежда на быструю фиксацию. Разные исходы.
-    "rr_asymmetry",
-    # Дистанция стопа в % от входа. Задаёт и риск, и размер позиции
-    # (qty = risk / distance), и вероятность быть выбитым шумом. В прежнем
-    # векторе её не было вовсе — при том, что вокруг неё крутился весь разбор.
-    "stop_distance_pct",
-    # Размер позиции: одна и та же ошибка на 500 и на 50 стоит по-разному, а
-    # издержки почти пропорциональны нотионалу.
-    "notional_usdt",
-    # Час суток UTC. Ликвидность и спред меняются по сессиям; издержки — тоже.
-    "hour_of_day",
-    # Оставшиеся торгуемые режимы. is_trend_up/is_trend_down убраны: после
-    # отключения они константные нули.
-    "is_crt",
-    "is_reversal",
-    "is_scalp",
-    "spread_pct",
-    "obi",
-    "bid_wall_share",
-    "ask_wall_share",
-    "cvd_ratio",
-    "cvd_trades",
+    "grade_ord",         # Heuristic rank сетапа (A+=3, A=2, B=1, C=0)
+    "spread_pct",        # Текущий спред на OKX (метрика издержек)
+    "obi",               # Дисбаланс книги ордеров (Order Book Imbalance)
+    "bid_wall_share",    # Сила лимитной поддержки покупателей
+    "ask_wall_share",    # Сила лимитного сопротивления продавцов
+    "cvd_ratio",         # Рыночный дисбаланс (CVD) рыночных ордеров
 ]
 
 # Версия контракта. Модель, обученная на другом наборе, несовместима по длине
 # и по смыслу вектора — тихо предсказывать по ней нельзя.
-FEATURE_VERSION: int = 2
+FEATURE_VERSION: int = 3  # Смена контракта заставит MetaLabeler сбросить старый pkl-файл!
 
 
 def _f(v: Any, default: float = 0.0) -> float:
@@ -133,39 +111,18 @@ def _hour_of_day(row: dict) -> float:
 
 
 def row_to_features(row: dict) -> list[float]:
-    """Логированная строка ИЛИ живой кандидат → вектор фич (порядок FEATURE_NAMES)."""
-    regime = str(row.get("regime") or "").lower()
-    side = str(row.get("side") or row.get("action") or "").lower()
+    """Логированная строка ИЛИ живой кандидат → вектор фич по контракту V3."""
     d = _depth(row)
     cvd_trades = _f(d.get("cvd_trades"))
     cvd_reliable = cvd_trades >= float(CVD_MIN_TRADES)
 
-    rr1 = _f(row.get("net_rr_tp1"))
-    rr2 = _f(row.get("net_rr_tp2"))
-
-    entry = _entry_price(row)
-    stop = _f(row.get("stop_price"))
-    stop_dist_pct = abs(entry - stop) / entry * 100.0 if entry > 0 and stop > 0 else 0.0
-
     return [
-        _f(row.get("confidence"), 60.0),
         _grade_ord(row.get("grade")),
-        1.0 if side in ("short", "sell") else 0.0,
-        rr1,
-        rr2,
-        rr2 / rr1 if rr1 > 1e-9 else 0.0,
-        stop_dist_pct,
-        _f(row.get("required_margin")),
-        _hour_of_day(row),
-        1.0 if "crt" in regime else 0.0,
-        1.0 if "reversal" in regime else 0.0,
-        1.0 if "scalp" in regime else 0.0,
         _f(d.get("spread_pct")),
         _f(d.get("obi")),
         _f(d.get("bid_wall_share")),
         _f(d.get("ask_wall_share")),
         _f(d.get("cvd_ratio")) if cvd_reliable else 0.0,
-        cvd_trades,
     ]
 
 
@@ -184,19 +141,12 @@ def is_phantom_row(row: dict) -> bool:
         return False
 
 
-def row_to_label(row: dict, label_kind: str = "beats_costs",
-                 min_r: float = 0.3) -> int | None:
-    """Метка из логированного исхода. None — если строка ещё без исхода.
-
-    `beats_costs` (по умолчанию) — сделка вернула хотя бы `min_r` риска.
-    Именно этот вопрос имеет смысл задавать фильтру входов: не «будет ли плюс»,
-    а «оправдает ли сделка потраченный риск и издержки».
-
-    `is_win` оставлен для сравнения и обратной совместимости, но как цель
-    обучения он воспроизводит ошибку win-rate: 67% побед при payoff 0.11 —
-    убыточная система.
-    """
+def row_to_label(row: dict, label_kind: str = "beats_costs", min_r: float = 0.3) -> int | None:
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    
+    # КРИТИЧЕСКИЙ ФИКС: Если строка фантомная, она ЗАПРЕЩЕНА к маркировке как класс 1
+    if is_phantom_row(row):
+        return 0
 
     if label_kind == "hit_tp2":
         if "hit_tp2" in labels:
@@ -211,18 +161,21 @@ def row_to_label(row: dict, label_kind: str = "beats_costs",
     except (TypeError, ValueError):
         return None
 
+    # Изменяем beats_costs: ориентируемся на реальный выход по тейкам или защитным прибылям
+    if label_kind == "beats_costs":
+        # Если сделка закрылась по стопу или это "positive_then_negative" слив — это строгий 0
+        if labels.get("hit_stop") or labels.get("positive_then_negative"):
+            return 0
+            
+        # Класс 1 только если забрали реальный TP или защитили профит (protected_profit)
+        if labels.get("hit_tp2") or labels.get("protected_profit"):
+            return 1
+            
+        risk = abs(_f(row.get("net_pnl_stop")))
+        if risk <= 1e-9:
+            return None
+        return 1 if (pnl / risk) >= float(min_r) else 0
+
     if label_kind == "is_win":
-        if "is_win" in labels:
-            return 1 if labels.get("is_win") else 0
         return 1 if pnl > 0 else 0
 
-    # beats_costs: результат в единицах риска. Риск — плановый убыток по стопу,
-    # он уже посчитан с издержками (net_pnl_stop) и потому сравним со сделками
-    # разного размера.
-    risk = abs(_f(row.get("net_pnl_stop")))
-    if risk <= 1e-9:
-        # Без плана риска судить не о чем: строка не участвует в обучении.
-        # Молча подставлять «плюс/минус» здесь нельзя — это и есть тот самый
-        # тихий перекос выборки.
-        return None
-    return 1 if (pnl / risk) >= float(min_r) else 0
