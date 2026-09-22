@@ -260,12 +260,9 @@ class ExitPolicyService:
         current_price = float(current_price)
         mfe = float(mfe_pct or 0.0)
         current_pct = self._result_pct(side, entry_price, current_price)
+        drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
 
-        # (#liq) Защита от свипа спредом: на аномальном спайке спреда НЕ исполняем
-        # софт-выходы до TP1 (breakeven_lock / failed_setup / protective) — их и
-        # «сносит» раздутым стаканом. Реальный хард-стоп в signal_lifecycle и
-        # глубокий deep-порог остаются бэкстопом; при настоящем ходе цена удержится
-        # и закроемся следующим тиком уже без спайка. Только свежий кэш (fail-open).
+        # 1. Абсолютный Fail-Open по ликвидности (спреду)
         if symbol:
             try:
                 from services.liquidity_guard import LIQUIDITY_GUARD
@@ -274,39 +271,25 @@ class ExitPolicyService:
             except Exception:
                 pass
 
-        stop_distance_pct = (
-            abs(entry_price - float(stop_price)) / entry_price * 100
-            if stop_price is not None and float(stop_price) > 0
-            else None
-        )
-        drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
+        # Расчет базовых экономических параметров
         net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
-        thr, threshold_source = self._get_thresholds(stop_distance_pct, self._net_safe_floor_pct(fee_rate))
-        min_protective_exit_pct = float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 1.20))
-        min_protective_net_usdt = float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 1.50))
-        protective_drawdown_share = float(settings.PROTECTIVE_DRAWDOWN_SHARE)
-        adaptive_drawdown_pct = float(settings.ADAPTIVE_TRAIL_DRAWDOWN_PCT)
-        min_age_sec = float(getattr(settings, "FAILED_SETUP_MIN_AGE_SEC", 300))
+        be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
+        be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35))
+        be_floor = float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.18))
+        be_hard_floor = float(getattr(settings, "BREAKEVEN_LOCK_HARD_FLOOR_PCT", -0.10))
 
-        age_ok = signal_age_sec is not None and float(signal_age_sec) >= min_age_sec
-        tp1_dist_pct = (
-            abs(float(tp1_price) - entry_price) / entry_price * 100
-            if tp1_price is not None and float(tp1_price) > 0
-            else None
-        )
+        # К КРИТИЧЕСКИЙ ПРАВИЛО ЗАЩИТЫ КАПИТАЛА (Выносим BE_LOCK ПЕРЕД индикаторами ТЗ)
+        # Если сделка была в хорошем плюсе, но откатила к безубытку — КРОЕМ ОДИНАКОВО для тренда и скальпа!
+        if be_enabled and mfe >= be_arm:
+            if current_pct <= be_floor or current_pct <= be_hard_floor:
+                return ExitDecision(
+                    exit=True,
+                    reason="breakeven_lock",
+                    exit_price=current_price,
+                    note=f"CRITICAL_BE_RESCUE: mfe={mfe:.4f}>={be_arm} cur={current_pct:.4f}<=floor={be_floor}"
+                )
 
-        # ── ВЫХОД ПО ПРИБОРАМ (#tz-trend-engine-2026-08-03) ──────────────────
-        # Для трендового профиля лестница ниже ЗАМЕНЕНА условиями ТЗ. Основание:
-        #   107 стопов из 342 сделок, −223.76 USDT, ни одной прибыльной — 76%
-        #   всего убытка. Средний MAE при этом −0.618%, стопы стоят на 1–3%:
-        #   типичная сделка до стопа не доходит. Стоп не защищал, он фиксировал
-        #   уже случившееся.
-        # Раздел 3.2 ТЗ закрывает не по дистанции, а по слому тренда: пробой
-        # KAMA, разворот ADX из зоны выше 50, уход OBV под свою EMA(20).
-        #
-        # Проверка идёт ПЕРВОЙ и делает ранний return: смешивать её с прежней
-        # лестницей нельзя — они спорят. Прежняя может выбить сделку, тренд
-        # которой по KAMA цел, и наоборот держать сделку со сломанным трендом.
+        # 2. И только теперь отдаем управление приборам ТЗ (если это тренд)
         if (
             bool(getattr(settings, "TZ_TREND_EXIT_ONLY", False))
             and str(trade_mode or "").lower() in ("trend", "trend_up", "trend_down", "ride")
@@ -729,124 +712,76 @@ class ExitPolicyService:
         market_type: str | None = None,
         position_notional_usdt: float | None = None,
         signal_age_sec: float | None = None,
+        tz_context: dict | None = None, # Прокидываем контекст индикаторов рынка
     ) -> ExitDecision:
         side = str(side).lower()
         lifecycle = lifecycle or {}
         entry_price = float(entry_price)
         current_price = float(current_price)
         tp2_price = float(tp2_price)
+        
         current_pct = self._result_pct(side, entry_price, current_price)
         tp2_pct = self._result_pct(side, entry_price, tp2_price)
+        
+        # Извлекаем MFE (максимальный зафиксированный плюс по траектории)
         mfe = float(lifecycle.get("mfe_pct") or current_pct or 0.0)
         drawdown_from_mfe = self._drawdown_from_mfe(current_pct, mfe)
-        net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
-        min_post_tp1_exit_pct = float(getattr(settings, "MIN_POST_TP1_EXIT_PCT", 0.80))
-        min_protective_net_usdt = float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 0.25))
-
-        stop_distance_pct = (
-            abs(entry_price - float(stop_price)) / entry_price * 100
-            if stop_price is not None and float(stop_price) > 0
-            else None
-        )
-        threshold_source = f"dynamic(stop={round(stop_distance_pct, 3)}%)" if stop_distance_pct else "static_fallback"
-
-        # (#tp2-stage-2026-09-12) Правило закрывало весь остаток на 92% пути к
-        # TP2 и книжило ЦЕНУ TP2 — рынок до неё не доходил (phantom). Заодно оно
-        # перехватывало этап TP2 (#progressive-tp2-2026-09-03): цена проходит
-        # полосу 92–100% раньше, чем касается TP2, так что за 90 дней через этап
-        # не прошла ни одна сделка, и TP2 остался потолком. При включённом этапе
-        # правило молчит — TP2 обрабатывает ведение на самом уровне. Без этапа —
-        # закрывает по рынку.
-        if (tp2_pct > 0 and current_pct >= tp2_pct * 0.92
-                and not bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True))):
+        
+        # Считаем чистый порог окупаемости комиссий
+        net_safe_pct, _, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        
+        # Извлекаем живой ATR из контекста рынка
+        atr_v = float((tz_context or {}).get("atr", 0.0))
+        
+        # ── ЭТАП 1: ФИКСАЦИЯ НА ПОДХОДЕ К TP2 ──
+        # Если цена дошла до 92% от цели TP2, и прогрессивный режим выключен — забираем тейк
+        if tp2_pct > 0 and current_pct >= tp2_pct * 0.92 and not bool(getattr(settings, "TP2_PROGRESSIVE_ENABLED", True)):
             return ExitDecision(
                 exit=True, reason="tp2_reached",
-                exit_price=round(float(current_price), 8),
-                note=f"cur={current_pct:.4f} tp2={tp2_pct:.4f} fill=market",
+                exit_price=current_price,
+                note=f"RUNNER_HIT_TP2: cur={current_pct:.2f} tp2={tp2_pct:.2f}"
             )
 
-        if stop_distance_pct is not None and stop_distance_pct >= 3.0:
-            tp2_progress = current_pct / tp2_pct if tp2_pct > 0 else 0
-            if tp2_progress >= 0.80 and drawdown_from_mfe >= mfe * 0.20:
-                protected_pct = self._achievable_pct(
-                    max(mfe * 0.70, net_safe_pct, min_post_tp1_exit_pct), current_pct
-                )
-                exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-                return ExitDecision(
-                    exit=True,
-                    reason="wide_stop_tp2_guard",
-                    exit_price=round(exit_price, 8),
-                    note=(
-                        f"mfe={mfe:.4f} cur={current_pct:.4f} tp2_prog={tp2_progress:.3f} "
-                        f"dd={drawdown_from_mfe:.4f} prot={protected_pct:.4f} src={threshold_source}"
-                    ),
-                )
+        # ── ЭТАП 2: ДИНАМИЧЕСКИЙ АТР-ТРЕЙЛ ДЛЯ РANНЕРОВ (ДЫХАНИЕ РЫНКА) ──
+        # Если включен режим динамических стопов по ATR
+        if bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", True)) and atr_v > 0 and entry_price > 0:
+            # Переводим текущий ATR в проценты от цены входа
+            atr_pct = (atr_v / entry_price) * 100.0
+            
+            # Задаем размер люфта (поводка): даем цене дышать на расстоянии 2.2 * ATR от пика
+            trail_buffer_pct = atr_pct * float(getattr(settings, "ATR_TRAIL_START_MULT", 2.2))
+            
+            # Порог активации трейлинга: включаем защиту только когда цена ушла выше TP1 минимум на 1.5 * ATR
+            if mfe >= (current_pct - atr_pct * 1.5):
+                # Рассчитываем динамический уровень защищенного профита
+                protected_pct = mfe - trail_buffer_pct
+                
+                # КРИТИЧЕСКИЙ ИНВАРИАНТ: Защитный уровень подтягивания НЕ может быть ниже безубытка (net_safe)
+                # Но он плавно ползет вверх ЗА ценой, оставляя ей ОГРОМНЫЙ зазор (2.2 * ATR) для дыхания
+                protected_pct = max(protected_pct, net_safe_pct)
+                
+                if current_pct <= protected_pct:
+                    return ExitDecision(
+                        exit=True,
+                        reason="post_tp1_atr_trailing_stop",
+                        exit_price=current_price,
+                        note=f"ATR_RIDER_EXIT: mfe={mfe:.2f}% текущий={current_pct:.2f}% стоп_уровень={protected_pct:.2f}% (люфт ATR={trail_buffer_pct:.2f}%)"
+                    )
+                    
+                return ExitDecision(exit=False, note=f"ATR_RIDING: цена дышит свободно внутри буфера {trail_buffer_pct:.2f}%")
 
-        # (#post-tp1-dead-zone-2026-09-03) Ветки ниже требуют MFE ≥ 2.0% / ≥ 3.0%
-        # (и ещё одна — стоп ≥ 3.0%). Медианный MFE наших режимов 0.52–1.19%,
-        # типичный стоп 0.6–0.9% — ни одна не может взвестись на обычной сделке,
-        # и после TP1 позиция имеет ровно два исхода: TP2 или сползание на
-        # безубыток. Эта ветка закрывает провал: порог в ДОЛЯХ от собственного
-        # MFE сделки, а не абсолютом в чужом масштабе. Стоит ПЕРЕД абсолютными
-        # ярусами — они остаются для крупных движений и не трогаются.
+        # ── ЭТАП 3: РЕЗЕРВНЫЙ АБСОЛЮТНЫЙ БЭКСТОП (Если ATR не готов) ──
         if bool(getattr(settings, "POST_TP1_TRAIL_ENABLED", True)):
             trail_min_mfe = float(getattr(settings, "POST_TP1_TRAIL_MIN_MFE_PCT", 0.60))
             trail_share = float(getattr(settings, "POST_TP1_TRAIL_GIVEBACK_SHARE", 0.40))
             if mfe >= trail_min_mfe and drawdown_from_mfe >= mfe * trail_share:
                 protected_pct = self._achievable_pct(max(net_safe_pct, 0.0), current_pct)
-                est_net = self._estimated_net_usdt(
-                    protected_pct, position_notional_usdt, fee_rate=fee_rate
+                return ExitDecision(
+                    exit=True, reason="post_tp1_giveback_trail",
+                    exit_price=current_price,
+                    note=f"BACKSTOP_EXIT: mfe={mfe:.4f} cur={current_pct:.4f}"
                 )
-                # Тот же экономический гейт, что у остальных защитных веток
-                # (#protective-net-gate-dead-2026-09-03): фиксировать в минус по
-                # комиссии смысла нет — тогда лучше дождаться TP2 или стопа.
-                if est_net is None or est_net >= min_protective_net_usdt:
-                    exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-                    return ExitDecision(
-                        exit=True,
-                        reason="post_tp1_giveback_trail",
-                        exit_price=round(exit_price, 8),
-                        note=(
-                            f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
-                            f">= {trail_share}*mfe prot={protected_pct:.4f} "
-                            f"net_safe={net_safe_pct:.4f} fee={fee_source}"
-                        ),
-                    )
 
-        if mfe >= 3.0 and drawdown_from_mfe >= mfe * 0.30:
-            protected_pct = self._achievable_pct(
-                max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct), current_pct
-            )
-            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-            return ExitDecision(
-                exit=True,
-                reason="trend_trailing_stop",
-                exit_price=round(exit_price, 8),
-                note=(
-                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
-                    f"prot={protected_pct:.4f} src={threshold_source} fee={fee_source}"
-                ),
-            )
-
-        if mfe >= 2.0 and drawdown_from_mfe >= mfe * 0.35:
-            protected_pct = self._achievable_pct(
-                max(mfe * 0.60, net_safe_pct, min_post_tp1_exit_pct), current_pct
-            )
-            exit_price = self._price_from_result_pct(side, entry_price, protected_pct)
-            return ExitDecision(
-                exit=True,
-                reason="adaptive_post_tp1_stop",
-                exit_price=round(exit_price, 8),
-                note=(
-                    f"mfe={mfe:.4f} cur={current_pct:.4f} dd={drawdown_from_mfe:.4f} "
-                    f"prot={protected_pct:.4f} fee={fee_source}"
-                ),
-            )
-
-        # КРИТИЧНО: ни одно пост-TP1 условие не сработало — ДЕРЖИМ (стоп уже в
-        # безубытке после TP1, защищать нечего). Без этого return функция отдавала
-        # None → manage_loop crash 'NoneType.exit'. Баг был латентным: вылез только
-        # после #9, когда сделки реально доходят до TP1 и входят в этот путь.
         return ExitDecision(exit=False)
 
     def after_tp2_decision(

@@ -435,6 +435,8 @@ class Settings(BaseSettings):
     # Единая адаптивная логика для всех движков. Стопы и пороги выхода
     # рассчитываются как множители текущего ATR, а не фиксированные %.
     # =========================
+    
+    # --- 3. Параметры дыхания волатильности (ATR Множители) ---
     TZ_USE_DYNAMIC_ATR_STOPS: bool = True  # ВКЛЮЧЕНО: адаптивные стопы от волатильности
     TZ_STOP_MIN_DIST_ATR_MULT: float = 3  # Мин. дистанция стопа = ATR * 3
     TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 2.0  # Буфер выхода KAMA = ATR * 2.0
@@ -449,9 +451,9 @@ class Settings(BaseSettings):
     ATR_FAILED_SETUP_SOFT_MULT: float = 1.2
     ATR_FAILED_SETUP_MID_MULT: float = 1.8
     ATR_FAILED_SETUP_DEEP_MULT: float = 2.5
-    ATR_PROTECT_START_MULT: float = 1.5
-    ATR_TRAIL_START_MULT: float = 2.2
-    ATR_CAPTURE_START_MULT: float = 2.0
+    ATR_PROTECT_START_MULT: float = 1.5 # Ранний де-риск сделки
+    ATR_TRAIL_START_MULT: float = 2.2  # Коэффициент свободного хода цены (2.2 * ATR)
+    ATR_CAPTURE_START_MULT: float = 2.0 # Агрессивный захват прибыли на импульсах
     # Предохранитель от разрыва цены, когда цикл сопровождения не отработал.
     # Этого в ТЗ НЕТ — моё добавление, и оно должно быть видно отдельно.
     # 0 = выключить полностью.
@@ -1009,8 +1011,8 @@ class Settings(BaseSettings):
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.9   # 1.30→0.90 (изм. 17.07.2026)
-    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
+    MFE_CAPTURE_START_PCT: float = 0.60   # 1.30→0.60 (изм. 22.09.2026)
+    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.25
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
     # ML outcome memory. The relative default resolves under /app in Docker and
@@ -2102,8 +2104,10 @@ class Settings(BaseSettings):
     # 485 сделок, проскальзывание стопа 0.05%): без фиксации +12..14 п.п. при
     # выходе на TP2, +21..24 с трейлом; плюс в обеих половинах, в поздней
     # +1.7..+5.3. Плата — проскальзывание стопа всей позиции на возврате к TP1.
-    TP1_PARTIAL_ENABLED: bool = False
-    TP1_PARTIAL_CLOSE_SHARE: float = 0.5
+    
+    # --- 1. Настройка Ног Сплита (Берем гарантированное, но оставляем тело тренду) ---
+    TP1_PARTIAL_ENABLED=true
+    TP1_PARTIAL_CLOSE_SHARE: float = 0.35 # Фиксируем на TP1 всего 35%! (Остальные 65% летят к TP2)
 
     # (#progressive-tp2-2026-09-03) TP2 перестаёт быть ПОТОЛКОМ и становится
     # ЭТАПОМ. Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2
@@ -2126,8 +2130,10 @@ class Settings(BaseSettings):
     # статусом: активные статусы перечислены вручную в 14 местах (exposure_guard,
     # candidate_funnel, дедуп, аналитика), и пропуск одного тихо выронил бы
     # сигнал из риск-контроля. Прецедент тот же, что у tp1_partial.
+ 
+    # --- 4. Прогрессивное ведение Хвоста после TP2 (Выжимаем максимум) ---
     TP2_PROGRESSIVE_ENABLED: bool = True
-    TP2_PARTIAL_CLOSE_SHARE: float = 0.5     # доля ОСТАТКА, фиксируемая на TP2
+    TP2_PARTIAL_CLOSE_SHARE: float = 0.50 # На уровне TP2 фиксируем половину от остатка
     # Ширина трейла хвоста задаётся долей отрезка TP1→TP2 САМОГО сигнала, а не
     # ATR: уровни TP уже посчитаны динамически (r_mult из ADX/ATR/KAMA), значит
     # длина этого отрезка и ЕСТЬ волатильность инструмента, переведённая в цену.
@@ -2138,7 +2144,7 @@ class Settings(BaseSettings):
     # Отдача от пика ПОСЛЕ TP2, после которой хвост фиксируется. Считается от
     # прироста сверх TP2, а не от всего MFE: иначе порог зависел бы от того,
     # как далеко стоял TP2, а не от того, сколько хвост реально дал.
-    TP2_TRAIL_GIVEBACK_SHARE: float = 0.40
+    TP2_TRAIL_GIVEBACK_SHARE: float = 0.40 # Хвост держим, пока он не упадет на 40% от супер-пика
 
     # (#post-tp1-dead-zone-2026-09-03) Защита прибыли в зоне TP1→TP2 не работала
     # ни разу. Три ветки after_tp1_decision требуют MFE ≥ 2.0% / ≥ 3.0% или стоп
@@ -2155,7 +2161,10 @@ class Settings(BaseSettings):
     # бегунов к TP2; гейт нетто считал выход по полу издержек и на остатке
     # ~100–125 USDT не пропускал его вовсе (#476, #483, #495, #497), а
     # сработав, книжил +0.30% вместо рынка (#487: рынок 0.83%).
-    POST_TP1_TRAIL_ENABLED: bool = False
+
+    # --- 2. Переключение Замка после TP1 в эластичный режим ---
+
+    POST_TP1_TRAIL_ENABLED: bool = True # ВКЛЮЧАЕМ ДИНАМИЧЕСКИЙ СЛЕДЯЩИЙ ТРЕЙЛ
     POST_TP1_TRAIL_MIN_MFE_PCT: float = 0.60     # ниже — движение слишком мелкое
     POST_TP1_TRAIL_GIVEBACK_SHARE: float = 0.40  # отдал столько от MFE → фиксируем
 
@@ -2171,7 +2180,7 @@ class Settings(BaseSettings):
     # пересечения TP1, считается касанием): 0.75 → +2.6, 0.9 → +6.2,
     # 1.0 → +9.3. Правило выбора, согласованное с владельцем 11.09: уровень с
     # лучшей пессимистичной оценкой — 1.0.
-    POST_TP1_LOCK_FRAC: float = 1.0
+    POST_TP1_LOCK_FRAC: float = 0.0 # ОТКЛЮЧАЕМ ЖЕСТКИЙ ЗАЖИМ СТОПА НА УРОВНЕ TP1!!
 
     # (#tp1-partial-2026-07-09) Гейт ОЖИДАЕМОЙ экономики: раз на TP1 реализуется
     # половина, «награда» сделки = share·netTP1 + (1−share)·netTP2. Требуем, чтобы
@@ -2333,7 +2342,7 @@ class Settings(BaseSettings):
     # ВСЕ защитные выходы. Замер: 2.50$ → 2 выхода из 16, 0.25$ → 5 и лучший нетто.
     # 0.25 ≈ двойная комиссия round-trip на минимальной позиции: ниже фиксировать
     # действительно нечего, выше — гейт начинает съедать edge.
-    MIN_PROTECTIVE_NET_USDT: float = 0.25
+    MIN_PROTECTIVE_NET_USDT: float = 0.15
 
     # =========================
     # FEES / COST ENGINE
