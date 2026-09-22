@@ -225,9 +225,13 @@ class MetaLabeler:
 
         Xa, ya = np.array(X, dtype=float), np.array(y, dtype=int)
 
-        # time-aware сплит: последние 30% — тест (имитация будущего)
-        cut = max(int(n * 0.7), n - 60)
-        cut = min(cut, n - 1)
+        # Выделяем на тест честные 20% от накопленной истории (Time-aware walk-forward)
+        test_share = 0.20 
+        cut = int(n * (1.0 - test_share))
+
+        # Гарантируем, что cut не выйдет за пределы массива
+        cut = max(10, min(cut, n - 30)) 
+
         Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
 
         def _make():
