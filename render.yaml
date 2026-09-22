@@ -321,7 +321,7 @@ services:
       # Выключен 11.09 вместе с включением POST_TP1_LOCK_FRAC: на 103 сделках
       # −1.1 п.п. против факта (режет бегунов к TP2 на обычном откате).
       - key: POST_TP1_TRAIL_ENABLED
-        value: "false"
+        value: "true"
       - key: POST_TP1_TRAIL_MIN_MFE_PCT
         value: "0.60"
       - key: POST_TP1_TRAIL_GIVEBACK_SHARE
@@ -332,13 +332,13 @@ services:
       # 1.0 → +10.5 / +9.3 п.п. против факта. Выбран уровень с лучшей
       # пессимистичной оценкой — по согласованному с владельцем правилу.
       - key: POST_TP1_LOCK_FRAC
-        value: "1.0"
+        value: "0.0"
       # Фиксация половины на TP1 выключена 12.09 (#tp1-partial-off-2026-09-12):
       # при стопе остатка на самом TP1 она ничего не защищает, а бегуна режет
       # вдвое. Стенд на свечах: +12..24 п.п. на 485 сделках. Гейт смешанной
       # награды при входе от неё отвязан (MIN_NET_RR_BLENDED_TP1_SHARE).
       - key: TP1_PARTIAL_ENABLED
-        value: "false"
+        value: "true"
 
       # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED
