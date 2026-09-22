@@ -328,7 +328,7 @@ class Settings(BaseSettings):
     # (up+bullish, down+bearish): 79 сделок −43.4 USDT против +5.8 на 60
     # нейтральных, разрыв в обеих половинах 45 дней и в обе стороны. shadow —
     # вердикт в план, enforce — такой вход не открывается. Решает владелец.
-    MOMENTUM_GATE_MODE: str = "shadow"
+    MOMENTUM_GATE_MODE: str = "enforce"
 
     # (# tp-reachability-2026-08-03, переписан 24.08.2026) Достижимость цели:
     # план против факта. TP_REACH_MODE: shadow | enforce. В enforce не берём

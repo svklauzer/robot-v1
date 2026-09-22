@@ -70,9 +70,22 @@ def _grade_ord(grade: Any) -> float:
     return {"A+": 3.0, "A": 2.0, "B": 1.0, "C": 0.0}.get(str(grade or "").upper(), 1.0)
 
 
+# Файл: apps/api/services/ml_features.py
+
 def _depth(row: dict) -> dict:
-    d = row.get("entry_depth")
-    return d if isinstance(d, dict) else {}
+    """Универсальный извлекатель данных стакана, устойчивый к train/serve skew."""
+    # Вариант 1: Логированная строка для обучения (из trade_outcomes.jsonl)
+    if "entry_depth" in row and isinstance(row["entry_depth"], dict):
+        return row["entry_depth"]
+        
+    # Вариант 2: Живой кандидат из robot_loop, где данные могут быть обернуты в plan/plan_json
+    plan = row.get("plan") or row.get("plan_json") or {}
+    if isinstance(plan, dict) and "entry_depth" in plan and isinstance(plan["entry_depth"], dict):
+        return plan["entry_depth"]
+        
+    # Вариант 3: Плоский кандидат, переданный напрямую (fallback)
+    return row
+
 
 
 def _entry_price(row: dict) -> float:
@@ -111,19 +124,38 @@ def _hour_of_day(row: dict) -> float:
 
 
 def row_to_features(row: dict) -> list[float]:
-    """Логированная строка ИЛИ живой кандидат → вектор фич по контракту V3."""
+    """Логированная строка ИЛИ живой кандидат → вектор фич по контракту V3.
+    
+    Полностью защищен от зануления фич на живом контуре (Serve).
+    """
     d = _depth(row)
-    cvd_trades = _f(d.get("cvd_trades"))
+    
+    # Извлекаем параметры стакана с поиском во вложенном словаре и на верхнем уровне
+    spread_pct = d.get("spread_pct") if d.get("spread_pct") is not None else row.get("spread_pct")
+    obi = d.get("obi") if d.get("obi") is not None else row.get("obi")
+    bid_wall = d.get("bid_wall_share") if d.get("bid_wall_share") is not None else row.get("bid_wall_share")
+    ask_wall = d.get("ask_wall_share") if d.get("ask_wall_share") is not None else row.get("ask_wall_share")
+    
+    cvd_trades = _f(d.get("cvd_trades") if d.get("cvd_trades") is not None else row.get("cvd_trades"))
+    cvd_ratio = d.get("cvd_ratio") if d.get("cvd_ratio") is not None else row.get("cvd_ratio")
+    
+    # Проверка надежности CVD (одинаково для train/serve)
     cvd_reliable = cvd_trades >= float(CVD_MIN_TRADES)
 
+    # Безопасное извлечение grade (может лежать в row или внутри plan)
+    grade = row.get("grade")
+    if grade is None and isinstance(row.get("plan"), dict):
+        grade = row["plan"].get("grade")
+
     return [
-        _grade_ord(row.get("grade")),
-        _f(d.get("spread_pct")),
-        _f(d.get("obi")),
-        _f(d.get("bid_wall_share")),
-        _f(d.get("ask_wall_share")),
-        _f(d.get("cvd_ratio")) if cvd_reliable else 0.0,
+        _grade_ord(grade),
+        _f(spread_pct),
+        _f(obi),
+        _f(bid_wall),
+        _f(ask_wall),
+        _f(cvd_ratio) if cvd_reliable else 0.0,
     ]
+
 
 
 def is_phantom_row(row: dict) -> bool:
