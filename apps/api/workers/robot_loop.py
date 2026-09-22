@@ -1215,17 +1215,23 @@ class RobotLoop:
             # off → passthrough (ничего). shadow/advisory → только лог ml_score.
             # full_auto → block/масштаб размера в guardrails. Любой сбой → как
             # rule-based (ML не на крит-пути, не мешает live).
+            # ── ML-слой (control plane, fail-open, default ML_MODE=off) ───────
+            # КРИТИЧЕСКИЙ ФИКС: Передаем реальные локальные переменные вместо ошибочных полей plan
             ml_eval = {"mode": "off", "ml_score": None, "action": "passthrough",
                        "allow": True, "size_multiplier": 1.0}
             try:
                 _ml_depth = {}
                 try:
-                    _ml_depth = OrderBookAnalyzer.analyze(
-                        ORDERBOOK_STORE.snapshot(symbol),
-                        levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
-                    ).as_dict()
+                    ob_snap = ORDERBOOK_STORE.snapshot(symbol)
+                    if ob_snap:
+                        _ml_depth = OrderBookAnalyzer.analyze(
+                            ob_snap,
+                            levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                        ).as_dict()
+                        _ml_depth["exchange"] = ob_feed_exchange()
                 except Exception:
                     _ml_depth = {}
+
                 ml_eval = self.ml_controller.evaluate_candidate({
                     "confidence": effective_confidence,
                     "grade": grade,
@@ -1234,25 +1240,18 @@ class RobotLoop:
                     "net_rr_tp1": plan.net_rr_tp1,
                     "net_rr_tp2": plan.net_rr_tp2,
                     "entry_depth": _ml_depth,
-                    # (#audit-2026-08-27) stop_price/required_margin/entry_price
-                    # были доступны здесь и раньше (тот же объект plan, из
-                    # которого уже брались net_rr_tp1/tp2), но не форвардились —
-                    # ml_features.row_to_features() без них тихо ставил
-                    # stop_distance_pct=0.0 и notional_usdt=0.0 на КАЖДОМ живом
-                    # предсказании, хотя модель обучена на реальных значениях
-                    # этих же полей из trade_outcomes.jsonl (services/
-                    # ml_trade_logger.py логирует stop_price/required_margin/
-                    # lifecycle.entry_price). Train/serve skew — оба поля были
-                    # признаны "решающими" в докстринге ml_features.py, а вживую
-                    # всегда обнулялись. Формат lifecycle.entry_price повторяет
-                    # то, что пишет ml_trade_logger.py, чтобы _entry_price()
-                    # читала его одинаково для лога и для живого кандидата.
-                    "stop_price": plan.stop_price,
-                    "required_margin": plan.required_margin,
-                    "lifecycle": {"entry_price": plan.entry_price},
+                    
+                    # Фикс: берем чистые локальные переменные float, которые инициализированы выше
+                    "stop_price": float(stop),
+                    "required_margin": float(plan.required_margin or 0.0),
+                    "lifecycle": {"entry_price": float(entry_price)},
                 })
-            except Exception:
-                pass
+            except Exception as exc:
+                # Вместо слепого pass пишем ошибку в логи, но защищаем цикл от падения (fail-open)
+                logger.error(f"[ROBOT_LOOP ML INTEGRATION ERROR] symbol={symbol}: {exc}", exc_info=True)
+                ml_eval = {"mode": "off", "ml_score": None, "action": "passthrough",
+                           "allow": True, "size_multiplier": 1.0}
+
 
             if ml_eval.get("action") == "block" and not ml_eval.get("allow", True):
                 # (#ml-explore-2026-07-09) Exploration-квота НА PAPER: каждый N-й
