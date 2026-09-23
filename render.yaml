@@ -211,7 +211,7 @@ services:
       - key: ML_MODE
         value: shadow
       - key: REGIME_EXP_SIZING_ENABLED
-        value: "false"
+        value: "true"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
         value: "false"
       - key: DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE
