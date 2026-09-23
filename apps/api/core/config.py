@@ -2,7 +2,7 @@ from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
-# Допустимые значения строковых режимов. Исключает тихие опечатки вроде "eforce".
+# Предохранитель от опечаток в строковых режимах окружения Render
 _MODE_CHOICES: dict[str, frozenset[str]] = {
     "ENTRY_IMPULSE_LATCH_MODE": frozenset({"shadow", "enforce"}),
     "TZ_MODE": frozenset({"shadow", "enforce"}),
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # ==========================================================================
-    # ⚙️ SYSTEM CORE & NETWORKING (APP / DATABASE / REDIS)
+    # SYSTEM CORE & NETWORKING (APP / DATABASE / REDIS)
     # ==========================================================================
     APP_ENV: str = "development"
     JWT_SECRET: str = "dev-jwt-secret-change-me"
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
 
     # ==========================================================================
-    # 📡 EXCHANGE CONTOURS (HTX & OKX API SATELLITE)
+    # EXCHANGE CONTOURS (HTX & OKX API SATELLITE & KRAKEN COLD STORAGE)
     # ==========================================================================
     ACTIVE_EXCHANGE: str = "htx"
     EXCHANGE_SWITCH_GUARD_ENABLED: bool = True
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     HTX_API_KEY: str = ""
     HTX_API_SECRET: str = ""
     HTX_API_HOSTNAME: str = ""
-    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,api.htx.com"
+    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,://htx.com"
     HTX_HTTP_TIMEOUT_MS: int = 15000
     HTX_CIRCUIT_FAILURE_THRESHOLD: int = 2
     HTX_CIRCUIT_OPEN_SECONDS: float = 120.0
@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     OKX_PROXY_URL: str = ""
     OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
     
+    KRAKEN_ENABLED: bool = True
+    KRAKEN_TIMEOUT_MS: int = 20000
+    KRAKEN_PROXY_URL: str = ""
+    KRAKEN_QUOTE: str = "USD"
+    KRAKEN_FUNDING_INTERVAL_HOURS: float = 1.0
+    HTX_FUNDING_INTERVAL_HOURS: float = 8.0
+    KRAKEN_TAKER_FEE: float = 0.0005
+    KRAKEN_COMPARE_CACHE_SEC: int = 60
+    KRAKEN_SPREAD_LOG_ENABLED: bool = True
+    KRAKEN_SPREAD_LOG_INTERVAL_SEC: int = 3600
+    KRAKEN_SPREAD_LOG_PATH: str = "storage/ml/venues_funding_spread.jsonl"
+    KRAKEN_SPREAD_HISTORY_MAX_LINES: int = 20000
+
     EGRESS_GUARD_ENABLED: bool = True
     EGRESS_DNS_TIMEOUT_SEC: float = 3.0
     EGRESS_CACHE_TTL_SEC: float = 30.0
@@ -78,21 +91,7 @@ class Settings(BaseSettings):
     EGRESS_MONITOR_MAX_BYTES: int = 20 * 1024 * 1024
 
     # ==========================================================================
-    # 📢 BROADCAST & TELEGRAM GATEWAYS
-    # ==========================================================================
-    TELEGRAM_BOT_TOKEN: str = ""
-    TELEGRAM_BOT_USERNAME: str = ""
-    TELEGRAM_OWNER_CHAT_ID: int = 0
-    TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
-    TELEGRAM_VIP_SIGNALS_CHAT_ID: int = 0
-    TELEGRAM_PROXY_URL: str = ""
-    TELEGRAM_CONNECT_TIMEOUT: float = 15.0
-    TELEGRAM_READ_TIMEOUT: float = 30.0
-    TELEGRAM_WEBHOOK_SECRET: str = ""
-    PUBLIC_API_URL: str = ""
-
-    # ==========================================================================
-    # 📉 GLOBAL RISK MANAGEMENT & CAPITAL ENVELOPES
+    # GLOBAL RISK MANAGEMENT, CAPITAL ENVELOPES & ANTI-DRAIN GATES
     # ==========================================================================
     RISK_EQUITY_USDT: float = 300.0
     RISK_PER_TRADE_PCT: float = 1.0
@@ -104,20 +103,17 @@ class Settings(BaseSettings):
     MAX_DRAWDOWN_PCT: float = 15.0
     MAX_TRADES_PER_DAY: int = 100
     
-    # Динамический калькулятор маржинальных слотов
     ENABLE_DYNAMIC_MARGIN_ALLOC: bool = True
     DYNAMIC_MARGIN_CAP_PCT_OF_FREE: float = 1.0
     DYNAMIC_MARGIN_FAIR_SHARE: bool = False
     DYNAMIC_MARGIN_LEVERAGE: float = 1.0
     DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE: float = 1.0
 
-    # Автономная сегментация бюджетов (Защита от перекрестного выедания маржи)
-    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0  # Бюджет TREND и CRT
-    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0          # Бюджет RANGE
-    CAPITAL_ENVELOPE_GRID_PCT: float = 5.0           # Бюджет SCALP
+    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0
+    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0
+    CAPITAL_ENVELOPE_GRID_PCT: float = 5.0
     UNIFIED_MARGIN_ACCOUNTING: bool = True
 
-    # Лимиты контроля просадки (Anti-Drain Guard)
     ANTI_DRAIN_ENABLED: bool = True
     ANTI_DRAIN_MIN_CONFIDENCE: float = 60.0
     ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
@@ -130,8 +126,8 @@ class Settings(BaseSettings):
     ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.90
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 1.20
     ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0
+    ANTI_DRAIN_MIN_NET_PNL_TP1_USDT: float = 0.0
 
-    # Ограничения перегрузки кластеров и кулдауны Churn-эффекта
     CORR_CLUSTER_ENABLED: bool = True
     CORR_CLUSTER_MAX_SAME_DIR: int = 2
     CORR_CLUSTER_PER_ENGINE: bool = True
@@ -145,9 +141,26 @@ class Settings(BaseSettings):
     REENTRY_ADVERSE_WINDOW_MINUTES: float = 240.0
     POST_LOSS_COOLDOWN_ENABLED: bool = True
     POST_LOSS_COOLDOWN_MIN: float = 25.0
-
     DAILY_REPORT_MIN_SAMPLE: int = 5
     TRADEABLE_REGIMES: str = ""
+
+    # ==========================================================================
+    # TELEGRAM GATEWAYS & BROADCASTS
+    # ==========================================================================
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_BOT_USERNAME: str = ""
+    TELEGRAM_OWNER_CHAT_ID: int = 0
+    TELEGRAM_FREE_SIGNALS_CHAT_ID: int = 0
+    TELEGRAM_VIP_SIGNALS_CHAT_ID: int = 0
+    TELEGRAM_PROXY_URL: str = ""
+    TELEGRAM_CONNECT_TIMEOUT: float = 15.0
+    TELEGRAM_READ_TIMEOUT: float = 30.0
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    PUBLIC_API_URL: str = ""
+
+    # ==========================================================================
+    # ROBOT MODES & MACHINE LEARNING EXECUTION FRAMEWORK
+    # ==========================================================================
     NEWS_ENABLED: bool = True
     ROBOT_MODE: str = "paper"
     TRADING_MODE: str = "paper_signal"
@@ -170,20 +183,42 @@ class Settings(BaseSettings):
     LIVE_EXCHANGE_STOP_VERIFY_SEC: float = 60.0
     LIVE_EXCHANGE_STOP_HALT_AFTER_FAILURES: int = 3
     LIVE_MAX_LEVERAGE: float = 10.0
-    TREND_MARGIN_MODE: str = "isolated"
-    ENABLE_FUTURES: bool = False
-    FUTURES_LEVERAGE: int = 10
     ALLOW_SHORTS: bool = True
     SIGNAL_PROFILE: str = "learning"
     EXECUTION_MARKET: str = "spot"
     SHORT_ALERT_THROTTLE_MINUTES: int = 60
     MIN_NET_PNL_RELAX_MARGIN_PCT: float = 0.01
 
+    WALKFORWARD_ENABLED: bool = True
+    WALKFORWARD_INTERVAL_SEC: int = 86400
+    WALKFORWARD_FOLDS: int = 4
+    WALKFORWARD_LOG_PATH: str = "storage/ml/walkforward.jsonl"
+    TRADE_OUTCOMES_PATH: str = "storage/ml/trade_outcomes.jsonl"
+    ML_OUTCOMES_STALE_HOURS: int = 72
+
+    ML_MODE: str = "shadow"
+    ML_LABEL_KIND: str = "beats_costs"
+    ML_LABEL_MIN_R: float = 0.3
+    ML_TRAIN_WINDOW_DAYS: float = 120.0
+    ML_MIN_TRAIN_SAMPLES: int = 200
+    ML_MIN_SCORE_TO_TRADE: float = 0.45
+    ML_AUTO_DEMOTE_ENABLED: bool = True
+    ML_MIN_AUC_FOR_AUTO: float = 0.55
+    ML_SIZE_MULT_MIN: float = 0.7
+    ML_SIZE_MULT_MAX: float = 1.25
+    ML_AUTO_RETRAIN: bool = True
+    ML_RETRAIN_INTERVAL_SEC: int = 86400
+    ML_TELEGRAM_ALERTS: bool = False
+    RESEARCH_WF_FOLDS: int = 5
+    RESEARCH_COST_ATR: float = 0.25
+
     VALIDATION_MIN_CLOSED_SIGNALS: int = 50
     VALIDATION_FAILED_SETUP_MAX_PCT: float = 35.0
     VALIDATION_POSITIVE_THEN_NEGATIVE_MAX_PCT: float = 25.0
 
-    # Храповики Продакшн Скоринга (Production Entry Gates)
+    # ==========================================================================
+    # PRODUCTION ENTRY GATES & GRADE QUALITY RATIOS
+    # ==========================================================================
     PROD_GATE_A_PLUS_MIN_SETUP: float = 76.0
     PROD_GATE_A_PLUS_MIN_CONFIDENCE: float = 68.0
     PROD_GATE_A_PLUS_MIN_RR_TP1: float = 0.95
@@ -207,37 +242,44 @@ class Settings(BaseSettings):
     GRADE_A_MIN_SCORE: float = 73.0
     GRADE_B_MIN_SCORE: float = 62.0
 
+    LEVERAGE_GRADE_A_PLUS: float = 1.0
+    LEVERAGE_GRADE_A: float = 0.7
+    LEVERAGE_GRADE_B: float = 0.4
+    
+    ML_SIZE_ALLOC_ENABLED: bool = True
+    ML_SIZE_FULL_MIN_SCORE: float = 0.45
+    ML_SIZE_LOW_MULT: float = 0.5
+    ML_EXPLORE_ENABLED: bool = False
+    ML_EXPLORE_EVERY_N: int = 3
+    ML_EXPLORE_SIZE_MULT: float = 0.5
+
     # ==========================================================================
-    # 🎯 ДВИЖОК №1: TREND (Классическое тренд-фолловинг KAMA контур)
+    # ENGINE 1: TREND (Классический тренд-фолловинг KAMA контур)
     # ==========================================================================
     TREND_TRIGGER_MODE: str = "enforce"
     TREND_TRIGGER_TF: str = "15m"
     TREND_MAX_EXTENSION_ATR: float = 3.5
-    
     TREND_RIDE_ENABLED: bool = True
     TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 0.8
     TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
-    
     TREND_CAPTURE_BAND_ENABLED: bool = True
     TREND_CAPTURE_ARM_PCT: float = 0.25
     TREND_CAPTURE_GIVEBACK_SHARE: float = 0.25
     TREND_CAPTURE_FLOOR_PCT: float = 0.30
-    
     TREND_HTF_EXTREME_VETO: bool = True
     TREND_HTF_RSI_HARD_OVERHEAT: float = 72.0
     TREND_HTF_RSI_HARD_OVERSOLD: float = 28.0
-    
     TREND_TP1_R_MULT: float = 1.7
     TREND_TP2_R_MULT: float = 2.0
     TREND_TP1_FLOOR_PCT: float = 1.2
     TREND_TP2_FLOOR_PCT: float = 2.0
-    
-    # Пороги MI Каскада переключения режимов флэт/тренд
     REGIME_TREND_ADX_MIN: float = 22.0
     REGIME_CHOP_ADX_MAX: float = 18.0
+    TREND_TRIGGER_ENABLED: bool = True
+    TREND_EXHAUSTION_GUARD: bool = True
 
     # ==========================================================================
-    # ↔️ ДВИЖОК №2: RANGE (Mean-Reversion канальный флэт)
+    # ENGINE 2: RANGE (Mean-Reversion канальный флэт)
     # ==========================================================================
     ENABLE_RANGE_STRATEGY: bool = True
     RANGE_MIN_WIDTH_PCT: float = 1.8
@@ -261,7 +303,7 @@ class Settings(BaseSettings):
     RANGE_POS_LONG_MAX: float = 0.60
 
     # ==========================================================================
-    # 🕯️ ДВИЖОК №3: CRT (Candle Range Theory — Premium/Discount сплиты)
+    # ENGINE 3: CRT (Candle Range Theory - Premium/Discount сплиты)
     # ==========================================================================
     ENABLE_CRT_STRATEGY: bool = True
     CRT_HTF_TF: str = "4h"
@@ -281,8 +323,6 @@ class Settings(BaseSettings):
     CRT_REQUIRE_MOMENTUM_ALIGN: bool = True
     CRT_REQUIRE_TREND_ALIGN: bool = True
     CRT_TP2_RENDER_RR: float = 2.0
-
-    # Вектор АТР расширения целей CRT
     CRT_TP2_DYNAMIC_ENABLED: bool = True
     CRT_TP2_DYNAMIC_MAX_RE: float = 3.5
     CRT_TP2_DYNAMIC_MAX_RR: float = 3.5
@@ -291,7 +331,7 @@ class Settings(BaseSettings):
     CRT_TP2_DYNAMIC_ATR_EXP_SPAN: float = 0.35
 
     # ==========================================================================
-    # ⚡ ДВИЖОК №4: SCALP (Микроструктура книги стакана)
+    # ENGINE 4: SCALP (Микроструктура книги стакана)
     # ==========================================================================
     ENABLE_SCALP_STRATEGY: bool = True
     SCALP_EDGE_ZONE: float = 0.25
@@ -308,70 +348,130 @@ class Settings(BaseSettings):
     SCALP_HTF_EXTREME_VETO: bool = True
     SCALP_HTF_RSI_OVERHEAT: float = 70.0
     SCALP_HTF_RSI_OVERSOLD: float = 30.0
+    SCALP_BREAKEVEN_ENABLED: bool = True
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.3
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.4
+    SCALP_BE_ARM_TP1_SHARE: float = 0.30
+    SCALP_TIME_STOP_ENABLED: bool = True
+    SCALP_TIME_STOP_MIN: float = 45.0
+    SCALP_TIME_STOP_HARD_MULT: float = 1.5
+    SCALP_ANTI_DRAIN_MAX_POSITION_MARGIN_PCT: float = 26.0
+    SCALP_ANTI_DRAIN_MIN_NET_RR_TP1: float = 0.30
+    SCALP_ANTI_DRAIN_MIN_NET_RR_TP2: float = 0.70
 
     # ==========================================================================
-    # 🛠️ PROTECTION, VOLATILITY & ELASTIC ATR RATCHETS
+    # PROTECTIONS, STRUCTURAL GATES & EXTENDED ATR RATCHETS (RESTORED)
     # ==========================================================================
+    TZ_TREND_TF: str = "1h"
+    TZ_ENTRY_TF: str = "15m"
+    TZ_ADX_MIN: float = 15.0
+    TZ_STOCH_ZONE: float = 45.0
+    TZ_MODE: str = "enforce"
+    TZ_ENFORCE_MIN_SAMPLE: int = 0
+    TZ_ENFORCE_CONDITIONS: str = "kama,di,obv,adx,adx_rising,stoch"
+    MOMENTUM_GATE_MODE: str = "enforce"
+    TP_REACH_CENSOR_ADJUST_ENABLED: bool = True
+    TP_REACH_MIN_UNCENSORED_SAMPLE: int = 12
+    TP_REACH_MODE: str = "enforce"
+    TP_REACH_EV_MARGIN: float = 1.0
+    TP_REACH_MIN_SAMPLE: int = 15
+    KAMA_ER_PERIOD: int = 10
+    KAMA_FAST: int = 2
+    KAMA_SLOW: int = 30
+    TZ_EXIT_CONDITIONS: str = "kama,adx"
+    TZ_EXIT_ADX_PEAK_MIN: float = 35.0
+    TZ_EXIT_ADX_FADE: float = 6.0
+    TZ_MFE_GIVEBACK_BACKSTOP_ENABLED: bool = True
+    TZ_MFE_GIVEBACK_MIN_MFE_PCT: float = 0.5
+    TZ_MFE_GIVEBACK_SHARE: float = 0.75
+    TZ_TREND_EXIT_ONLY: bool = True
+    TZ_STOP_KAMA_BUFFER_PCT: float = 0.50
+    TZ_EXIT_KAMA_BUFFER_PCT: float = 0.50
+    TZ_STOP_MIN_DIST_PCT: float = 0.30
+
     TZ_USE_DYNAMIC_ATR_STOPS: bool = True
-    TZ_STOP_MIN_DIST_ATR_MULT: int = 3
+    TZ_STOP_MIN_DIST_ATR_MULT: float = 3
     TZ_EXIT_KAMA_BUFFER_ATR_MULT: float = 2.0
-    TZ_STOP_LOSS_ATR_MULT: float = 4             # Дистанция стопа входа: ATR * 4 глубоко за шумом
-    TZ_HARD_STOP_LOSS_PCT: float = 2.5           # Аварийная планка принудительно урезана до 2.5% для live
+    TZ_STOP_LOSS_ATR_MULT: float = 4
+    TZ_HARD_STOP_LOSS_PCT: float = 5.0
     TZ_DISASTER_STOP_PCT: float = 5.0
 
-    # Временные люфты и шаги Giveback-Трейлов
     ATR_FAILED_SETUP_SOFT_MULT: float = 1.2
     ATR_FAILED_SETUP_MID_MULT: float = 1.8
     ATR_FAILED_SETUP_DEEP_MULT: float = 2.5
     ATR_PROTECT_START_MULT: float = 1.5
-    ATR_TRAIL_START_MULT: float = 2.2           # Эластичный следящий поводок остатка
+    ATR_TRAIL_START_MULT: float = 2.2
     ATR_CAPTURE_START_MULT: float = 2.0
 
-    # Прогрессивные Тейки и Защита Прибыли
+    FAILED_SETUP_MFE_ABSOLUTE_MIN_PCT: float = 0.50
+    FAILED_SETUP_LOSS_SOFT_PCT: float = -0.40
+    FAILED_SETUP_LOSS_MID_PCT: float = -0.65
+    FAILED_SETUP_LOSS_DEEP_PCT: float = -0.90
+    FAILED_SETUP_MIN_AGE_SEC: int = 600
+    FAILED_SETUP_EXIT_TREND_ENABLED: bool = True
+
+    BREAKEVEN_LOCK_ENABLED: bool = True
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.35
+    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.18
+    BREAKEVEN_LOCK_COST_BUFFER_PCT: float = 0.07
+    BREAKEVEN_LOCK_ARM_FLOOR_RATIO: float = 1.2
+    EXIT_REQUIRE_FLOW_CONFIRM: bool = False
+    BREAKEVEN_LOCK_HARD_FLOOR_PCT: float = -0.10
+
+    LIQUIDITY_GUARD_ENABLED: bool = True
+    LIQ_BLOCK_ENTRY: bool = True
+    LIQ_PROTECT_EXIT: bool = True
+    LIQ_SPREAD_ABS_MAX_BPS: float = 25.0
+    LIQ_SPREAD_BASELINE_MULT: float = 3.0
+    LIQ_EXIT_SPREAD_MULT: float = 4.0
+    LIQ_SPREAD_BASELINE_ALPHA: float = 0.05
+    LIQ_SPREAD_MIN_BASELINE_BPS: float = 1.0
+    LIQ_EXIT_MAX_AGE_SEC: float = 30.0
+
+    ANTI_CHOP_GATE_ENABLED: bool = True
+    ANTI_CHOP_ANCHOR_TF: str = "1h"
+    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.8
+    ANTI_CHOP_YOUNG_TREND_ENABLED: bool = True
+    ANTI_CHOP_YOUNG_ADX_MIN: float = 20.0
+    ANTI_CHOP_YOUNG_ADX_RISE_MIN: float = 0.5
+    ANTI_CHOP_YOUNG_DI_SPREAD_MIN: float = 15.0
+    HTF_ALIGN_ENABLED: bool = True
+    HTF_ALIGN_TF: str = "4h"
+
     TP1_PARTIAL_ENABLED: bool = True
-    TP1_PARTIAL_CLOSE_SHARE: float = 0.35       # Фиксируем на TP1 всего 35%, 65% отдаем тренду раннеров
-    TP2_PROGRESSIVE_ENABLED: bool = True
-    TP2_PARTIAL_CLOSE_SHARE: float = 0.50
-    TP2_TRAIL_LEG_SHARE: float = 0.5
-    TP2_TRAIL_MIN_BUFFER_PCT: float = 0.20
-    TP2_TRAIL_GIVEBACK_SHARE: float = 0.40
-    POST_TP1_TRAIL_ENABLED: bool = True
-    POST_TP1_TRAIL_MIN_MFE_PCT: float = 0.60
-    POST_TP1_TRAIL_GIVEBACK_SHARE: float = 0.40
-    POST_TP1_LOCK_FRAC: float = 0.0             # Выключаем жесткий зажим стопа на уровне TP1
-    
+    TP1_PARTIAL_CLOSE_SHARE: float = 0.35
     MIN_NET_RR_BLENDED: float = 1.10
     MIN_NET_RR_BLENDED_TP1_SHARE: float = 0.5
     TP1_MIN_PCT: float = 0.6
     TP1_MAX_PCT: float = 1.8
     TP1_DEFAULT_PCT: float = 1.2
     MIN_POST_TP1_EXIT_PCT: float = 0.80
-    MIN_PROTECTIVE_NET_USDT: float = 0.15        # Снизили долларовую окупаемость под микро-сайзы
+    MIN_PROTECTIVE_NET_USDT: float = 0.15
     MIN_PROTECTIVE_EXIT_PCT: float = 0.40
-    MIN_POST_TP1_EXIT_PCT_VALUE: float = 0.80
 
-    # Фильтры Карантина Истории Успеваемости Символов (Symbol Performance Guard)
-    SYMBOL_PERF_MIN_HISTORY: int = 10
-    SYMBOL_PERF_BLOCK_MIN_HISTORY: int = 12
-    SYMBOL_PERF_BLOCK_MAX_WINRATE: float = 48.0
-    SYMBOL_PERF_REDUCE_MAX_WINRATE: float = 48.0
-    SYMBOL_PERF_COOLDOWN_STREAK: int = 3
-    SYMBOL_PERF_COOLDOWN_STOPS: int = 3
-    SYMBOL_PERF_COOLDOWN_FAILED_SETUPS: int = 2
-    SYMBOL_PERF_SMALL_HISTORY_STOP_MULTIPLIER: float = 1.0
-    SYMBOL_PERF_WEAK_MULTIPLIER: float = 0.70
-    SYMBOL_PERF_GIVEBACK_MULTIPLIER: float = 0.60
-    SYMBOL_PERF_WEAK_PNL_TOLERANCE_USDT: float = 2.0
-    SYMBOL_PERF_GIVEBACK_TRIGGER: int = 3
-    SYMBOL_PERF_SEVERE_LOSS_PCT: float = 5.0
-    SYMBOL_PERF_SEVERE_MIN_HISTORY: int = 5
-    SYMBOL_PERF_WINDOW_HOURS: float = 168.0
-    SYMBOL_PERF_SUMMARY_WINDOW_HOURS: float = 720.0
-    SYMBOL_PERF_PROBE_MULTIPLIER: float = 0.40
+    LEVELS_VP_ENABLED: bool = True
+    LEVELS_VP_TF: str = "1h"
+    LEVELS_VP_BINS: int = 50
+    LEVELS_VP_TTL_SEC: float = 900.0
+    LEVELS_VP_STOP_BUFFER_PCT: float = 0.10
+    LEVELS_VP_STOP_MAX_EXTRA_PCT: float = 0.40
+    LEVELS_VP_TP_BUFFER_PCT: float = 0.10
+    LEVELS_VP_TP_MIN_DIST_PCT: float = 0.35
+    LEVELS_STRUCT_STOP_ENABLED: bool = True
+    LEVELS_STRUCT_STOP_BUFFER_PCT: float = 0.15
+    LEVELS_MAX_STOP_PCT: float = 3.0
 
-    # ==========================================================================
-    # 📊 ORDER BOOK WEB_SOCKET INSPECTION (OBI / CVD FLOW)
-    # ==========================================================================
+    MFE_CAPTURE_ENABLED: bool = True
+    MFE_CAPTURE_START_PCT: float = 0.60
+    MFE_CAPTURE_DRAWDOWN_PCT: float = 0.25
+    MFE_CAPTURE_PROTECT_SHARE: float = 0.40
+    PROTECTIVE_MFE_START_PCT: float = 0.80
+    PROTECTIVE_DRAWDOWN_SHARE: float = 0.35
+    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
+
+    # =========================================================================
+    # ORDER BOOK INSPECTION (OBI / CVD WS FLOW MECHANICS)
+    # =========================================================================
     ENABLE_ORDERBOOK_ENGINE: bool = False
     OB_MARKET_TYPE: str = "spot"
     OB_EXCHANGE: str = ""
@@ -386,7 +486,6 @@ class Settings(BaseSettings):
     OB_MAX_SPREAD_PCT: float = 0.08
     OB_POSITION_MAX_SPREAD_PCT: float = 0.12
     
-    # Лимиты OBI гейтов для ТРЕНДОВЫХ (Position) позиций
     OB_POSITION_OBI_CONFIRM: float = 0.05
     OB_POSITION_WALL_CONFIRM_SHARE: float = 0.20
     OB_POSITION_OBI_HARD_VETO: float = 0.80
@@ -396,7 +495,6 @@ class Settings(BaseSettings):
     OB_POSITION_CVD_THIN_RATIO: float = 1.0
     OB_POSITION_CVD_THIN_MIN_TRADES: int = 15
     
-    # Лимиты OBI гейтов для СКАЛЬПИНГА и MR-коридоров
     OB_OBI_CONFIRM: float = 0.15
     OB_WALL_CONFIRM_SHARE: float = 0.30
     OB_OBI_HARD_VETO: float = 0.45
@@ -411,17 +509,9 @@ class Settings(BaseSettings):
     OB_GATE_ENTRIES: bool = True
     OB_ACCELERATE_EXITS: bool = True
 
-    # Сопряжение осей Уверенности (Smart Leverage Контур)
-    ENABLE_FUTURES_EXECUTION: bool = False
-    ENABLE_SMART_LEVERAGE: bool = False
-    MAX_LEVERAGE: float = 3.0
-    PORTFOLIO_RISK_BUDGET_PCT: float = 6.0
-    GRADE_AXIS_VALIDATED: bool = False
-    CONFIDENCE_SYMMETRIC_BLEND: bool = True
-
-    # ==========================================================================
-    # 📉 PARALLEL INACTIVE NETWORKS (GRID & FUNDING ARBITRAGE - COLD STORAGE)
-    # ==========================================================================
+    # =========================================================================
+    # COLD CONTROLS: GRID, ARBITRAGE & STOCHASTIC COLD STORAGE
+    # =========================================================================
     GRID_ENABLED: bool = False
     GRID_KILL_SWITCH_ENABLED: bool = True
     GRID_NEUTRAL_FLIP_NEEDS_BREAKOUT: bool = True
@@ -469,8 +559,6 @@ class Settings(BaseSettings):
     GRID_BREAKOUT_ATR_DIST: float = 1.6
     GRID_RANGE_ATR_DIST: float = 0.8
     GRID_RANGE_CONFIRM_TICKS: int = 3
-    GRID_MARGIN_MODE: str = "isolated"
-    GRID_MARGIN_ISOLATED_MAX_LEV: float = 1.0
 
     ENABLE_FUNDING_ARB: bool = False
     FUNDING_OBSERVE_ENABLED: bool = True
@@ -493,19 +581,7 @@ class Settings(BaseSettings):
     FUNDING_ARB_AUTO_OPEN_PAPER: bool = True
     FUNDING_ARB_ASSUMED_HOLD_PERIODS_OVERRIDE: int = 0
     FUNDING_LEVERAGE: int = 2
-    PAYMENT_PENDING_EXPIRE_HOURS: int = 48
-    KRAKEN_ENABLED: bool = True
-    KRAKEN_TIMEOUT_MS: int = 20000
-    KRAKEN_PROXY_URL: str = ""
-    KRAKEN_QUOTE: str = "USD"
-    KRAKEN_FUNDING_INTERVAL_HOURS: float = 1.0
-    HTX_FUNDING_INTERVAL_HOURS: float = 8.0
-    KRAKEN_TAKER_FEE: float = 0.0005
-    KRAKEN_COMPARE_CACHE_SEC: int = 60
-    KRAKEN_SPREAD_LOG_ENABLED: bool = True
-    KRAKEN_SPREAD_LOG_INTERVAL_SEC: int = 3600
-    KRAKEN_SPREAD_LOG_PATH: str = "storage/ml/venues_funding_spread.jsonl"
-    KRAKEN_SPREAD_HISTORY_MAX_LINES: int = 20000
+
     CROSS_FARB_ENABLED: bool = False
     CROSS_FARB_CARRY_FLOOR_ENABLED: bool = True
     CROSS_FARB_SYMBOLS: str = "AVAX/USDT,XRP/USDT,TRX/USDT,SOL/USDT"
@@ -526,7 +602,6 @@ class Settings(BaseSettings):
     CROSS_FARB_MAX_HOLD_DAYS: float = 14.0
     CROSS_FARB_STATE_PATH: str = "storage/ml/cross_funding_arb_state.json"
 
-    # Контур Аффилиации и подписок (Billing Infrastructure)
     HTX_AFFILIATE_LINK: str = ""
     AFFILIATE_FREE_VIP_DAYS: int = 30
     VIP_INVITE_LINK: str = ""
@@ -539,15 +614,119 @@ class Settings(BaseSettings):
     OKX_AFFILIATE_CODE: str = ""
     OKX_AFFILIATE_VERIFY_ENABLED: bool = False
     AFFILIATE_TRIAL_ONE_PER_USER: bool = True
+    PAYMENT_PENDING_EXPIRE_HOURS: int = 48
+    VIP_STARS_PRICE_30: int = 0
+    VIP_STARS_PRICE_90: int = 0
+    VIP_INVITE_EXPIRE_HOURS: int = 24
+    MARKET_CONNECTIVITY_MAX_LATENCY_MS: int = 15000
+    MARKET_CONNECTIVITY_MAX_SPREAD_PCT: float = 0.75
+    EXCHANGE_RECONCILIATION_ENABLED: bool = True
+    EXCHANGE_RECONCILIATION_INTERVAL_SEC: float = 300.0
+    
+    INTEL_EVENT_DEDUP_MINUTES: float = 10.0
+    INTEL_SCAN_CACHE_SEC: float = 60.0
+    MEMORY_LOG_INTERVAL_SEC: float = 600.0
+    MEMORY_WARN_SHARE: float = 0.85
+    TRAJ_RECORD_ENABLED: bool = True
+    TRAJ_MIN_STEP_PCT: float = 0.05
+    TRAJ_MAX_POINTS: int = 400
+    SCAN_INTERVAL_SEC: int = 60
+    MANAGE_INTERVAL_SEC: int = 10
+    ENABLE_DIGEST: bool = True
+    DIGEST_INTERVAL_SEC: int = 7200
+    SCAN_SILENCE_MIN_SEC: float = 300.0
+    REJECT_EVENT_THROTTLE_MINUTES: int = 15
+    
+    SETUP_MIN_TOTAL_SCORE: float = 55.0
+    SETUP_TREND_SCORE_MARGIN: float = 5.0
+    SETUP_VOTING_MIN_TOTAL_SCORE: float = 58.0
+    RADAR_WATCH_MIN_TOTAL_SCORE: float = 50.0
+    LEARNING_SETUP_STRONG_SCORE: float = 70.0
+    STRICT_SETUP_MIN_SCORE: float = 62.0
+    LEARNING_SETUP_MIN_SCORE: float = 62.0
+    LEARNING_SETUP_MIN_TREND_ALIGNMENT: float = 32.0
+    LEARNING_SETUP_MIN_VOLUME_CONFIRMATION: float = 8.0
+    ALLOW_WEAK_VOLUME_TREND_ENTRIES: bool = False
+    LEARNING_TREND_CONTINUATION_MIN_TREND_ALIGNMENT: float = 32.0
+    LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION: float = 8.0
+    LEARNING_TREND_CONTINUATION_MIN_STRUCTURE_QUALITY: float = 12.0
+    LEARNING_TREND_CONTINUATION_MIN_FINAL_SCORE: float = 55.0
+    
+    LEVELS_ENTRY_TF: str = "5m"
+    LEVELS_SIGNAL_TF: str = "15m"
+    LEVELS_CONTEXT_TF: str = "1h"
+    LEVELS_STOP_ATR_MULT: float = 2.8
+    LEVELS_MIN_STOP_PCT: float = 0.30
+    
+    TREND_TP2_DYNAMIC_ENABLED: bool = False
+    TREND_TP2_DYNAMIC_TF: str = "1h"
+    TREND_TP2_DYNAMIC_MAX_R_MULT: float = 6.0
+    TREND_TP2_DYNAMIC_ADX_BASE: float = 23.0
+    TREND_TP2_DYNAMIC_ADX_SPAN: float = 27.0
+    TREND_TP2_DYNAMIC_ATR_EXP_SPAN: float = 0.35
+    TREND_TP2_DYNAMIC_KAMA_SPAN_ATR: float = 0.60
+    TREND_TP2_DYNAMIC_W_ADX: float = 0.5
+    TREND_TP2_DYNAMIC_W_ATR: float = 0.3
+    TREND_TP2_DYNAMIC_W_KAMA: float = 0.2
+    PAPER_STOP_ADVERSE_SLIPPAGE_PCT: float = 0.05
+    SPOT_TAKER_FEE: float = 0.002
+    SPOT_MAKER_FEE: float = 0.002
+    FUTURES_TAKER_FEE: float = 0.0005
+    FUTURES_MAKER_FEE: float = 0.0002
+    SLIPPAGE_BUFFER_PCT: float = 0.0002
+    FUNDING_BUFFER_PCT: float = 0.0003
+    FUNDING_PERIOD_HOURS_DEFAULT: float = 8.0
+    FUNDING_EXPECTED_HOLD_HOURS: float = 1.0
+    FUNDING_FALLBACK_RATE_PCT: float = 0.01
+    
+    ENTRY_ZONE_DEPTH_AWARE: bool = True
+    ENTRY_ZONE_WIDTH_PCT: float = 0.30
+    ENTRY_ZONE_LIMIT_WIDTH_PCT: float = 0.10
+    ENTRY_ZONE_MAX_MARKET_SPREAD_PCT: float = 0.05
+    ENTRY_ZONE_MIN_NEAR_DEPTH_SHARE: float = 0.25
+    ENTRY_ZONE_ADVERSE_CVD_RATIO: float = 0.25
+    ENTRY_ZONE_CVD_MIN_TRADES: int = 20
+    ENTRY_ZONE_MAX_DRIFT_PCT: float = 0.60
+    ENTRY_ZONE_TTL_SEC: float = 45.0
+    ENTRY_ORDER_TYPE: str = "limit"
+    FUNDING_ARB_CONFIRM_ENABLED: bool = True
+    FUNDING_ARB_MIN_OBSERVATIONS: int = 6
+    FUNDING_ARB_OBSERVATION_WINDOW_HOURS: float = 72.0
+    FUNDING_ARB_MIN_SIGN_CONSISTENCY: float = 0.85
+    FUNDING_ARB_CONSERVATIVE_QUANTILE: float = 0.25
+    FUNDING_ARB_CONFIRM_HOLD_PERIODS: int = 30
+    FUNDING_ARB_BASIS_STRESS_PCT: float = 0.30
+    FUNDING_RATE_LOG_PATH: str = "storage/ml/funding_rates.jsonl"
+    HTX_MARKET_TYPE: str = "spot"
 
-    # ==========================================================================
-    # ⚙️ ДИНАМИЧЕСКИЕ СВОЙСТВА И МЕТОДЫ КЛАССА SETTINGS (DYNAMIC EVALUATION)
-    # ==========================================================================
-    def stars_price_for_plan(self, plan_code: str) -> int:
-        return {
-            "vip_30": self.VIP_STARS_PRICE_30,
-            "vip_90": self.VIP_STARS_PRICE_90,
-        }.get(plan_code, 0)
+    # =========================================================================
+    # DYNAMIC EVALUATION PROPERTIES & BILLING COMPATIBILITY METHODS
+    # =========================================================================
+    @property
+    def execution_market_type(self) -> str:
+        """Рынок исполнения сигналов биржи контура."""
+        return "swap" if self.ENABLE_FUTURES_EXECUTION else self.MARKET_TYPE
+
+    @property
+    def active_exchange(self) -> str:
+        """Нормализованное имя активной торговой площадки."""
+        value = str(getattr(self, "ACTIVE_EXCHANGE", "htx") or "").strip().lower()
+        return value if value in ("htx", "okx") else "htx"
+
+    @property
+    def execution_leverage(self) -> int:
+        """Расчет торгового плеча на основе активного типа рынка."""
+        if self.ENABLE_FUTURES_EXECUTION:
+            return max(int(self.FUTURES_LEVERAGE), 1)
+        return 1
+
+    @property
+    def grid_effective_margin_mode(self) -> str:
+        """Защитный переключатель кросс-маржи сетки при плече > 1x."""
+        lev = float(getattr(self, "GRID_LEVERAGE", 1.0) or 1.0)
+        if lev > float(getattr(self, "GRID_MARGIN_ISOLATED_MAX_LEV", 1.0)):
+            return "cross"
+        return str(getattr(self, "GRID_MARGIN_MODE", "isolated")).lower()
 
     @property
     def cors_origins(self) -> List[str]:
@@ -555,7 +734,8 @@ class Settings(BaseSettings):
         extra = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
         return list(dict.fromkeys(defaults + extra))
 
-    def max_order_notional(self, equity_usdt: float | None = None, leverage: float | None = None) -> float:
+    def max_order_notional(self, equity_usdt: float | None = None,
+                           leverage: float | None = None) -> float:
         pct = float(getattr(self, "LIVE_MAX_ORDER_NOTIONAL_PCT", 0.0) or 0.0)
         absolute = float(getattr(self, "LIVE_MAX_ORDER_NOTIONAL_USDT", 0.0) or 0.0)
         if pct <= 0 or not equity_usdt or float(equity_usdt) <= 0:
@@ -586,51 +766,12 @@ class Settings(BaseSettings):
     def grid_symbols(self) -> List[str]:
         return [s.strip().upper() for s in self.GRID_SYMBOLS.split(",") if s.strip()]
 
-    @property
-    def execution_market_type(self) -> str:
-        return "swap" if (self.ENABLE_LIVE_ORDERS or self.ENABLE_FUTURES_EXECUTION) else self.MARKET_TYPE
-
-    @property
-    def active_exchange(self) -> str:
-        value = str(getattr(self, "ACTIVE_EXCHANGE", "htx") or "").strip().lower()
-        return value if value in ("htx", "okx") else "htx"
-
-    @property
-    def execution_leverage(self) -> int:
-        if self.execution_market_type == "swap":
-            return max(int(self.FUTURES_LEVERAGE), 1)
-        return 1
-
-    @property
-    def grid_effective_margin_mode(self) -> str:
-        lev = float(getattr(self, "GRID_LEVERAGE", 1.0) or 1.0)
-        if lev > float(getattr(self, "GRID_MARGIN_ISOLATED_MAX_LEV", 1.0)):
-            return "cross"
-        return str(getattr(self, "GRID_MARGIN_MODE", "isolated")).lower()
-
-    @property
-    def is_live_enabled(self) -> bool:
-        return bool(self.ENABLE_LIVE_ORDERS or self.TRADING_MODE in ["live", "live_limited"])
-
-    @property
-    def should_auto_create_schema(self) -> bool:
-        return bool(self.DB_AUTO_CREATE_SCHEMA and self.APP_ENV != "production")
-
-    @property
-    def database_url(self) -> str:
-        if self.DATABASE_URL:
-            url = self.DATABASE_URL
-            if url.startswith("postgres://"):
-                url = "postgresql://" + url[len("postgres://"):]
-            return url
-        return (
-            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
-
-    # Верификатор жестких блокировок Среды Продакшена (Production Blockers)
+    # =========================================================================
+    # PRODUCTION RIGID BLOCKERS VERIFIER
+    # =========================================================================
     def production_blockers(self) -> list[str]:
         blockers: list[str] = []
+
         if self.APP_ENV == "production":
             if self.DB_AUTO_CREATE_SCHEMA:
                 blockers.append("DB_AUTO_CREATE_SCHEMA must be disabled in production; run Alembic migrations")
@@ -650,14 +791,14 @@ class Settings(BaseSettings):
             else:
                 if not self.HTX_API_KEY or not self.HTX_API_SECRET:
                     blockers.append("HTX API credentials are not configured")
-        
+
         if self.ENABLE_LIVE_ORDERS and self.TRADING_MODE not in ["live", "live_limited"]:
             blockers.append("ENABLE_LIVE_ORDERS requires TRADING_MODE=live or live_limited")
         if self.ENABLE_LIVE_ORDERS and self.ROBOT_MODE == "paper":
             blockers.append("ENABLE_LIVE_ORDERS cannot run with ROBOT_MODE=paper")
         if self.ENABLE_LIVE_ORDERS and not self.TELEGRAM_BOT_TOKEN:
             blockers.append("live orders require Telegram owner alerts")
-            
+
         if self.ENABLE_LIVE_ORDERS:
             lev = max(1.0, min(float(self.FUTURES_LEVERAGE or 1), float(self.LIVE_MAX_LEVERAGE)))
             typical_notional = float(self.RISK_EQUITY_USDT) * float(self.MAX_POSITION_MARGIN_PCT) * lev
@@ -672,11 +813,19 @@ class Settings(BaseSettings):
                 )
             if float(self.LIVE_MAX_LEVERAGE) > 1.0 and not self.ENABLE_FUTURES:
                 blockers.append("LIVE_MAX_LEVERAGE > 1 requires ENABLE_FUTURES=true")
-                
+
         if not self.GRADE_AXIS_VALIDATED:
             grade_sizing = []
+            if self.ENABLE_SMART_LEVERAGE:
+                grade_sizing.append(
+                    f"ENABLE_SMART_LEVERAGE (левередж по грейдам: A={self.LEVERAGE_GRADE_A}, "
+                    f"B={self.LEVERAGE_GRADE_B})"
+                )
             if float(self.DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE) < 1.0:
-                grade_sizing.append(f"DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE={self.DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE}")
+                grade_sizing.append(
+                    f"DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE={self.DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE} "
+                    f"(режет размер B ниже грейда A)"
+                )
             if grade_sizing:
                 blockers.append(
                     "grade-based sizing is enabled (" + ", ".join(grade_sizing) + ") "
@@ -687,15 +836,39 @@ class Settings(BaseSettings):
                     "the losing bucket. Fix the composite score, re-measure, then set "
                     "GRADE_AXIS_VALIDATED=true deliberately"
                 )
-                
-        # ФИКС: Передаем дефолтное значение "off" в getattr, чтобы отсутствие любой переменной НЕ рушило uvicorn
+
         for key, allowed in _MODE_CHOICES.items():
-            value = str(getattr(self, key, "off") or "").lower().strip()
+            value = str(getattr(self, key, "") or "").lower().strip()
             if value and value not in allowed:
                 blockers.append(
-                    f"{key}={value!r} is not a valid mode; expected one of {sorted(allowed)}."
+                    f"{key}={value!r} is not a valid mode; expected one of "
+                    f"{sorted(allowed)}. Modes are compared as strings, so an "
+                    f"unrecognised value silently falls back to the permissive "
+                    f"branch and disarms the gate without a word in the log"
                 )
-                
+
+        if self.ENABLE_FUNDING_ARB and not self.ENABLE_FUTURES:
+            blockers.append("ENABLE_FUNDING_ARB requires ENABLE_FUTURES=true for HTX swap hedge")
+
+        if self.ENABLE_LIVE_ORDERS and not self.UNIFIED_MARGIN_ACCOUNTING:
+            parallel = [
+                name for name, on in (
+                    ("funding arb", self.ENABLE_FUNDING_ARB),
+                    ("grid", self.GRID_ENABLED and not self.GRID_KILL_SWITCH_ENABLED),
+                ) if on
+            ]
+            if parallel:
+                blockers.append(
+                    "live orders with parallel capital consumers ("
+                    + ", ".join(parallel)
+                    + ") require unified margin accounting: used_margin() counts "
+                    "only Signal rows, so arb hedges and grid baskets are invisible "
+                    "and contours race for the same balance. Implement "
+                    "capital_envelopes.used_usdt for every contour and set "
+                    "UNIFIED_MARGIN_ACCOUNTING=true, or disable the parallel "
+                    "consumers for the live ramp-up"
+                )
+
         return blockers
 
 settings = Settings()
