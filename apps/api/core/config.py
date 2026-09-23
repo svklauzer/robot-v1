@@ -588,8 +588,7 @@ class Settings(BaseSettings):
 
     @property
     def execution_market_type(self) -> str:
-        """Рынок исполнения. Возвращает swap, если включены живые ордера ИЛИ фьючерсный контур."""
-        return "swap" if (self.ENABLE_LIVE_ORDERS or self.ENABLE_FUTURES) else self.MARKET_TYPE
+        return "swap" if self.ENABLE_LIVE_ORDERS else self.MARKET_TYPE
 
     @property
     def active_exchange(self) -> str:
@@ -598,8 +597,7 @@ class Settings(BaseSettings):
 
     @property
     def execution_leverage(self) -> int:
-        """Расчет плеча. Применяет FUTURES_LEVERAGE для любого swap-рынка (и OKX, и HTX)."""
-        if self.execution_market_type == "swap":
+        if self.active_exchange == "okx":
             return max(int(self.FUTURES_LEVERAGE), 1)
         return 1
 
