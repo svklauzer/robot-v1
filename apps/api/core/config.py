@@ -588,7 +588,6 @@ class Settings(BaseSettings):
 
     @property
     def execution_market_type(self) -> str:
-        """Рынок исполнения. Использовано корректное поле ENABLE_FUTURES_EXECUTION."""
         return "swap" if (self.ENABLE_LIVE_ORDERS or self.ENABLE_FUTURES_EXECUTION) else self.MARKET_TYPE
 
     @property
@@ -598,7 +597,6 @@ class Settings(BaseSettings):
 
     @property
     def execution_leverage(self) -> int:
-        """Применяет FUTURES_LEVERAGE для любого swap-рынка (и OKX, и HTX)."""
         if self.execution_market_type == "swap":
             return max(int(self.FUTURES_LEVERAGE), 1)
         return 1
@@ -690,8 +688,9 @@ class Settings(BaseSettings):
                     "GRADE_AXIS_VALIDATED=true deliberately"
                 )
                 
+        # ФИКС: Передаем дефолтное значение "off" в getattr, чтобы отсутствие любой переменной НЕ рушило uvicorn
         for key, allowed in _MODE_CHOICES.items():
-            value = str(getattr(self, key, "") or "").lower().strip()
+            value = str(getattr(self, key, "off") or "").lower().strip()
             if value and value not in allowed:
                 blockers.append(
                     f"{key}={value!r} is not a valid mode; expected one of {sorted(allowed)}."
