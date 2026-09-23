@@ -1,9 +1,8 @@
+# Файл: apps/api/core/config.py
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
-# (#mode-typo-2026-09-05) Допустимые значения строковых режимов. Список живёт
-# рядом с проверкой в production_blockers(): гейт, сравнивающий режим строкой,
-# без него разоружается опечаткой молча.
 _MODE_CHOICES: dict[str, frozenset[str]] = {
     "ENTRY_IMPULSE_LATCH_MODE": frozenset({"shadow", "enforce"}),
     "TZ_MODE": frozenset({"shadow", "enforce"}),
@@ -13,13 +12,25 @@ _MODE_CHOICES: dict[str, frozenset[str]] = {
     "ML_MODE": frozenset({"off", "shadow", "advisory", "full_auto"}),
 }
 
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # ==================================================================
+    # 0. ГЛОБАЛЬНЫЙ КЛАССИФИКАТОР РЫНОЧНЫХ РЕЖИМОВ (Regime Arbiter)
+    # ==================================================================
+    # Переменная управляет глобальным распределением прав. 
+    # Если пустая строка "" — бот использует автоматический вызов MI-Engine (Market Intelligence)
+    # Допустимые режимы для ручной фиксации: "trend_only", "range_only", "volatile_scalp", ""
+    ACTIVE_MARKET_REGIME_OVERRIDE: str = ""
+    
+    # Границы переключения контуров
+    REGIME_TREND_ADX_MIN: float = 22.0          # Выше этого порога на 1h — рынок бесспорно трендовый
+    REGIME_CHOP_ADX_MAX: float = 18.0           # Ниже этого порога на 1h — глубокий флэт/боковик
+    REGIME_MIN_HISTORY_FOR_CALIB: int = 15
 
     # =========================
     # APP
@@ -258,6 +269,8 @@ class Settings(BaseSettings):
     # движок активным, но требует входа у опоры (extension <= порога), где
     # математически есть риск/прибыль, вместо покупки/шорта в случайной точке
     # очередного скана.
+
+    ENABLE_TREND_STRATEGY: bool = True
     TREND_TRIGGER_MODE: str = "enforce"
 
     # (#tz-shadow-2026-08-03) Условия входа по ТЗ.
@@ -1150,6 +1163,7 @@ class Settings(BaseSettings):
     CRT_TARGETS_MODE: str = "extended"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
+    CRT_TP2_RENDER_RR: float = 2.0               # Целевой R:R для фиксации хвостов
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
     # (#crt-tp2-dynamic-2026-08-27) Зеркало TREND_TP2_DYNAMIC_* без KAMA-члена
     # (CRT её не считает). Работает ТОЛЬКО когда CRT_TARGETS_MODE=extended —
@@ -1672,7 +1686,13 @@ class Settings(BaseSettings):
     # Два разных порога под одним именем «дневной лимит» — ровно тот случай,
     # когда настройка выглядит поднятой, а поведение не меняется.
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 6.0
-    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 10.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 15.0
+
+    # Изоляция бюджетов по контурам (Capital Envelopes)
+    # В сумме строго 95% (5% — неприкосновенный буфер под экстренные сквизы и издержки)
+    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0  # Доля TREND и CRT движков
+    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0          # Доля лимитных RANGE сетапов
+    CAPITAL_ENVELOPE_GRID_PCT: float = 5.0          # Резерв под микро-скальпинг
 
     # =========================
     # PRODUCTION ENTRY GATE
