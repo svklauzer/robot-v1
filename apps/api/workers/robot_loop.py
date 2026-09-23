@@ -658,15 +658,23 @@ class RobotLoop:
                     db.flush()
                     continue
 
-            # Динамический бюджет применяем к ТРЕНДОВЫМ позициям (не range/scalp/crt —
-            # у них свой малый scalp-сайзинг). Кандидат один → весь free; несколько →
-            # поровну. None → старый %-сайзинг.
-            _pos_margin_cap = dyn_budget if (dyn_alloc and dyn_budget and not is_range) else None
-            # (#grade-ml-2026-07-06) Кэп «одинокого кандидата» больше НЕ по грейду
-            # (грейд по факту всегда B — пороги A/A+ недостижимы). Базовый план строим
-            # на полный бюджет (dyn_budget), а conviction-сайзинг по ml_score применяем
-            # ПОСЛЕ ML-оценки (там ml_score уже известен). ML off → откат на grade.
-            # См. блок «Conviction sizing» ниже.
+            # ==============================================================================
+            # 🎛️ СИСТЕМНЫЙ ФИКС: РАСЦЕПЛЕНИЕ СТРАТЕГИЙ И РОУТИНГ МАРЖИНАЛЬНЫХ КОНВЕРТОВ
+            # ==============================================================================
+            # Передаем точное текстовое имя result.regime в TradePlanBuilder вместо
+            # устаревшего бинарного флага scalp=is_range, который склеивал логику движков.
+            # Извлекаем предел маржинального конверта для конкретного режима работы.
+            try:
+                from services.market_routing import get_strategy_margin_cap
+                _strategy_margin_cap = get_strategy_margin_cap(getattr(result, "regime", "trend"), balance_usdt)
+            except Exception as e:
+                _strategy_margin_cap = None
+                logger.warning(f"[ROBOT_LOOP REGIME MATRIX WARNING] Не удалось рассчитать лимит конверта: {e}")
+
+            # Динамический бюджет (dyn_budget) применяется к трендовым позициям.
+            # Для RANGE, CRT и SCALP пробрасывается изолированный потолок _strategy_margin_cap.
+            _pos_margin_cap = dyn_budget if (dyn_alloc and dyn_budget and not is_range) else _strategy_margin_cap
+
             plan = self.trade_plan_builder.build_plan(
                 symbol=symbol,
                 side=result.action,
@@ -675,9 +683,11 @@ class RobotLoop:
                 tp1=tp1,
                 tp2=tp2,
                 balance_usdt=balance_usdt,
-                scalp=is_range,
+                regime=str(getattr(result, "regime", "trend")),  # ПРЯМАЯ ИНЪЕКЦИЯ КОНТРАКТА РЕЖИМА V3!
                 position_margin_usdt_cap=_pos_margin_cap,
             )
+            # ==============================================================================
+
 
             if not plan.is_valid:
                 # (а) Тихий скип: при динамическом сплите низкая свободная маржа даёт
