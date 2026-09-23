@@ -358,7 +358,7 @@ class Settings(BaseSettings):
     # выборку — на трёх точках частота это не частота.
     TP_REACH_MIN_UNCENSORED_SAMPLE: int = 12
 
-    TP_REACH_MODE: str = "enforce"
+    TP_REACH_MODE: str = "shadow"
     # Запас к порогу частоты. 1.0 — порог ровно 1/(1+RR), без запаса.
     #
     # Порога «во сколько раз TP1 может превышать медианный ход» больше НЕТ, и
