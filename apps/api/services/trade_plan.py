@@ -141,7 +141,7 @@ class TradePlanBuilder:
 
         entry_fee_kwargs = ({"entry_liquidity": "maker"} if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() == "limit" else {})
 
-        # Фикс коллизии аргументов: Вычисляем ликвидность на основе типа ордера
+        # Фикс сигнатуры аргументов: Заменяем target_price на exit_price
         _target_liquidity = "maker" if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() == "limit" else "taker"
 
         tp1_preview = self.cost_engine.estimate(
@@ -149,7 +149,7 @@ class TradePlanBuilder:
             market_type=market_type,
             side=side,
             entry_price=entry_price,
-            target_price=tp1,
+            exit_price=tp1,  # ИСПРАВЛЕНО: Было target_price=tp1
             qty=qty,
             entry_liquidity=_target_liquidity,
             leverage=leverage_value
@@ -160,7 +160,7 @@ class TradePlanBuilder:
             market_type=market_type,
             side=side,
             entry_price=entry_price,
-            target_price=tp2,
+            exit_price=tp2,  # ИСПРАВЛЕНО: Было target_price=tp2
             qty=qty,
             entry_liquidity=_target_liquidity,
             leverage=leverage_value
@@ -171,7 +171,7 @@ class TradePlanBuilder:
             market_type=market_type,
             side=side,
             entry_price=entry_price,
-            target_price=stop_price,
+            exit_price=stop_price,  # ИСПРАВЛЕНО: Было target_price=stop_price
             qty=qty,
             entry_liquidity=_target_liquidity,
             leverage=leverage_value
