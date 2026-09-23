@@ -310,18 +310,23 @@ class MarketIntelligenceEngine:
         cache[symbol] = (now, snap)
         return snap
 
-
     def analyze_symbol(self, symbol: str, *, skip_trend: bool = False) -> MarketIntelligenceResult:
         """
-        МАТРИЦА РЕЖИМОВ V3 — Единый каскадный арбитр торговой системы.
-        Исключает коллизии между TREND, CRT, RANGE и SCALP контурами.
+        Реальный multi-timeframe анализ:
+        1m  — микродвижение
+        5m  — локальный импульс
+        15m — рабочий сетап
+        1h  — основной тренд
+        4h  — старший контекст
         """
-        self._cur_symbol = symbol  
+
+        self._cur_symbol = symbol  # для VP-подгонки уровней (HVN/LVN) ниже по стеку
         snap = self._snapshot_cached(symbol)
         source = snap.get("source", "unknown")
         tf_data = snap["timeframes"]
 
         contexts = {}
+
         for tf, df in tf_data.items():
             try:
                 contexts[tf] = self._analyze_timeframe(df, tf)
@@ -332,94 +337,47 @@ class MarketIntelligenceEngine:
             raise ValueError(f"No valid timeframe contexts for {symbol}")
 
         scores = self._score_multi_timeframe(contexts)
-        
-        # Читаем волатильность якорного часового таймфрейма (1h)
-        h1_ctx = contexts.get("1h")
-        adx_1h = float(self._ctx_value(h1_ctx, "adx14", 0.0) or 0.0)
-        fan_1h = float(self._ctx_value(h1_ctx, "ema20", 0.0) - self._ctx_value(h1_ctx, "ema200", 0.0))
-
-        # ОПРЕДЕЛЯЕМ ФАЗУ РЫНКА (NATIVE ROUTING)
-        is_exhausted = False
-        if h1_ctx:
-            rsi_4h = float(self._ctx_value(contexts.get("4h"), "rsi14", 50.0))
-            if rsi_4h >= float(settings.EXHAUSTION_RSI_OVERBOUGHT) or rsi_4h <= float(settings.EXHAUSTION_RSI_OVERSOLD):
-                is_exhausted = True
-
-        # Сборка базового кандидата
         regime = self._detect_multi_timeframe_regime(contexts, scores)
+
         candidate = self._build_multi_timeframe_candidate(
-            symbol=symbol, source=source, contexts=contexts, scores=scores, regime=regime
+            symbol=symbol,
+            source=source,
+            contexts=contexts,
+            scores=scores,
+            regime=regime,
         )
 
+        # (#cascade-second-pass-2026-08-22) Трендовый кандидат уже отвергнут
+        # гейтом входа (TZ/KAMA) — не даём ему занимать символ.
+        #
+        # Каскад решает В market_intelligence, а TZ-гейт — в robot_loop, то есть
+        # ПОЗЖЕ. Из-за этого трендовый approve останавливал каскад, затем вход
+        # блокировался по KAMA, и CRT/range/scalp по символу не пробовались
+        # вовсе. Замер 22.08: аптренд переваливал (ADX 37→22, DI ушёл в минус,
+        # цена под KAMA), тренд входить не мог и правильно, но альтернативы
+        # шанса не получали — а переходный рынок как раз их территория.
+        #
+        # Помечаем кандидата отвергнутым, и дальнейшие ветки каскада отработают
+        # штатно, без дублирования их условий.
         if skip_trend:
             candidate.setup_decision = "trend_blocked_by_entry_gate"
 
-        # ──────────────────────────────────────────────────────────────────────
-        # КАСКАДНАЯ СЕГМЕНТАЦИЯ СТРАТЕГИЙ — ИСКЛЮЧАЕМ НАЛОЖЕНИЕ ОРДЕРОВ
-        # ──────────────────────────────────────────────────────────────────────
-        
-        # ФАЗА А: ИСТОЩЕНИЕ / СВИП ЭКСТРЕМУМОВ (Монополия движка CRT)
-        if is_exhausted and bool(getattr(settings, "ENABLE_CRT_STRATEGY", True)):
+        # ── CRT (Candle Range Theory) — приоритетнее грубого range ──────────
+        # Трендовый путь не дал approve → пробуем 3-свечной CRT (свип + close-back
+        # на 4h, вход на LTF по MSS/FVG). Несёт regime="crt" → trade_mode="trend".
+        if bool(getattr(settings, "ENABLE_CRT_STRATEGY", False)) and (
+            candidate.action == "hold" or candidate.setup_decision != "approve"
+        ):
             try:
                 htf_tf = str(getattr(settings, "CRT_HTF_TF", "4h"))
                 ltf_tf = str(getattr(settings, "CRT_LTF_TF", "15m"))
                 htf_c = _df_to_crt_candles(tf_data.get(htf_tf), 6)
                 ltf_c = _df_to_crt_candles(tf_data.get(ltf_tf), 24)
-                cur_px = float(tf_data[ltf_tf].iloc[-1]["close"]) if ltf_tf in tf_data and len(tf_data[ltf_tf]) else 0.0
-                
-                crt_sig = CRTStrategyService().evaluate(
-                    htf_c, ltf_c, symbol=symbol, current_price=cur_px,
-                    htf_trend=self._ctx_value(contexts.get("4h"), "trend", ""),
-                    mtf_trend=self._ctx_value(contexts.get("1h"), "trend", ""),
-                    htf_momentum=self._ctx_value(contexts.get("4h"), "momentum", ""),
-                    mtf_momentum=self._ctx_value(contexts.get("1h"), "momentum", ""),
-                    htf_adx=float(self._ctx_value(contexts.get("4h"), "adx14", 0)),
-                    htf_atr_ratio=1.0
+                cur_px = (
+                    float(tf_data[ltf_tf].iloc[-1]["close"])
+                    if ltf_tf in tf_data and len(tf_data[ltf_tf])
+                    else (ltf_c[-1]["close"] if ltf_c else 0.0)
                 )
-                if crt_sig and crt_sig.setup_decision == "approve":
-                    return self._map_to_result(crt_sig, source, scores, candidate.timeframes, "crt")
-            except Exception as exc:
-                print(f"[CRT CASCADE GAP] {symbol}: {exc}")
-
-        # ФАЗА Б: ЧИСТЫЙ ТРЕНД (Монополия движка TREND)
-        if adx_1h >= float(getattr(settings, "REGIME_TREND_ADX_MIN", 22.0)) and not skip_trend:
-            if candidate.setup_decision == "approve":
-                candidate.radar_state = "trend"
-                return candidate  # Если тренд силен — отдаем приоритет ему
-
-        # ФАЗА В: ГЛУБОКИЙ БОКОВИК / ПИЛА (Монополия движков RANGE и SCALP)
-        if adx_1h <= float(getattr(settings, "REGIME_CHOP_ADX_MAX", 18.0)) or candidate.setup_decision != "approve":
-            # 1. Сначала пробуем флэтовый коридор RANGE
-            if bool(getattr(settings, "ENABLE_RANGE_STRATEGY", True)):
-                try:
-                    range_sig = RangeStrategyService().evaluate(contexts, symbol)
-                    if range_sig and range_sig.setup_decision == "approve":
-                        return self._map_to_result(range_sig, source, scores, candidate.timeframes, "range")
-                except Exception as exc:
-                    print(f"[RANGE CASCADE GAP] {symbol}: {exc}")
-
-            # 2. Если коридор пуст — отдаем микроструктуре SCALP
-            if bool(getattr(settings, "ENABLE_SCALP_STRATEGY", True)):
-                try:
-                    ob_snap = ORDERBOOK_STORE.snapshot(symbol)
-                    depth_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
-                    scalp_sig = MicroScalpService().evaluate(contexts, depth_sig.as_dict(), symbol)
-                    if scalp_sig and scalp_sig.setup_decision == "approve":
-                        return self._map_to_result(scalp_sig, source, scores, candidate.timeframes, "scalp")
-                except Exception as exc:
-                    print(f"[SCALP CASCADE GAP] {symbol}: {exc}")
-
-        return candidate
-
-    def _map_to_result(self, sig, source, scores, timeframes, radar_state) -> MarketIntelligenceResult:
-        """Вспомогательный метод маппинга кастомных сигналов стратегий в единый MI контракт."""
-        return MarketIntelligenceResult(
-            symbol=sig.symbol, source=source, action=sig.action, regime=sig.regime,
-            entry_zone=sig.entry_zone, stop_price=sig.stop_price, tp=sig.tp,
-            confidence_hint=sig.confidence_hint, reason=sig.reason, scores=scores,
-            timeframes=timeframes, setup_quality=sig.setup_quality, setup_decision=sig.setup_decision,
-            radar_state=radar_state,
-        )
                 def _tf_trend(tf):
                     c = contexts.get(tf) if isinstance(contexts, dict) else None
                     if c is None:

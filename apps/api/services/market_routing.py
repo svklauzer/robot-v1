@@ -121,25 +121,3 @@ def from_payload(payload: dict | None, symbol: str, side: str) -> TradeRoute:
             reason=str(routing.get("reason") or "restored_from_signal"),
         )
     return resolve(symbol, side)
-
-def get_strategy_margin_cap(regime: str, balance_usdt: float) -> float:
-    """Управляет динамическими конвертами капитала.
-    
-    Гарантирует, что SCALP или RANGE не займут лишние слоты маржи TREND-движка.
-    """
-    regime = str(regime or "").lower()
-    balance = float(balance_usdt)
-    
-    if "scalp" in regime:
-        # Монополия микро-контура: 5% под обеспечения сеток/скальпинга
-        share = float(getattr(settings, "CAPITAL_ENVELOPE_GRID_PCT", 5.0)) / 100.0
-        return balance * share
-        
-    if "range" in regime:
-        # Лимитные заявки на границах коридоров: 20%
-        share = float(getattr(settings, "CAPITAL_ENVELOPE_ARB_PCT", 20.0)) / 100.0
-        return balance * share
-        
-    # По умолчанию для TREND и CRT: 70% капитала
-    share = float(getattr(settings, "CAPITAL_ENVELOPE_DIRECTIONAL_PCT", 70.0)) / 100.0
-    return balance * share
