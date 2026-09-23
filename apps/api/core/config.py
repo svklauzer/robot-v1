@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     HTX_API_KEY: str = ""
     HTX_API_SECRET: str = ""
     HTX_API_HOSTNAME: str = ""
-    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,://htx.com"
+    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,api.htx.com"
     HTX_HTTP_TIMEOUT_MS: int = 15000
     HTX_CIRCUIT_FAILURE_THRESHOLD: int = 2
     HTX_CIRCUIT_OPEN_SECONDS: float = 120.0
@@ -588,7 +588,8 @@ class Settings(BaseSettings):
 
     @property
     def execution_market_type(self) -> str:
-        return "swap" if self.ENABLE_LIVE_ORDERS else self.MARKET_TYPE
+        """Рынок исполнения. Возвращает swap, если включены живые ордера ИЛИ фьючерсный контур."""
+        return "swap" if (self.ENABLE_LIVE_ORDERS or self.ENABLE_FUTURES) else self.MARKET_TYPE
 
     @property
     def active_exchange(self) -> str:
@@ -597,7 +598,8 @@ class Settings(BaseSettings):
 
     @property
     def execution_leverage(self) -> int:
-        if self.active_exchange == "okx":
+        """Расчет плеча. Применяет FUTURES_LEVERAGE для любого swap-рынка (и OKX, и HTX)."""
+        if self.execution_market_type == "swap":
             return max(int(self.FUTURES_LEVERAGE), 1)
         return 1
 
