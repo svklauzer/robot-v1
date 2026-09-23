@@ -374,11 +374,11 @@ services:
       #
       # Возврат в enforce — после разреза stop-forensics по would_block.
       - key: TP_REACH_MODE
-        value: shadow
+        value: enforce
       # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
       - key: MOMENTUM_GATE_MODE
-        value: shadow
+        value: enforce
       - key: TP_REACH_EV_MARGIN
         value: "1.0"
       - key: TP_REACH_MIN_SAMPLE
@@ -396,7 +396,7 @@ services:
       - key: CRT_MIN_SETUP_SCORE
         value: "45.0"      # Снижен порог качества сетапа
       - key: CRT_REQUIRE_CISD
-        value: "false"     # Не требуем жесткого CISD, торгуем по структуре
+        value: "True"     # Не требуем жесткого CISD, торгуем по структуре
       - key: CRT_STOP_BUFFER_PCT
         value: "0.08"      # Адекватный буфер стопа
       - key: CRT_TP2_RR

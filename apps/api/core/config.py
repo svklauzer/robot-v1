@@ -1095,7 +1095,7 @@ class Settings(BaseSettings):
     # локальном ADX/ATR-expansion — TP2 приближается к границе диапазона.
     # ТОЛЬКО приближает TP2 к границе, никогда не отдаляет его дальше
     # исходного RANGE_TP2_RESISTANCE_BUFFER.
-    RANGE_TP2_DYNAMIC_ENABLED: bool = False
+    RANGE_TP2_DYNAMIC_ENABLED: bool = True
     RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
     RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
     RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
