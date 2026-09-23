@@ -141,9 +141,41 @@ class TradePlanBuilder:
 
         entry_fee_kwargs = ({"entry_liquidity": "maker"} if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() == "limit" else {})
 
-        tp1_preview = self.cost_engine.estimate(symbol, market_type, side, entry_price, tp1, qty, "taker", leverage_value, **entry_fee_kwargs)
-        tp2_preview = self.cost_engine.estimate(symbol, market_type, side, entry_price, tp2, qty, "taker", leverage_value, **entry_fee_kwargs)
-        stop_preview = self.cost_engine.estimate(symbol, market_type, side, entry_price, stop_price, qty, "taker", leverage_value, **entry_fee_kwargs)
+        # Фикс коллизии аргументов: Вычисляем ликвидность на основе типа ордера
+        _target_liquidity = "maker" if str(getattr(settings, "ENTRY_ORDER_TYPE", "market")).lower() == "limit" else "taker"
+
+        tp1_preview = self.cost_engine.estimate(
+            symbol=symbol,
+            market_type=market_type,
+            side=side,
+            entry_price=entry_price,
+            target_price=tp1,
+            qty=qty,
+            entry_liquidity=_target_liquidity,
+            leverage=leverage_value
+        )
+        
+        tp2_preview = self.cost_engine.estimate(
+            symbol=symbol,
+            market_type=market_type,
+            side=side,
+            entry_price=entry_price,
+            target_price=tp2,
+            qty=qty,
+            entry_liquidity=_target_liquidity,
+            leverage=leverage_value
+        )
+        
+        stop_preview = self.cost_engine.estimate(
+            symbol=symbol,
+            market_type=market_type,
+            side=side,
+            entry_price=entry_price,
+            target_price=stop_price,
+            qty=qty,
+            entry_liquidity=_target_liquidity,
+            leverage=leverage_value
+        )
 
         net_risk = abs(stop_preview.net_pnl)
         net_rr_tp1 = tp1_preview.net_pnl / net_risk if net_risk > 0 else 0
