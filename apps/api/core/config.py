@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     HTX_API_KEY: str = ""
     HTX_API_SECRET: str = ""
     HTX_API_HOSTNAME: str = ""
-    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,api.htx.com" # !!
+    HTX_API_HOSTNAME_FALLBACKS: str = "api.huobi.pro,api-aws.huobi.pro,api.htx.com"
     HTX_HTTP_TIMEOUT_MS: int = 15000
     HTX_CIRCUIT_FAILURE_THRESHOLD: int = 2
     HTX_CIRCUIT_OPEN_SECONDS: float = 120.0
