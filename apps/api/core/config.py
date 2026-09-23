@@ -1479,11 +1479,11 @@ class Settings(BaseSettings):
     # =========================
     # Перевод основной стратегии на futures (открывает шорты + плечо).
     # Включать ТОЛЬКО на доказанном edge (net PnL > 0 на paper).
-    ENABLE_FUTURES_EXECUTION: bool = False
+    ENABLE_FUTURES_EXECUTION: bool = True
     # Динамическое плечо по conviction (грейд × сила тренда × волатильность).
     # OFF → плечо всегда 1.0 (без эффекта).
     ENABLE_SMART_LEVERAGE: bool = False
-    MAX_LEVERAGE: float = 3.0               # жёсткий потолок плеча (догма)
+    MAX_LEVERAGE: float = 10.0               # жёсткий потолок плеча (догма)
     # Суммарный риск по ВСЕМ открытым сделкам, % эквити (портфельный бюджет).
     PORTFOLIO_RISK_BUDGET_PCT: float = 6.0
     # Множители conviction по грейду (вклад в плечо).
@@ -1804,7 +1804,7 @@ class Settings(BaseSettings):
     DYNAMIC_MARGIN_FAIR_SHARE: bool = False
     # Регулируемое плечо для размера по динамическому бюджету (нотионал = маржа×плечо).
     # 1.0 = без плеча (как сейчас, smart leverage off). Поднимай для live-фьючерсов.
-    DYNAMIC_MARGIN_LEVERAGE: float = 1.0
+    DYNAMIC_MARGIN_LEVERAGE: float = 10.0
     # Грейд больше не режет капитал сам по себе: после включения entry/TP-reach
     # enforce B означает «публичная уверенность ниже A», а не «сделка должна быть
     # вдвое меньше». Реальный верхний ограничитель — dynamic budget +
