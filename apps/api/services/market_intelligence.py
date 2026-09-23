@@ -420,53 +420,6 @@ class MarketIntelligenceEngine:
             timeframes=timeframes, setup_quality=sig.setup_quality, setup_decision=sig.setup_decision,
             radar_state=radar_state,
         )
-                def _tf_trend(tf):
-                    c = contexts.get(tf) if isinstance(contexts, dict) else None
-                    if c is None:
-                        return ""
-                    return str(c.get("trend", "") if isinstance(c, dict) else getattr(c, "trend", ""))
-                def _tf_momentum(tf):
-                    c = contexts.get(tf) if isinstance(contexts, dict) else None
-                    if c is None:
-                        return ""
-                    return str(c.get("momentum", "") if isinstance(c, dict) else getattr(c, "momentum", ""))
-                def _tf_adx(tf):
-                    c = contexts.get(tf) if isinstance(contexts, dict) else None
-                    return float(self._ctx_value(c, "adx14", 0) or 0) if c is not None else 0.0
-                def _tf_atr_ratio(tf):
-                    c = contexts.get(tf) if isinstance(contexts, dict) else None
-                    if c is None:
-                        return 1.0
-                    a = float(self._ctx_value(c, "atr14", 0) or 0)
-                    ap = float(self._ctx_value(c, "atr14_prev", 0) or 0)
-                    return (a / ap) if ap > 0 else 1.0
-                crt_sig = CRTStrategyService().evaluate(
-                    htf_c, ltf_c, symbol=symbol, current_price=cur_px,
-                    htf_trend=_tf_trend("4h"), mtf_trend=_tf_trend("1h"),
-                    htf_momentum=_tf_momentum("4h"), mtf_momentum=_tf_momentum("1h"),
-                    htf_adx=_tf_adx("4h"), htf_atr_ratio=_tf_atr_ratio("4h"),
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[CRT STRATEGY ERROR] {symbol}: {exc}")
-                crt_sig = None
-
-            if crt_sig is not None and crt_sig.setup_decision == "approve":
-                candidate = MarketIntelligenceResult(
-                    symbol=symbol,
-                    source=source,
-                    action=crt_sig.action,
-                    regime=crt_sig.regime,
-                    entry_zone=crt_sig.entry_zone,
-                    stop_price=crt_sig.stop_price,
-                    tp=crt_sig.tp,
-                    confidence_hint=crt_sig.confidence_hint,
-                    reason=crt_sig.reason,
-                    scores=scores,
-                    timeframes=candidate.timeframes,
-                    setup_quality=crt_sig.setup_quality,
-                    setup_decision=crt_sig.setup_decision,
-                    radar_state="crt",
-                )
 
         # ── RANGE-стратегия (скальп в боковике) ──────────────────────────────
         # Если трендовый путь не дал торгуемого кандидата (hold или не approve),
