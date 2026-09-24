@@ -405,9 +405,9 @@ services:
       # ── SCALP ENGINE (Настройка на частые сделки) ─────────────────────────
       # Scalp не торговал из-за нереалистичных требований к RR и Target %
       - key: SCALP_MIN_NET_RR_TP2
-        value: "1.30"      # Снижено с 1.5+ до реалистичного 0.7
+        value: "0.70"      # Снижено с 1.5+ до реалистичного 0.7
       - key: SCALP_TARGET_PCT
-        value: "0.60"      # Реалистичная цель скальпа (0.4%)
+        value: "0.50"      # Реалистичная цель скальпа (0.4%)
       - key: SCALP_MIN_SETUP_SCORE
         value: "45.0"      # Порог входа
       - key: SCALP_BREAKEVEN_ARM_PCT

@@ -273,14 +273,6 @@ class Settings(BaseSettings):
     ENABLE_TREND_STRATEGY: bool = True
     TREND_TRIGGER_MODE: str = "enforce"
 
-    # (#tz-shadow-2026-08-03) Условия входа по ТЗ.
-    # Основание: по /analytics/mfe-mae у trend_up edge_ratio 0.943 — средний ход
-    # против сделки БОЛЬШЕ хода за неё (MFE 0.787% против MAE 0.835%,
-    # capture −20.6%). Выходом это не чинится, только отбором входа, а отбора
-    # сейчас нет: условие тренда истинно сутками, зона входа = last ±0.3%.
-    #
-    # Пороги взяты из ТЗ, а не подобраны — подбирать не на чем: ни ADX, ни
-    # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h" 
     TZ_ENTRY_TF: str = "5m"  # Идеальный выбор для ловли микро-откатов внутри 1h тренда
     TZ_ADX_MIN: float = 15.0 # Удерживаем 15.0 для сохранения пропускной способности
@@ -975,7 +967,7 @@ class Settings(BaseSettings):
     # −1.60 / «strong confirmed» −1.68 — это входы БЕЗ реального тренда по
     # направлению. 0.8 требует явный веер EMA в сторону сделки → стоим в стороне
     # в боковике/против тренда. Регайм-симметрично (лонги и шорты на равных).
-    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.6
+    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.8
 
     # (#anti-chop-young-trend-2026-09-03) Слепое пятно веера: EMA200 на якорном
     # 1h — среднее примерно за 8 суток, и после V-разворота она ещё долго
@@ -1235,7 +1227,7 @@ class Settings(BaseSettings):
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
     SCALP_MIN_SETUP_SCORE: float = 50.0
-    SCALP_MAX_SPREAD_PCT: float = 0.12         # дороже — скальп не входит
+    SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
     SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
     # (#scalp-htf-veto-2026-07-10) Микро-скальп по принципу живёт на 5m и HTF не
     # читает — но телеметрия 10 июля: ВСЕ убытки дня (−0.86: ETH #224, BTC #221,
@@ -1278,7 +1270,7 @@ class Settings(BaseSettings):
     # net_rr_tp2 (runner платит >1.10× стопа). Как у тренда: судим по TP2, не по TP1.
     SCALP_MIN_NET_PNL_TP1_USDT: float = 0.20           # санити, не гейт
     SCALP_MIN_NET_PNL_TP2_USDT: float = 0.30           # санити, не гейт
-    SCALP_MIN_NET_RR_TP2: float = 1.30                 # РЕАЛЬНЫЙ гейт экономики скальпа
+    SCALP_MIN_NET_RR_TP2: float = 0.70                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0   # тот же флор долей номинала
     # (#margin-cap-collision-2026-07-28) БЫЛО 20.0 — ровно столько же, сколько
@@ -1653,20 +1645,6 @@ class Settings(BaseSettings):
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
     ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 15.0
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
-
-    # ── Конверты капитала (#capital-envelopes-2026-08-21) ────────────────────
-    # Три контура претендовали на депозит независимо: 70% направленные + ~42%
-    # арбитраж (2 хеджа × 10.5% × 2 ноги) + 5% сетка ≈ 117% при капитале 950.
-    # Связи между ними не было — used_margin() видит только Signal, но не
-    # FundingArbPosition и не корзины сетки. В бумаге безвредно (эквити —
-    # константа), в live отказ по марже получил бы случайный контур.
-    #
-    # Теперь доля задаётся на контур, а размеры позиций ВЫВОДЯТСЯ из неё
-    # (см. capital_envelopes.arb_leg_notional). Сумма ≤ 100 проверяется тестом.
-    # Остаток до 100 — намеренный запас на просадку и комиссии.
-    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0
-    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0
-    CAPITAL_ENVELOPE_GRID_PCT: float = 5.0
 
     # Сводится ли ФАКТИЧЕСКАЯ занятость маржи по всем контурам в одном месте.
     # (#unified-margin-2026-08-21) РЕАЛИЗОВАНО: `capital_envelopes.used_usdt()`
