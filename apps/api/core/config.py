@@ -1227,14 +1227,14 @@ class Settings(BaseSettings):
     # 08.08: SCALP_TARGET_PCT=0.8% превышает медианный MFE (0.39-0.60%) в 1.3-2x,
     # что блокирует все скальп-сигналы по TP_REACH гейту. Цель снижена до 0.5%
     # для соответствия реальной волатильности крипты на 5m.
-    SCALP_TARGET_PCT: float = 0.6              # TP1 (net target, %) - снижено с 0.8%
+    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
     SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
     SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
-    SCALP_MIN_OBI: float = 0.10               # подтверждение потоком (OBI)
+    SCALP_MIN_OBI: float = 0.05               # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
     SCALP_MIN_SETUP_SCORE: float = 50.0
-    SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
+    SCALP_MAX_SPREAD_PCT: float = 0.12         # дороже — скальп не входит
     SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
     # (#scalp-htf-veto-2026-07-10) Микро-скальп по принципу живёт на 5m и HTF не
     # читает — но телеметрия 10 июля: ВСЕ убытки дня (−0.86: ETH #224, BTC #221,
@@ -1276,7 +1276,7 @@ class Settings(BaseSettings):
     # (tp1_net_pnl_below_min_usdt). Софт: TP1 0.20, TP2 0.55 — реальный гейт это
     # net_rr_tp2 (runner платит >1.10× стопа). Как у тренда: судим по TP2, не по TP1.
     SCALP_MIN_NET_PNL_TP1_USDT: float = 0.20           # санити, не гейт
-    SCALP_MIN_NET_PNL_TP2_USDT: float = 0.55           # санити, не гейт
+    SCALP_MIN_NET_PNL_TP2_USDT: float = 0.30           # санити, не гейт
     SCALP_MIN_NET_RR_TP2: float = 1.30                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0   # тот же флор долей номинала
