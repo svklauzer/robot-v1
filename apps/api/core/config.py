@@ -1690,8 +1690,8 @@ class Settings(BaseSettings):
 
     # Изоляция бюджетов по контурам (Capital Envelopes)
     # В сумме строго 95% (5% — неприкосновенный буфер под экстренные сквизы и издержки)
-    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 70.0  # Доля TREND и CRT движков
-    CAPITAL_ENVELOPE_ARB_PCT: float = 20.0          # Доля лимитных RANGE сетапов
+    CAPITAL_ENVELOPE_DIRECTIONAL_PCT: float = 85.0  # Доля TREND и CRT движков
+    CAPITAL_ENVELOPE_ARB_PCT: float = 5.0          # Доля лимитных RANGE сетапов
     CAPITAL_ENVELOPE_GRID_PCT: float = 5.0          # Резерв под микро-скальпинг
 
     # =========================
