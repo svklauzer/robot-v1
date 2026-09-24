@@ -211,7 +211,7 @@ services:
       - key: ML_MODE
         value: shadow
       - key: REGIME_EXP_SIZING_ENABLED
-        value: "true"
+        value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
         value: "false"
       - key: DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE
@@ -392,22 +392,22 @@ services:
       # CRT часто молчит из-за слишком строгих требований к подтверждению (CISD)
       # и высокому RR. Снижаем планку входа.
       - key: CRT_MIN_RR_TP1
-        value: "0.50"      # Допускаем меньший RR для входа
+        value: "1.0"      # Допускаем меньший RR для входа
       - key: CRT_MIN_SETUP_SCORE
-        value: "45.0"      # Снижен порог качества сетапа
+        value: "60.0"      # Снижен порог качества сетапа
       - key: CRT_REQUIRE_CISD
         value: "True"     # Не требуем жесткого CISD, торгуем по структуре
       - key: CRT_STOP_BUFFER_PCT
         value: "0.08"      # Адекватный буфер стопа
       - key: CRT_TP2_RR
-        value: "1.5"       # Цель на продолжение
+        value: "2.5"       # Цель на продолжение
 
       # ── SCALP ENGINE (Настройка на частые сделки) ─────────────────────────
       # Scalp не торговал из-за нереалистичных требований к RR и Target %
       - key: SCALP_MIN_NET_RR_TP2
-        value: "0.70"      # Снижено с 1.5+ до реалистичного 0.7
+        value: "1.30"      # Снижено с 1.5+ до реалистичного 0.7
       - key: SCALP_TARGET_PCT
-        value: "0.40"      # Реалистичная цель скальпа (0.4%)
+        value: "0.60"      # Реалистичная цель скальпа (0.4%)
       - key: SCALP_MIN_SETUP_SCORE
         value: "45.0"      # Порог входа
       - key: SCALP_BREAKEVEN_ARM_PCT

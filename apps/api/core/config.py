@@ -189,7 +189,7 @@ class Settings(BaseSettings):
     # чинится она там. Эта ось остаётся доступной как страховочный рельс против
     # будущей деградации режима, но включать её нужно осознанно и не вместо
     # разбора причины. Подробности — в services/regime_expectancy_sizer.py.
-    REGIME_EXP_SIZING_ENABLED: bool = True
+    REGIME_EXP_SIZING_ENABLED: bool = False
     # Наблюдательный размер для режима с отрицательным ожиданием. НЕ ноль: при
     # нуле режим перестаёт давать закрытия, ожидание замерзает, и восстановиться
     # он уже не сможет никогда.
@@ -228,7 +228,7 @@ class Settings(BaseSettings):
     # (+2.99). Цель, обрезанная по p60 MFE, забирает мелкую прибыль чаще, но
     # уничтожает именно те сделки, на которых всё держится. «Недостижимая
     # цель» оказалась не дефектом, а платой за право доехать до хвоста.
-    SETUP_REACH_ENABLED: bool = True
+    SETUP_REACH_ENABLED: bool = False
     # Цель = квантиль распределения MFE. p60 означает «сетап доходил сюда в 60%
     # случаев» — цель по построению достижима, а не выведена из R-множителя.
     SETUP_REACH_TP_QUANTILE: float = 0.50
@@ -974,7 +974,7 @@ class Settings(BaseSettings):
     # −1.60 / «strong confirmed» −1.68 — это входы БЕЗ реального тренда по
     # направлению. 0.8 требует явный веер EMA в сторону сделки → стоим в стороне
     # в боковике/против тренда. Регайм-симметрично (лонги и шорты на равных).
-    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.8
+    ANTI_CHOP_MIN_EMA_FAN_ATR: float = 0.6
 
     # (#anti-chop-young-trend-2026-09-03) Слепое пятно веера: EMA200 на якорном
     # 1h — среднее примерно за 8 суток, и после V-разворота она ещё долго
@@ -1164,7 +1164,7 @@ class Settings(BaseSettings):
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RENDER_RR: float = 2.0               # Целевой R:R для фиксации хвостов
-    CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
+    CRT_TP2_RR: float = 2.5                # R:R для TP2 (1:2)
     # (#crt-tp2-dynamic-2026-08-27) Зеркало TREND_TP2_DYNAMIC_* без KAMA-члена
     # (CRT её не считает). Работает ТОЛЬКО когда CRT_TARGETS_MODE=extended —
     # в режиме "range" TP2 структурный (CRH/CRL), rr в нём не участвует.
@@ -1188,7 +1188,7 @@ class Settings(BaseSettings):
     CRT_MIN_RR_TP1: float = 1.0
     CRT_ALLOW_LONG: bool = True
     CRT_ALLOW_SHORT: bool = True
-    CRT_MIN_SETUP_SCORE: float = 55.0
+    CRT_MIN_SETUP_SCORE: float = 60.0
     # (#leak-B) Фейдить вход не только по ярлыку тренда (часто "mixed"/"flat"),
     # но и по моментуму HTF/MTF: long не берём при bearish/oversold, short — при
     # bullish/overheated. Лечит контртрендовые crt_bull_sweep лонги в медвежьей
@@ -1227,7 +1227,7 @@ class Settings(BaseSettings):
     # 08.08: SCALP_TARGET_PCT=0.8% превышает медианный MFE (0.39-0.60%) в 1.3-2x,
     # что блокирует все скальп-сигналы по TP_REACH гейту. Цель снижена до 0.5%
     # для соответствия реальной волатильности крипты на 5m.
-    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
+    SCALP_TARGET_PCT: float = 0.6              # TP1 (net target, %) - снижено с 0.8%
     SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
     SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
     SCALP_MIN_OBI: float = 0.10               # подтверждение потоком (OBI)
@@ -1277,7 +1277,7 @@ class Settings(BaseSettings):
     # net_rr_tp2 (runner платит >1.10× стопа). Как у тренда: судим по TP2, не по TP1.
     SCALP_MIN_NET_PNL_TP1_USDT: float = 0.20           # санити, не гейт
     SCALP_MIN_NET_PNL_TP2_USDT: float = 0.55           # санити, не гейт
-    SCALP_MIN_NET_RR_TP2: float = 1.10                 # РЕАЛЬНЫЙ гейт экономики скальпа
+    SCALP_MIN_NET_RR_TP2: float = 1.30                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0   # тот же флор долей номинала
     # (#margin-cap-collision-2026-07-28) БЫЛО 20.0 — ровно столько же, сколько
@@ -2083,7 +2083,7 @@ class Settings(BaseSettings):
     # достижимости) НЕ трогаем — тест test_config_schema_bootstrap.py его
     # защищает как gate от капитального слива, тут правим саму геометрию
     # цели, а не строгость проверки.
-    TREND_TP2_R_MULT: float = 2.0
+    TREND_TP2_R_MULT: float = 2.5
     TREND_TP1_FLOOR_PCT: float = 1.2
     TREND_TP2_FLOOR_PCT: float = 2.0
 
