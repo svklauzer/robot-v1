@@ -411,9 +411,9 @@ services:
       - key: SCALP_MIN_SETUP_SCORE
         value: "45.0"      # Порог входа
       - key: SCALP_BREAKEVEN_ARM_PCT
-        value: "0.25"      # Быстрый выход в БЗ
+        value: "0.30"      # Быстрый выход в БЗ
       - key: SCALP_TIME_STOP_MIN
-        value: "60.0"      # Тайм-стоп 1 час
+        value: "45.0"      # Тайм-стоп 1 час
 
       # ── RANGE ENGINE (Консервативный) ─────────────────────────────────────
       - key: RANGE_MIN_TP1_NET_PCT
