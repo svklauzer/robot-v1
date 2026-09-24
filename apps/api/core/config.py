@@ -869,7 +869,7 @@ class Settings(BaseSettings):
     # MFE≥1.2) → сделка держалась до полного хард-стопа −4.5 вместо ~безубытка.
     # 0.45 ловит откатчиков в диапазоне 0.45–1.2%. Над-килла нет: выход всё равно
     # требует flow_against ИЛИ ухода за hard_floor (−0.35%), т.е. не по вику.
-    BREAKEVEN_LOCK_ARM_PCT: float = 0.30  # СНИЖЕНО с 0.45 — ловим скальпы 0.25%+
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.35  # СНИЖЕНО с 0.45 — ловим скальпы 0.25%+
     # Уровень результата (%), на котором фиксируемся после вооружения:
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
@@ -2309,7 +2309,7 @@ class Settings(BaseSettings):
     # до слома/разворота. В scalp/range-режиме поведение прежнее (быстрый выход).
     TREND_RIDE_ENABLED: bool = True
     # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога (%) было 1.2 (изм 17.07.2026).
-    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 0.8
+    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 1.2
     # В тренде выходим, отдав эту долю от MFE (шире, чем обычный ~0.35 → едем дольше).
     TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
 
@@ -2330,7 +2330,7 @@ class Settings(BaseSettings):
     # 0.55 → 0.40: эффективный порог = max(arm, floor/(1-give)). Пока arm стоял
     # 0.55, снижение пола ничего не меняло — связывал именно arm. Теперь порог
     # задаёт пол (0.30/0.75 = 0.40), а arm просто не мешает.
-    TREND_CAPTURE_ARM_PCT: float = 0.25
+    TREND_CAPTURE_ARM_PCT: float = 0.55
     TREND_CAPTURE_GIVEBACK_SHARE: float = 0.25
     # (#band-floor-2026-07-27) Собственный пол яруса 2, НИЖЕ общего
     # MIN_PROTECTIVE_EXIT_PCT. Замер после 3 суток в бою: band не сработал НИ РАЗУ.
