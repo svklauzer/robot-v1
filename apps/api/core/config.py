@@ -282,7 +282,7 @@ class Settings(BaseSettings):
     # Пороги взяты из ТЗ, а не подобраны — подбирать не на чем: ни ADX, ни
     # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h"
-    TZ_ENTRY_TF: str = "15m"
+    TZ_ENTRY_TF: str = "5m"
     TZ_ADX_MIN: float = 15.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
     TZ_STOCH_ZONE: float = 45.0     # лонг: %K <= 35; шорт: %K >= 65
 
