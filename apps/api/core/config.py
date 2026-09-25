@@ -560,7 +560,7 @@ class Settings(BaseSettings):
     ENTRY_ZONE_ADVERSE_CVD_RATIO: float = 0.25
     ENTRY_ZONE_CVD_MIN_TRADES: int = 20             # ниже — CVD это шум, не сигнал
     # Потолок переноса. Дальше — сетап отменяется: цена дойдёт туда уже другой.
-    ENTRY_ZONE_MAX_DRIFT_PCT: float = 0.60
+    ENTRY_ZONE_MAX_DRIFT_PCT: float = 0.25 # 25.09.2026 0.60 --> 0.25 импульс толкает вверх мы остаемся с expired сигналом при 0.60
     # Срок годности перенесённого входа. Лимит по книге минутной давности не
     # опирается ни на что: стенка, ради которой делался перенос, могла уйти.
     ENTRY_ZONE_TTL_SEC: float = 45.0
