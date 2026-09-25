@@ -98,7 +98,7 @@ services:
       # добавлены DOGE и HYPE, CHIP и PI — эксперимент (нет на HTX); убраны
       # AVAX, TRX, DOT, ADA — на OKX тонкие (открытые по ним доживут до закрытия).
       - key: OKX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
@@ -374,7 +374,7 @@ services:
       #
       # Возврат в enforce — после разреза stop-forensics по would_block.
       - key: TP_REACH_MODE
-        value: shadow
+        value: enforce
       # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
       - key: MOMENTUM_GATE_MODE

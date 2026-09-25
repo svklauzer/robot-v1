@@ -351,7 +351,7 @@ class Settings(BaseSettings):
     # выборку — на трёх точках частота это не частота.
     TP_REACH_MIN_UNCENSORED_SAMPLE: int = 12
 
-    TP_REACH_MODE: str = "shadow"
+    TP_REACH_MODE: str = "enforce"
     # Запас к порогу частоты. 1.0 — порог ровно 1/(1+RR), без запаса.
     #
     # Порога «во сколько раз TP1 может превышать медианный ход» больше НЕТ, и
@@ -628,7 +628,7 @@ class Settings(BaseSettings):
     # переключает список. Пусто — берётся HTX_SYMBOLS, как было до ключа.
     # Список выбран владельцем 12.09 (research.okx_universe): CHIP и PI —
     # эксперимент, их нет на HTX.
-    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
+    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -677,7 +677,7 @@ class Settings(BaseSettings):
     # одно up-движение по 4 шортам). Лимит одновременных однонаправленных позиций
     # в кластере. CORR_CLUSTER_SYMBOLS пусто → весь портфель = один кластер.
     CORR_CLUSTER_ENABLED: bool = True
-    CORR_CLUSTER_MAX_SAME_DIR: int = 2
+    CORR_CLUSTER_MAX_SAME_DIR: int = 1
     # (#engine-slots-2026-08-03) Лимит направления считается ВНУТРИ движка.
     # Замер 03.08: на медвежьем рынке trend_down дал 60% ленты решений и занимал
     # оба шортовых слота первым; CRT блокировался `cluster_direction_cap` в 24
