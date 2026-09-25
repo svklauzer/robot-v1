@@ -468,8 +468,11 @@ class MarketIntelligenceEngine:
                 scalp_sig = None
 
             if scalp_sig is not None and scalp_sig.setup_decision == "approve":
+                # Защищенно извлекаем таймфреймы из локального контекста метода analyze_symbol
+                _local_timeframes = locals().get("timeframes") or {}
+
                 candidate = MarketIntelligenceResult(
-                    symbol=symbol,
+                    symbol=symbol,  # Четко берем готовую входящую строку symbol
                     source=source,
                     action=scalp_sig.action,
                     regime=scalp_sig.regime,
@@ -479,12 +482,11 @@ class MarketIntelligenceEngine:
                     confidence_hint=scalp_sig.confidence_hint,
                     reason=scalp_sig.reason,
                     scores=scores,
-                    timeframes=candidate.timeframes,
+                    timeframes=_local_timeframes,  # ИСПРАВЛЕНО: Убрали вызов candidate.timeframes
                     setup_quality=scalp_sig.setup_quality,
                     setup_decision=scalp_sig.setup_decision,
                     radar_state="scalp",
                 )
-
         return candidate
 
     def _analyze_timeframe(self, df: pd.DataFrame, timeframe: str) -> TimeframeContext:
