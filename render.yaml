@@ -166,9 +166,9 @@ services:
       - key: ENTRY_IMPULSE_LATCH_MODE
         value: "enforce"
       - key: ENTRY_IMPULSE_TF
-        value: "15m"
+        value: "5m"
       - key: ENTRY_IMPULSE_WINDOW_SEC
-        value: "1800"
+        value: "900"
       # (#impulse-noise-2026-09-08) БЫЛО "0": ростом считалось любое +ε, и
       # телеметрия 07.09 показала импульсы на дельтах +0.02…+0.07 при ADX ~11.
       # 0.5 — то же число, которым анти-чоп отвечает на тот же вопрос.

@@ -1514,9 +1514,9 @@ class Settings(BaseSettings):
     # shadow — считается и пишется в события, вход не меняется. enforce — живая
     # защёлка снимает отказ `adx_not_rising`, и ТОЛЬКО его: di, kama и obv
     # остаются как были.
-    ENTRY_IMPULSE_LATCH_MODE: str = "shadow"
-    ENTRY_IMPULSE_TF: str = "15m"
-    ENTRY_IMPULSE_WINDOW_SEC: float = 1800.0     # два бара 15m
+    ENTRY_IMPULSE_LATCH_MODE: str = "enforce"
+    ENTRY_IMPULSE_TF: str = "5m"
+    ENTRY_IMPULSE_WINDOW_SEC: float = 900.0     # три бара по 5m
     # (#impulse-noise-2026-09-08) БЫЛО 0.0 — ростом считалось любое +ε.
     # Телеметрия 07.09: импульсы записывались на дельтах +0.02, +0.06, +0.07
     # при ADX около 11, то есть на численном шуме. Тот же вопрос «растёт ли
