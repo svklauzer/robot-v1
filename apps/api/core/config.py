@@ -1643,7 +1643,7 @@ class Settings(BaseSettings):
     # резало целиком. 5 позиций × ~13% = 65% < общий потолок 70% → диверсификация.
     # weak_structure/overheated/economics-по-TP1 для тренда отключаются в robot_loop
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
-    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 15.0
+    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 22.0 # поднял c 15 до 22 из за появления блокера blocked_position_margin_limit
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
 
     # Сводится ли ФАКТИЧЕСКАЯ занятость маржи по всем контурам в одном месте.
@@ -2078,7 +2078,7 @@ class Settings(BaseSettings):
     # никогда не сужается (см. services/setup_reach.py: сужение цели по
     # статистике срезало прибыльный хвост, ухудшило P&L, поэтому выключено
     # по умолчанию).
-    TREND_TP2_DYNAMIC_ENABLED: bool = False   # OFF — включать осознанно после paper-теста
+    TREND_TP2_DYNAMIC_ENABLED: bool = True   # OFF — включать осознанно после paper-теста 
     TREND_TP2_DYNAMIC_TF: str = "1h"          # ТФ, откуда берём ADX/ATR/KAMA
     TREND_TP2_DYNAMIC_MAX_R_MULT: float = 6.0 # потолок множителя
     TREND_TP2_DYNAMIC_ADX_BASE: float = 23.0  # ADX ниже — вклад силы тренда = 0 (порог ТЗ)
@@ -2185,7 +2185,7 @@ class Settings(BaseSettings):
     # половина, «награда» сделки = share·netTP1 + (1−share)·netTP2. Требуем, чтобы
     # эта смесь платила минимум MIN_NET_RR_BLENDED × |стоп|. Заменяет фиктивную
     # оценку «вся награда на TP2» (TP2 достигается ~5% сделок).
-    MIN_NET_RR_BLENDED: float = 1.10
+    MIN_NET_RR_BLENDED: float = 1.0
     # (#tp1-partial-off-2026-09-12) Вес TP1 в смешанной награде гейта — своя
     # настройка. Гейт был завязан на TP1_PARTIAL_ENABLED и выключился бы вместе
     # с фиксацией, молча пустив входы, которые сейчас отсекаются. Выход меняется,
