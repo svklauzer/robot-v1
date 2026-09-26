@@ -209,7 +209,7 @@ services:
       
       # ML Mode
       - key: ML_MODE
-        value: "full_auto"
+        value: "shadow"
       - key: REGIME_EXP_SIZING_ENABLED
         value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
