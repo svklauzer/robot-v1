@@ -1227,7 +1227,7 @@ class Settings(BaseSettings):
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
     SCALP_MIN_SETUP_SCORE: float = 50.0
-    SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
+    SCALP_MAX_SPREAD_PCT: float = 0.12         # дороже — скальп не входит
     SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
     # (#scalp-htf-veto-2026-07-10) Микро-скальп по принципу живёт на 5m и HTF не
     # читает — но телеметрия 10 июля: ВСЕ убытки дня (−0.86: ETH #224, BTC #221,
