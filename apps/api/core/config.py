@@ -273,11 +273,12 @@ class Settings(BaseSettings):
     ENABLE_TREND_STRATEGY: bool = True
     TREND_TRIGGER_MODE: str = "enforce"
 
-    TZ_TREND_TF: str = "1h" 
-    TZ_ENTRY_TF: str = "5m"  # Идеальный выбор для ловли микро-откатов внутри 1h тренда
-    TZ_ADX_MIN: float = 15.0 # Удерживаем 15.0 для сохранения пропускной способности
-    # Переводим TZ_STOCH_ZONE в канонический порог экстремальной перепроданности/перекупленности
-    TZ_STOCH_ZONE: float = 20.0     # Лонг: %K <= 20 (на дне отката); Шорт: %K >= 80 (на пике отскока)
+    # Пороги взяты из ТЗ, а не подобраны — подбирать не на чем: ни ADX, ни
+    # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
+    TZ_TREND_TF: str = "1h"
+    TZ_ENTRY_TF: str = "15m"
+    TZ_ADX_MIN: float = 15.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
+    TZ_STOCH_ZONE: float = 45.0     # лонг: %K <= 35; шорт: %K >= 65
 
     # (#tz-enforce-2026-08-03) Ввод условий в бой — с двумя предохранителями.
     # Первый замер: ADX по трендовым сетапам 16.1 / 18.0 / 19.4 при пороге 23.
@@ -560,7 +561,7 @@ class Settings(BaseSettings):
     ENTRY_ZONE_ADVERSE_CVD_RATIO: float = 0.25
     ENTRY_ZONE_CVD_MIN_TRADES: int = 20             # ниже — CVD это шум, не сигнал
     # Потолок переноса. Дальше — сетап отменяется: цена дойдёт туда уже другой.
-    ENTRY_ZONE_MAX_DRIFT_PCT: float = 0.45 # 25.09.2026 0.60 --> 0.45
+    ENTRY_ZONE_MAX_DRIFT_PCT: float = 0.60
     # Срок годности перенесённого входа. Лимит по книге минутной давности не
     # опирается ни на что: стенка, ради которой делался перенос, могла уйти.
     ENTRY_ZONE_TTL_SEC: float = 45.0
@@ -1514,9 +1515,9 @@ class Settings(BaseSettings):
     # shadow — считается и пишется в события, вход не меняется. enforce — живая
     # защёлка снимает отказ `adx_not_rising`, и ТОЛЬКО его: di, kama и obv
     # остаются как были.
-    ENTRY_IMPULSE_LATCH_MODE: str = "enforce"
-    ENTRY_IMPULSE_TF: str = "5m"
-    ENTRY_IMPULSE_WINDOW_SEC: float = 900.0     # три бара по 5m
+    ENTRY_IMPULSE_LATCH_MODE: str = "shadow"
+    ENTRY_IMPULSE_TF: str = "15m"
+    ENTRY_IMPULSE_WINDOW_SEC: float = 1800.0     # два бара 15m
     # (#impulse-noise-2026-09-08) БЫЛО 0.0 — ростом считалось любое +ε.
     # Телеметрия 07.09: импульсы записывались на дельтах +0.02, +0.06, +0.07
     # при ADX около 11, то есть на численном шуме. Тот же вопрос «растёт ли
