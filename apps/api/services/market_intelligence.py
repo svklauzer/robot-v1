@@ -405,16 +405,24 @@ class MarketIntelligenceEngine:
                     depth_sig = OrderBookAnalyzer.analyze(ob_snap, levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)))
                     scalp_sig = MicroScalpService().evaluate(contexts, depth_sig.as_dict(), symbol)
                     if scalp_sig and scalp_sig.setup_decision == "approve":
-                        return self._map_to_result(scalp_sig, source, scores, candidate.timeframes, "scalp")
+                        # ФИКС: Передаем текущую строку symbol шестым параметром в хелпер
+                        return self._map_to_result(scalp_sig, source, scores, candidate.timeframes, "scalp", symbol)
                 except Exception as exc:
                     print(f"[SCALP CASCADE GAP] {symbol}: {exc}")
 
+        # ПРИМЕЧАНИЕ: Весь старый кусок "if bool(getattr(settings, 'ENABLE_SCALP_STRATEGY', False))" 
+        # в самом низу файла (строки ~245-275) перед финальным return candidate — ПОЛНОСТЬЮ УДАЛЕН, 
+        # так как каскад теперь отрабатывает вверху!
         return candidate
 
-    def _map_to_result(self, sig, source, scores, timeframes, radar_state) -> MarketIntelligenceResult:
+    def _map_to_result(self, sig, source, scores, timeframes, radar_state, symbol: str = None) -> MarketIntelligenceResult:
         """Вспомогательный метод маппинга кастомных сигналов стратегий в единый MI контракт."""
+        # ФИКС: Защищаем чтение символа. Если у объекта стратегии (ScalpSignal) нет .symbol,
+        # мы принудительно пробрасываем входящую строку symbol из контекста цикла.
+        _effective_symbol = getattr(sig, "symbol", None) or symbol
+        
         return MarketIntelligenceResult(
-            symbol=sig.symbol, source=source, action=sig.action, regime=sig.regime,
+            symbol=_effective_symbol, source=source, action=sig.action, regime=sig.regime,
             entry_zone=sig.entry_zone, stop_price=sig.stop_price, tp=sig.tp,
             confidence_hint=sig.confidence_hint, reason=sig.reason, scores=scores,
             timeframes=timeframes, setup_quality=sig.setup_quality, setup_decision=sig.setup_decision,
