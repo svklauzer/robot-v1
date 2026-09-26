@@ -380,7 +380,10 @@ services:
       - key: MOMENTUM_GATE_MODE
         value: enforce
       - key: TP_REACH_EV_MARGIN
-        value: "1.0"
+        value: "0.75"  # Снижаем проходной барьер частоты с 1.0 до 0.75 (адаптация под KAMA-риск)
+
+      - key: TREND_TP1_R_MULT
+        value: "1.2"   # Прижимаем первый тейк ближе к рынку для гарантированной окупаемости издержек
       - key: TP_REACH_MIN_SAMPLE
         value: "15"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
