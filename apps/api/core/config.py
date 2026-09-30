@@ -1467,7 +1467,7 @@ class Settings(BaseSettings):
     # Динамическое плечо по conviction (грейд × сила тренда × волатильность).
     # OFF → плечо всегда 1.0 (без эффекта).
     ENABLE_SMART_LEVERAGE: bool = False
-    MAX_LEVERAGE: float = 3.0               # жёсткий потолок плеча (догма)
+    MAX_LEVERAGE: float = 10.0               # жёсткий потолок плеча (догма)
     # Суммарный риск по ВСЕМ открытым сделкам, % эквити (портфельный бюджет).
     PORTFOLIO_RISK_BUDGET_PCT: float = 6.0
     # Множители conviction по грейду (вклад в плечо).
