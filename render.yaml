@@ -98,7 +98,7 @@ services:
       # добавлены DOGE и HYPE, CHIP и PI — эксперимент (нет на HTX); убраны
       # AVAX, TRX, DOT, ADA — на OKX тонкие (открытые по ним доживут до закрытия).
       - key: OKX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
