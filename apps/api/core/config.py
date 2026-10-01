@@ -620,7 +620,7 @@ class Settings(BaseSettings):
     # переключает список. Пусто — берётся HTX_SYMBOLS, как было до ключа.
     # Список выбран владельцем 12.09 (research.okx_universe): CHIP и PI —
     # эксперимент, их нет на HTX.
-    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
+    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
