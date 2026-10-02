@@ -620,7 +620,7 @@ class Settings(BaseSettings):
     # переключает список. Пусто — берётся HTX_SYMBOLS, как было до ключа.
     # Список выбран владельцем 12.09 (research.okx_universe): CHIP и PI —
     # эксперимент, их нет на HTX.
-    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT"
+    OKX_SYMBOLS: str = "BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT"
     ALLOW_MARKET_MOCK: bool = False
     # Proxy for HTX/Huobi API (optional). Same format as TELEGRAM_PROXY_URL.
     HTX_PROXY_URL: str = ""
@@ -656,7 +656,8 @@ class Settings(BaseSettings):
     PUBLIC_API_URL: str = ""
 
     # Снят как ограничитель. Фактический потолок параллельных позиций задают
-    # ANTI_DRAIN_MAX_OPEN_POSITIONS=5, маржа (0.70/0.13 ≈ 5) и
+    # ANTI_DRAIN_MAX_OPEN_POSITIONS=2 и лимит маржи на сделку ограничивают
+    # одновременную экспозицию на этапе limited-live.
     # MAX_ACTIVE_SIGNALS_PER_SYMBOL=1 × 7 символов HTX_SYMBOLS.
     MAX_ACTIVE_SIGNALS: int = 100
     MAX_ACTIVE_SIGNALS_PER_SYMBOL: int = 1
@@ -854,7 +855,7 @@ class Settings(BaseSettings):
     # MFE≥1.2) → сделка держалась до полного хард-стопа −4.5 вместо ~безубытка.
     # 0.45 ловит откатчиков в диапазоне 0.45–1.2%. Над-килла нет: выход всё равно
     # требует flow_against ИЛИ ухода за hard_floor (−0.35%), т.е. не по вику.
-    BREAKEVEN_LOCK_ARM_PCT: float = 0.75  # повышен с 0.35 на 0.75 01.10.2026
+    BREAKEVEN_LOCK_ARM_PCT: float = 0.45
     # Уровень результата (%), на котором фиксируемся после вооружения:
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
@@ -1662,15 +1663,11 @@ class Settings(BaseSettings):
     # станет неполным (новый контур, потребляющий маржу), его надо вернуть в
     # false, и production_blockers() снова закроет live.
     UNIFIED_MARGIN_ACCOUNTING: bool = True
-    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
-    # (#risk-one-percent-2026-09-20) Поднят 2 → 6, вровень с MAX_DAILY_LOSS_PCT.
-    # Это ВТОРОЙ дневной лимит, и он строже общего: при риске 1% он давал два
-    # стопа и срабатывал раньше, полностью перекрывая поднятый общий лимит.
-    # Два разных порога под одним именем «дневной лимит» — ровно тот случай,
-    # когда настройка выглядит поднятой, а поведение не меняется.
-    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 6.0
-    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 10.0
+    # Limited-live допускает максимум четыре плановых стопа по 0.25% за день.
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 1.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 5.0
 
     # =========================
     # PRODUCTION ENTRY GATE
@@ -1720,13 +1717,9 @@ class Settings(BaseSettings):
     # =========================
     # RISK MANAGEMENT
     # =========================
-    # (#risk-one-percent-2026-09-20) Поднят 3 → 6 вместе с риском на сделку.
-    # Число стопов подряд, которое робот переживёт за день = лимит / риск: при
-    # риске 1% и лимите 3% их было три, и серия вставала раньше, чем успевала
-    # отработать. 6% дают шесть — на один больше, чем стоят пять одновременных
-    # позиций (5 × 1% = 5%): без этого запаса день, в котором весь портфель
-    # ушёл в стоп, закрывал бы робота ровно в ноль.
-    MAX_DAILY_LOSS_PCT: float = 6
+    # Limited-live дневной предел: сначала собирается новая out-of-sample
+    # когорта, затем риск меняется отдельным решением.
+    MAX_DAILY_LOSS_PCT: float = 1.0
     # (#max-trades-per-day-2026-07-25) Общий предохранитель активности. Дневной
     # лимит УБЫТКА не ловит чурн: серия мелких «безубытков» и перезаходов не
     # пробивает −3%, но выедает депозит комиссиями (round-trip 0.15% на сделку).
@@ -1743,16 +1736,11 @@ class Settings(BaseSettings):
     # то есть предохранителя не было вовсе. - что ЗА БРЕД??? никто нормальный не ограничивает кол-во сделок??
     # ограничивать нужно кол-во убыточных сделок и не допускать убыточные сделки!! 
     MAX_TRADES_PER_DAY: int = 100
-    MAX_DRAWDOWN_PCT: float = 15
+    MAX_DRAWDOWN_PCT: float = 5.0
     # MAX_OPEN_POSITIONS удалён: его читал только RiskEngine.allow(), который в
     # боевом цикле не вызывался (мёртвый код). Реальный потолок числа позиций —
     # ANTI_DRAIN_MAX_OPEN_POSITIONS (anti_drain_guard). RiskEngine тоже удалён.
-    # (#risk-one-percent-2026-09-20) 0.5 → 1.0 решением владельца. На счёте 300
-    # с плечом 10 прежние 0.4-0.5% давали сделку ~80 USDT: пять позиций
-    # занимали 400 из 3000 экспозиции (13%), то есть работающее плечо 1.3× при
-    # заданном 10×. При 1% сделка ~200, пять позиций — 33% экспозиции и
-    # эффективные 3.3×. Выше не пускает MAX_POSITION_MARGIN_PCT=0.13.
-    RISK_PER_TRADE_PCT: float = 1.0
+    RISK_PER_TRADE_PCT: float = 0.25
     # (#диверсификация) Снижено 0.30→0.13 ради БОЛЬШЕГО ЧИСЛА параллельных
     # позиций. Раньше сделка занимала ~30% экв (~285 USDT), и 3 трендовых
     # раннера уже выбирали 70%-потолок маржи (665) → CRT/A+ душились
@@ -1760,7 +1748,7 @@ class Settings(BaseSettings):
     # и 5×123=615 < 665 — влезает 5 параллельных (= ANTI_DRAIN_MAX_OPEN_POSITIONS).
     # Риск $ на сделку падает (меньше qty), что и есть диверсификация. Буфер под
     # anti-drain-кап (15%) сохранён: план 13% < блок 15%.
-    MAX_POSITION_MARGIN_PCT: float = 0.30
+    MAX_POSITION_MARGIN_PCT: float = 0.10
     # === ДИНАМИЧЕСКОЕ РАСПРЕДЕЛЕНИЕ МАРЖИ ПО КАНДИДАТАМ ЦИКЛА ===
     # Когда сетап прошёл ВСЕ гейты, система считает сколько ещё кандидатов прошло
     # гейты в этом же цикле и делит СВОБОДНУЮ маржу (потолок − открытые) поровну.
@@ -1820,7 +1808,7 @@ class Settings(BaseSettings):
     # на СВОЙ карман маржи. Тренд-позиции/ордера НЕ трогает. Toggle из API/фронта
     # (рантайм-флаг в grid_store; GRID_ENABLED — лишь дефолт при старте).
     # =========================
-    GRID_ENABLED: bool = True                  # дефолт выкл; вкл/выкл из /grid
+    GRID_ENABLED: bool = False
     # (#kill-losers-2026-07-28) Стоп-кран поверх рантайм-флага. GRID_ENABLED —
     # только дефолт при первом старте; реальное состояние живёт в grid_store и
     # переключается из UI, поэтому правкой конфига сетку было не остановить.
@@ -1830,12 +1818,6 @@ class Settings(BaseSettings):
     # с realized 0.0, то есть корзина открылась, перевернулась и закрылась, не
     # заработав ничего и заняв маржу.
     #
-    # (#grid-neutral-churn-2026-07-28) ВЫКЛЮЧЕН — сетка снова работает.
-    # Причина −5.74 найдена: neutral-корзина переворачивалась при ЛЮБОМ
-    # направленном регайме, а он есть почти всегда. Отсюда десятки циклов с
-    # realized ровно 0.0 — открылась, перевернулась, закрылась, заняв маржу и
-    # не сделав ни одной сделки. Это был холостой оборот, а не проигранные
-    # сделки. Переворот теперь требует реального выхода из диапазона.
     GRID_KILL_SWITCH_ENABLED: bool = False
     # Двусторонняя корзина не имеет направления, которому можно быть
     # противоположной: её ломает выход из диапазона, а не наличие тренда.
@@ -2061,7 +2043,7 @@ class Settings(BaseSettings):
     # достижимости) НЕ трогаем — тест test_config_schema_bootstrap.py его
     # защищает как gate от капитального слива, тут правим саму геометрию
     # цели, а не строгость проверки.
-    TREND_TP2_R_MULT: float = 1.4 # было 2 стало 1.4 01.10.2026
+    TREND_TP2_R_MULT: float = 2.0
     TREND_TP1_FLOOR_PCT: float = 1.2
     TREND_TP2_FLOOR_PCT: float = 2.0
 
@@ -2279,8 +2261,8 @@ class Settings(BaseSettings):
     # capture — даём поездке развиться и трейлим шире, чтобы забирать движение
     # до слома/разворота. В scalp/range-режиме поведение прежнее (быстрый выход).
     TREND_RIDE_ENABLED: bool = True
-    # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога (%) было 1.2 (изм 17.07.2026).
-    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 1.2
+    # Не трогаем позицию protective-логикой, пока MFE не дошёл до этого порога.
+    TREND_RIDE_MIN_MFE_TO_PROTECT_PCT: float = 0.8
     # В тренде выходим, отдав эту долю от MFE (шире, чем обычный ~0.35 → едем дольше).
     TREND_RIDE_TRAIL_DRAWDOWN_PCT: float = 0.50
 
