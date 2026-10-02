@@ -206,3 +206,17 @@ def test_render_blueprint_enforces_capital_leak_entry_gates():
     assert env["REGIME_EXP_SIZING_ENABLED"] == "false"
     assert env["DYNAMIC_MARGIN_FAIR_SHARE"] == "false"
     assert env["DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE"] == "1.0"
+
+
+def test_render_blueprint_is_a_bounded_directional_live_ramp():
+    """Направленные движки не должны делить live-капитал с сеткой до того,
+    как для неё появится отдельная проверенная модель риска."""
+    env = _api_env()
+
+    assert env["GRID_ENABLED"] == "false"
+    assert env["GRID_KILL_SWITCH_ENABLED"] == "true"
+    assert float(env["RISK_PER_TRADE_PCT"]) <= 0.25
+    assert int(env["ANTI_DRAIN_MAX_OPEN_POSITIONS"]) <= 2
+    assert float(env["MAX_DAILY_LOSS_PCT"]) <= 1.0
+    assert float(env["ANTI_DRAIN_MAX_DAILY_LOSS_PCT"]) <= 1.0
+    assert float(env["MAX_DRAWDOWN_PCT"]) <= 5.0

@@ -98,7 +98,7 @@ services:
       # добавлены DOGE и HYPE, CHIP и PI — эксперимент (нет на HTX); убраны
       # AVAX, TRX, DOT, ADA — на OKX тонкие (открытые по ним доживут до закрытия).
       - key: OKX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,AVAX/USDT,TRX/USDT,ADA/USDT,DOT/USDT,LINK/USDT,LTC/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
@@ -344,7 +344,7 @@ services:
       - key: BREAKEVEN_LOCK_ENABLED
         value: "true"
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.75"      # Быстрое вооружение
+        value: "0.45"      # Быстрое вооружение
       - key: BREAKEVEN_LOCK_FLOOR_PCT
         value: "0.18"      # Покрытие комиссий
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
@@ -374,11 +374,11 @@ services:
       #
       # Возврат в enforce — после разреза stop-forensics по would_block.
       - key: TP_REACH_MODE
-        value: enforce
+        value: shadow
       # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
       - key: MOMENTUM_GATE_MODE
-        value: enforce
+        value: shadow
       - key: TP_REACH_EV_MARGIN
         value: "1.0"
       - key: TP_REACH_MIN_SAMPLE
@@ -428,14 +428,15 @@ services:
         value: "2.0"
 
       # ── GRID ENGINE (Защита от слива) ─────────────────────────────────────
-      # Grid лил деньги из-за агрессивного плеча и усреднения в сильный тренд.
-      # Теперь: меньше маржи, меньше ордеров усреднения, шире шаг.
+      # Сетка выключена для направленного live-ramp: усреднение в тренде —
+      # отдельный потребитель капитала с иным профилем риска. Возвращать её
+      # можно только после отдельного walk-forward и сверки общей маржи.
       - key: GRID_ENABLED
-        value: "true"
+        value: "false"
       - key: GRID_SYMBOLS
         value: BTC/USDT,ETH/USDT
       - key: GRID_KILL_SWITCH_ENABLED
-        value: "false"
+        value: "true"
       - key: GRID_REGIME_EMA_BAND_PCT
         value: "0.70"      # Строгий фильтр флэта (уже 0.8 было)
       - key: GRID_TP_PCT
@@ -476,11 +477,10 @@ services:
       # ── Risk management ───────────────────────────────────────────────────
       - key: RISK_EQUITY_USDT
         value: "300"
-      # (#risk-one-percent-2026-09-20) 0.4 → 1.0. Прежние 0.4% на счёте 300 с
-      # плечом 10 давали сделку ~80 USDT и занимали 13% экспозиции: заданное
-      # плечо 10× работало как 1.3×. При 1% это 200 USDT и 33% экспозиции.
+      # Limited-live стартует с 0.25% капитала на стоп: повышение разрешено
+      # только после out-of-sample когорты по каждому режиму и venue.
       - key: RISK_PER_TRADE_PCT
-        value: "1.0"
+        value: "0.25"
       # (#equity-is-margin-2026-09-20) Плечо не было закреплено НИГДЕ, кроме
       # дефолта config.py, — а это множитель размера каждой позиции. Эквити
       # (RISK_EQUITY_USDT выше) — капитал; экспозиция = капитал × плечо, и
@@ -498,10 +498,9 @@ services:
         value: "10"
       - key: LIVE_MAX_LEVERAGE
         value: "10"
-      # Доля эквити на одну позицию (маржа). Вместе с плечом задаёт нотионал:
-      # 0.13 × 5 = 65% экспозиции на сделку.
+      # Максимум 10% эквити маржи на одну позицию в limited-live.
       - key: MAX_POSITION_MARGIN_PCT
-        value: "0.30"
+        value: "0.10"
       # (#no-static-position-size-2026-09-20) Абсолютный потолок ВЫКЛЮЧЕН.
       # 250 были настоящим ограничителем размера: при эквити 3000 резали сделку
       # до 250 там, где маржевый лимит разрешал 390, и не росли ни со счётом,
@@ -511,8 +510,8 @@ services:
         value: "0"
       # (#sizing-scales-with-equity-2026-09-19) Действующий потолок — ДОЛЯ
       # экспозиции (капитал × плечо), растёт со счётом и плечом сама.
-      # 20% = 100 / ANTI_DRAIN_MAX_OPEN_POSITIONS — равная доля на каждую из
-      # пяти одновременных позиций. Размер сделки всё равно задаёт минимум из
+      # 20% задаёт верхнюю границу одной сделки независимо от доступного плеча. Размер
+      # сделки всё равно задаёт минимум из
       # риска, капитала, MAX_POSITION_MARGIN_PCT × плечо и этой доли.
       - key: LIVE_MAX_ORDER_NOTIONAL_PCT
         value: "20"
@@ -536,23 +535,21 @@ services:
       - key: LIVE_EXCHANGE_STOP_BUFFER_PCT
         value: "0.5"
       - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
-        value: "5"
+        value: "2"
       - key: MAX_ACTIVE_SIGNALS
         value: "100"
       - key: MAX_TRADES_PER_DAY
         value: "100"       # Разблокировано (было 3)
-      # Поднят вместе с риском: стопов подряд за день = лимит / риск. При
-      # риске 1% лимит 3% давал три стопа, 6% дают шесть — на один больше, чем
-      # стоят пять одновременных позиций (5 × 1% = 5%).
+      # Дневной стоп limited-live: четыре плановых стопа по 0.25% и никаких
+      # новых входов до следующего окна наблюдения.
       - key: MAX_DAILY_LOSS_PCT
-        value: "6"
-      # ВТОРОЙ дневной лимит — anti-drain, и он строже общего. При риске 1%
-      # прежние 2% давали два стопа и срабатывали раньше, перекрывая поднятый
-      # общий лимит целиком. Держим вровень, иначе решает он.
+        value: "1"
+      # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
+      # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
-        value: "6"
+        value: "1"
       - key: MAX_DRAWDOWN_PCT
-        value: "15"
+        value: "5"
 
       # (#mss-is-not-a-confirmation-2026-09-20) Чем подтверждается вход CRT.
       # "fvg" — только FVG; MSS остаётся бонусом к оценке, но входить по нему
