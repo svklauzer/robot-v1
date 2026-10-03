@@ -248,7 +248,7 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 3.5
+    TREND_MAX_EXTENSION_ATR: float = 4.5
     # shadow — считать и писать в план, вход НЕ блокировать.
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -270,8 +270,8 @@ class Settings(BaseSettings):
     # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h"
     TZ_ENTRY_TF: str = "15m"
-    TZ_ADX_MIN: float = 15.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
-    TZ_STOCH_ZONE: float = 25.0     # лонг: %K <= 35; шорт: %K >= 65
+    TZ_ADX_MIN: float = 20.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
+    TZ_STOCH_ZONE: float = 20.0     # лонг: %K <= 20; шорт: %K >= 80
 
     # (#tz-enforce-2026-08-03) Ввод условий в бой — с двумя предохранителями.
     # Первый замер: ADX по трендовым сетапам 16.1 / 18.0 / 19.4 при пороге 23.
@@ -1663,11 +1663,11 @@ class Settings(BaseSettings):
     # станет неполным (новый контур, потребляющий маржу), его надо вернуть в
     # false, и production_blockers() снова закроет live.
     UNIFIED_MARGIN_ACCOUNTING: bool = True
-    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 2
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     # Limited-live допускает максимум четыре плановых стопа по 0.25% за день.
-    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 1.0
-    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 5.0
+    ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 6.0
+    ANTI_DRAIN_MAX_DRAWDOWN_PCT: float = 10.0
 
     # =========================
     # PRODUCTION ENTRY GATE
@@ -1719,7 +1719,7 @@ class Settings(BaseSettings):
     # =========================
     # Limited-live дневной предел: сначала собирается новая out-of-sample
     # когорта, затем риск меняется отдельным решением.
-    MAX_DAILY_LOSS_PCT: float = 1.0
+    MAX_DAILY_LOSS_PCT: float = 6.0
     # (#max-trades-per-day-2026-07-25) Общий предохранитель активности. Дневной
     # лимит УБЫТКА не ловит чурн: серия мелких «безубытков» и перезаходов не
     # пробивает −3%, но выедает депозит комиссиями (round-trip 0.15% на сделку).
@@ -1736,11 +1736,11 @@ class Settings(BaseSettings):
     # то есть предохранителя не было вовсе. - что ЗА БРЕД??? никто нормальный не ограничивает кол-во сделок??
     # ограничивать нужно кол-во убыточных сделок и не допускать убыточные сделки!! 
     MAX_TRADES_PER_DAY: int = 100
-    MAX_DRAWDOWN_PCT: float = 5.0
+    MAX_DRAWDOWN_PCT: float = 15.0
     # MAX_OPEN_POSITIONS удалён: его читал только RiskEngine.allow(), который в
     # боевом цикле не вызывался (мёртвый код). Реальный потолок числа позиций —
     # ANTI_DRAIN_MAX_OPEN_POSITIONS (anti_drain_guard). RiskEngine тоже удалён.
-    RISK_PER_TRADE_PCT: float = 0.25
+    RISK_PER_TRADE_PCT: float = 1.0
     # (#диверсификация) Снижено 0.30→0.13 ради БОЛЬШЕГО ЧИСЛА параллельных
     # позиций. Раньше сделка занимала ~30% экв (~285 USDT), и 3 трендовых
     # раннера уже выбирали 70%-потолок маржи (665) → CRT/A+ душились
@@ -1748,7 +1748,7 @@ class Settings(BaseSettings):
     # и 5×123=615 < 665 — влезает 5 параллельных (= ANTI_DRAIN_MAX_OPEN_POSITIONS).
     # Риск $ на сделку падает (меньше qty), что и есть диверсификация. Буфер под
     # anti-drain-кап (15%) сохранён: план 13% < блок 15%.
-    MAX_POSITION_MARGIN_PCT: float = 0.10
+    MAX_POSITION_MARGIN_PCT: float = 0.30
     # === ДИНАМИЧЕСКОЕ РАСПРЕДЕЛЕНИЕ МАРЖИ ПО КАНДИДАТАМ ЦИКЛА ===
     # Когда сетап прошёл ВСЕ гейты, система считает сколько ещё кандидатов прошло
     # гейты в этом же цикле и делит СВОБОДНУЮ маржу (потолок − открытые) поровну.
