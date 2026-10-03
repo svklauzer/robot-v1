@@ -61,11 +61,6 @@ class MLController:
             return "shadow"
  
         return mode            
-            self._last_demote_reason = (
-                f"val_auc={auc:.4f} < {min_auc} — модель не подтверждает качество, "
-                f"полномочия отозваны до shadow"
-            )
-            return "shadow"
 
         # (#ml-unreliable-auc-2026-08-21) Порога по AUC НЕДОСТАТОЧНО. Ретрейн
         # 21.08 дал val_auc 0.6612 — выше порога 0.55 — при 13 положительных в
