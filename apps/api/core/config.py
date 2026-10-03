@@ -1047,7 +1047,7 @@ class Settings(BaseSettings):
     # это исход ПОД ТОГДАШНЮЮ логику ведения. Старая строка отвечает на другой
     # вопрос; смешивать эпохи в одной выборке нельзя.
     ML_TRAIN_WINDOW_DAYS: float = 180.0
-    ML_MIN_TRAIN_SAMPLES: int = 725        # меньше — модель не обучается (честно)
+    ML_MIN_TRAIN_SAMPLES: int = 200        # меньше — модель не обучается (честно)
     ML_MIN_SCORE_TO_TRADE: float = 0.45    # full_auto/advisory: ниже — skip/block
     # (#ml-auto-demote-2026-07-27) Модель влияет на деньги только пока доказывает
     # качество. Ретрейн 16.07 дал val AUC 0.5067 — монетку, — и переключение в
