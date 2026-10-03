@@ -291,7 +291,7 @@ class MLIntelligenceHub:
                 st = labeler.status()
                 metrics = st.get("metrics") or {}
                 if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.55:
-                    default_weights["meta_labeler"] = 0.15
+                    default_weights["meta_labeler"] = 0.00
                     default_weights["outcome_stats"] = 0.65
                     default_weights["scorer"] = 0.20
             except Exception:
