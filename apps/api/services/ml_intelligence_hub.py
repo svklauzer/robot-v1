@@ -125,8 +125,9 @@ class MLIntelligenceHub:
         if mode not in ("advisory", "full_auto"):
             return mode
         
-         if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
-             return mode
+        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
+            return mode
+        
         labeler = self._get_meta_labeler()
         if labeler:
             try:
@@ -139,7 +140,7 @@ class MLIntelligenceHub:
                         return "shadow"
             except Exception:
                 pass
- 
+
         return mode
     
     def evaluate_candidate(self, candidate: dict) -> MLDecision:
@@ -284,17 +285,17 @@ class MLIntelligenceHub:
         }
         
         # Динамическая корректировка весов при низкой надежности модели
-         labeler = self._get_meta_labeler()
-         if labeler and "meta_labeler" in predictions:
-             try:
-                 st = labeler.status()
-                 metrics = st.get("metrics") or {}
-                 if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.55:
-                     default_weights["meta_labeler"] = 0.15
-                     default_weights["outcome_stats"] = 0.65
-                     default_weights["scorer"] = 0.20
-             except Exception:
-                 pass        
+        labeler = self._get_meta_labeler()
+        if labeler and "meta_labeler" in predictions:
+            try:
+                st = labeler.status()
+                metrics = st.get("metrics") or {}
+                if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.55:
+                    default_weights["meta_labeler"] = 0.15
+                    default_weights["outcome_stats"] = 0.65
+                    default_weights["scorer"] = 0.20
+            except Exception:
+                pass        
 
         total_weight = 0.0
         weighted_sum = 0.0
