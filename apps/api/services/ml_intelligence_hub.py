@@ -125,9 +125,8 @@ class MLIntelligenceHub:
         if mode not in ("advisory", "full_auto"):
             return mode
         
-        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
-            return mode
-        
+         if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
+             return mode
         labeler = self._get_meta_labeler()
         if labeler:
             try:
@@ -136,13 +135,11 @@ class MLIntelligenceHub:
                 metrics = st.get("metrics") or {}
                 if auc is not None:
                     min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-                    if float(auc) < min_auc:
-                    # Допускаем авто-режим только если AUC прошел порог, и у нас нет критического оверфиттинга
-                    if float(auc) < min_auc or metrics.get("events_per_feature", 0) < 3.0:
+                    if float(auc) < min_auc or float(metrics.get("events_per_feature", 0)) < 3.0:
                         return "shadow"
             except Exception:
                 pass
-
+ 
         return mode
     
     def evaluate_candidate(self, candidate: dict) -> MLDecision:
