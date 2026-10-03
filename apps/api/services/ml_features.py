@@ -40,43 +40,18 @@ from services.close_reasons import reached_tp2
 # после того, как выяснилось, что при n=1 ratio равен ровно ±1.000 всегда.
 CVD_MIN_TRADES: int = 10
 
-# Порядок ВАЖЕН и фиксирован — модель обучается и предсказывает по нему.
-# При изменении списка старая модель становится несовместимой: см.
-# FEATURE_VERSION ниже, по нему обучение отбраковывает устаревшие артефакты.
-FEATURE_NAMES: list[str] = [
-    "confidence",
-    "grade_ord",            # A+=3 A=2 B=1 C=0
-    "side_is_short",        # 1 short / 0 long
-    "net_rr_tp1",
-    "net_rr_tp2",
-    # Асимметрия наград: RR до TP2 относительно TP1. Высокая = сетап рассчитан
-    # на runner, низкая = вся надежда на быструю фиксацию. Разные исходы.
-    "rr_asymmetry",
-    # Дистанция стопа в % от входа. Задаёт и риск, и размер позиции
-    # (qty = risk / distance), и вероятность быть выбитым шумом. В прежнем
-    # векторе её не было вовсе — при том, что вокруг неё крутился весь разбор.
-    "stop_distance_pct",
-    # Размер позиции: одна и та же ошибка на 500 и на 50 стоит по-разному, а
-    # издержки почти пропорциональны нотионалу.
-    "notional_usdt",
-    # Час суток UTC. Ликвидность и спред меняются по сессиям; издержки — тоже.
-    "hour_of_day",
-    # Оставшиеся торгуемые режимы. is_trend_up/is_trend_down убраны: после
-    # отключения они константные нули.
-    "is_crt",
-    "is_reversal",
-    "is_scalp",
-    "spread_pct",
-    "obi",
-    "bid_wall_share",
-    "ask_wall_share",
-    "cvd_ratio",
-    "cvd_trades",
-]
+# Версия контракта. Модель, обученная на старом наборе из 18 фич, 
+# будет автоматически отбракована благодаря инкременту версии.
+FEATURE_VERSION: int = 3
 
-# Версия контракта. Модель, обученная на другом наборе, несовместима по длине
-# и по смыслу вектора — тихо предсказывать по ней нельзя.
-FEATURE_VERSION: int = 2
+FEATURE_NAMES: list[str] = [
+    "stop_distance_pct",  # Дистанция стопа (риск/шум)
+    "confidence",         # Уверенность базового алгоритма
+    "net_rr_tp1",         # Риск-награда на первом тейке
+    "rr_asymmetry",       # Асимметрия распределения целей
+    "spread_pct",         # Текущий спред (ликвидность/издержки)
+    "cvd_ratio",          # Направление кумулятивной дельты объема
+]
 
 
 def _f(v: Any, default: float = 0.0) -> float:
@@ -133,9 +108,7 @@ def _hour_of_day(row: dict) -> float:
 
 
 def row_to_features(row: dict) -> list[float]:
-    """Логированная строка ИЛИ живой кандидат → вектор фич (порядок FEATURE_NAMES)."""
-    regime = str(row.get("regime") or "").lower()
-    side = str(row.get("side") or row.get("action") or "").lower()
+    """Превращает кандидата в строго ограниченный вектор фич без шума."""
     d = _depth(row)
     cvd_trades = _f(d.get("cvd_trades"))
     cvd_reliable = cvd_trades >= float(CVD_MIN_TRADES)
@@ -147,32 +120,13 @@ def row_to_features(row: dict) -> list[float]:
     stop = _f(row.get("stop_price"))
     stop_dist_pct = abs(entry - stop) / entry * 100.0 if entry > 1e-9 and stop > 0 else 0.0
 
-    # ИСПРАВЛЕНИЕ TRAIN/SERVE SKEW: Синхронизируем имя фичи notional_usdt с кодом извлечения
-    notional = row.get("notional_usdt")
-    if notional is None:
-        notional = _f(row.get("required_margin"), 0.0) * _f(row.get("leverage"), 1.0)
-    else:
-        notional = _f(notional)
-
     return [
-        _f(row.get("confidence"), 60.0),
-        _grade_ord(row.get("grade")),
-        1.0 if side in ("short", "sell") else 0.0,
-        rr1,
-        rr2,
-        rr2 / rr1 if rr1 > 1e-9 else 0.0,
         stop_dist_pct,
-        notional,
-        _hour_of_day(row),
-        1.0 if "crt" in regime else 0.0,
-        1.0 if "reversal" in regime else 0.0,
-        1.0 if "scalp" in regime else 0.0,
+        _f(row.get("confidence"), 60.0),
+        rr1,
+        rr2 / rr1 if rr1 > 1e-9 else 0.0,
         _f(d.get("spread_pct")),
-        _f(d.get("obi")),
-        _f(d.get("bid_wall_share")),
-        _f(d.get("ask_wall_share")),
         _f(d.get("cvd_ratio")) if cvd_reliable else 0.0,
-        cvd_trades,
     ]
 
 

@@ -238,16 +238,17 @@ class MetaLabeler:
 
         metrics = {"val_auc": None, "val_acc": None, "val_n": int(len(yte))}
         try:
+            # Честная проверка: в тесте должно быть как минимум 2 класса для расчета AUC
             if len(set(ytr.tolist())) >= 2 and len(yte) >= 5 and len(set(yte.tolist())) >= 2:
                 m = _make().fit(Xtr, ytr)
                 proba = m.predict_proba(Xte)[:, 1]
                 metrics["val_auc"] = round(float(roc_auc_score(yte, proba)), 4)
                 metrics["val_acc"] = round(float(accuracy_score(yte, (proba >= 0.5).astype(int))), 4)
             else:
-                # ФОЛБЕК ПРИ КРИЗИСЕ ДАННЫХ (val_positives=0): Считаем по всей выборке, чтобы не падать в null
-                m_full = _make().fit(Xa, ya)
-                metrics["val_auc"] = round(float(roc_auc_score(ya, m_full.predict_proba(Xa)[:, 1])), 4)
-                metrics["val_acc"] = round(float(accuracy_score(ya, m_full.predict(Xa))), 4)
+                # Честный фоллбэк без крашей: нет данных в тесте -> нет и метрик валидации
+                metrics["val_auc"] = None
+                metrics["val_acc"] = None
+                metrics["val_error"] = "Кризис данных: в валидационном сплите присутствует только один класс"
         except Exception as exc:
             metrics["val_error"] = f"{type(exc).__name__}: {exc}"
 
