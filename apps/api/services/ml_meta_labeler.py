@@ -267,7 +267,7 @@ class MetaLabeler:
                 None if metrics["val_acc"] is None
                 else round(float(metrics["val_acc"]) - base_rate, 4)
             ),
-            # Событий на признак. Меньше 10 — модель запоминает выборку.
+            # Событий на признак. Меньше 10 — модель запоминает выборку..
             # 51 положительный на 16 признаков = 3.19.
             "events_per_feature": epv,
             "features_used": len(FEATURE_NAMES),
