@@ -229,11 +229,11 @@ services:
       - key: TREND_TRIGGER_MODE
         value: enforce
       - key: TREND_MAX_EXTENSION_ATR
-        value: "3.5"
+        value: "4.5"
       - key: TZ_ADX_MIN
-        value: "15.0"
+        value: "20.0"
       - key: TZ_STOCH_ZONE
-        value: "25.0"
+        value: "20.0"
       - key: TZ_MODE
         value: enforce
       # (#tz-enforce-adx-rising-2026-09-03) Добавлено adx_rising — беспороговое
@@ -480,7 +480,7 @@ services:
       # Limited-live стартует с 0.25% капитала на стоп: повышение разрешено
       # только после out-of-sample когорты по каждому режиму и venue.
       - key: RISK_PER_TRADE_PCT
-        value: "0.25"
+        value: "1.0"
       # (#equity-is-margin-2026-09-20) Плечо не было закреплено НИГДЕ, кроме
       # дефолта config.py, — а это множитель размера каждой позиции. Эквити
       # (RISK_EQUITY_USDT выше) — капитал; экспозиция = капитал × плечо, и
@@ -500,7 +500,7 @@ services:
         value: "10"
       # Максимум 10% эквити маржи на одну позицию в limited-live.
       - key: MAX_POSITION_MARGIN_PCT
-        value: "0.10"
+        value: "0.30"
       # (#no-static-position-size-2026-09-20) Абсолютный потолок ВЫКЛЮЧЕН.
       # 250 были настоящим ограничителем размера: при эквити 3000 резали сделку
       # до 250 там, где маржевый лимит разрешал 390, и не росли ни со счётом,
@@ -535,7 +535,7 @@ services:
       - key: LIVE_EXCHANGE_STOP_BUFFER_PCT
         value: "0.5"
       - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
-        value: "2"
+        value: "5"
       - key: MAX_ACTIVE_SIGNALS
         value: "100"
       - key: MAX_TRADES_PER_DAY
@@ -543,13 +543,13 @@ services:
       # Дневной стоп limited-live: четыре плановых стопа по 0.25% и никаких
       # новых входов до следующего окна наблюдения.
       - key: MAX_DAILY_LOSS_PCT
-        value: "1"
+        value: "6"
       # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
       # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
         value: "1"
       - key: MAX_DRAWDOWN_PCT
-        value: "5"
+        value: "15"
 
       # (#mss-is-not-a-confirmation-2026-09-20) Чем подтверждается вход CRT.
       # "fvg" — только FVG; MSS остаётся бонусом к оценке, но входить по нему
