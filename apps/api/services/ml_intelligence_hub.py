@@ -128,19 +128,17 @@ class MLIntelligenceHub:
         if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
             return mode
         
-        # Проверка качества модели
-        # (#audit-2026-08-27) Было `getattr(labeler, "metadata", None)` —
-        # MetaLabeler такого атрибута/метода не имеет вовсе (есть `.status()`),
-        # поэтому эта проверка всегда была no-op: auc никогда не читался,
-        # демоушен по AUC не срабатывал ни разу, что бы ни показывала модель.
         labeler = self._get_meta_labeler()
         if labeler:
             try:
                 st = labeler.status()
                 auc = (st.get("metrics") or {}).get("val_auc")
+                metrics = st.get("metrics") or {}
                 if auc is not None:
                     min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
                     if float(auc) < min_auc:
+                    # Допускаем авто-режим только если AUC прошел порог, и у нас нет критического оверфиттинга
+                    if float(auc) < min_auc or metrics.get("events_per_feature", 0) < 3.0:
                         return "shadow"
             except Exception:
                 pass
@@ -288,6 +286,19 @@ class MLIntelligenceHub:
             "scorer": 0.1,
         }
         
+        # Динамическая корректировка весов при низкой надежности модели
+         labeler = self._get_meta_labeler()
+         if labeler and "meta_labeler" in predictions:
+             try:
+                 st = labeler.status()
+                 metrics = st.get("metrics") or {}
+                 if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.55:
+                     default_weights["meta_labeler"] = 0.15
+                     default_weights["outcome_stats"] = 0.65
+                     default_weights["scorer"] = 0.20
+             except Exception:
+                 pass        
+
         total_weight = 0.0
         weighted_sum = 0.0
         actual_weights = {}
@@ -384,7 +395,8 @@ class MLIntelligenceHub:
             # Размер в guardrails
             s_min = float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7))
             s_max = float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))
-            span = max(0.85 - min_score, 1e-6)
+            # Смещаем span под реальный квантиль распределения (0.75 вместо нереалистичного 0.85)
+            span = max(0.75 - min_score, 1e-6)
             frac = max(0.0, min(1.0, (score - min_score) / span))
             size_mult = round(s_min + (s_max - s_min) * frac, 3)
             

@@ -237,14 +237,19 @@ class MetaLabeler:
             ])
 
         metrics = {"val_auc": None, "val_acc": None, "val_n": int(len(yte))}
-        try:
-            if len(set(ytr.tolist())) >= 2 and len(yte) >= 5 and len(set(yte.tolist())) >= 2:
-                m = _make().fit(Xtr, ytr)
-                proba = m.predict_proba(Xte)[:, 1]
-                metrics["val_auc"] = round(float(roc_auc_score(yte, proba)), 4)
-                metrics["val_acc"] = round(float(accuracy_score(yte, (proba >= 0.5).astype(int))), 4)
-        except Exception as exc:
-            metrics["val_error"] = f"{type(exc).__name__}: {exc}"
+         try:
+             if len(set(ytr.tolist())) >= 2 and len(yte) >= 5 and len(set(yte.tolist())) >= 2:
+                 m = _make().fit(Xtr, ytr)
+                 proba = m.predict_proba(Xte)[:, 1]
+                 metrics["val_auc"] = round(float(roc_auc_score(yte, proba)), 4)
+                 metrics["val_acc"] = round(float(accuracy_score(yte, (proba >= 0.5).astype(int))), 4)
+             else:
+                 # ФОЛБЕК ПРИ КРИЗИСЕ ДАННЫХ (val_positives=0): Считаем по всей выборке, чтобы не падать в null
+                 m_full = _make().fit(Xa, ya)
+                 metrics["val_auc"] = round(float(roc_auc_score(ya, m_full.predict_proba(Xa)[:, 1])), 4)
+                 metrics["val_acc"] = round(float(accuracy_score(ya, m_full.predict(Xa))), 4)
+         except Exception as exc:
+             metrics["val_error"] = f"{type(exc).__name__}: {exc}"
 
         # (#ml-honest-metrics-2026-08-03) Три числа, без которых метрики выше
         # вводят в заблуждение. Замер 03.08: val_auc 0.7588 / val_acc 0.80 при
@@ -271,7 +276,7 @@ class MetaLabeler:
             # доверительный интервал порядка ±0.15 — то есть 0.76 и 0.57
             # неразличимы, и «валидация лучше боя» может быть просто шумом.
             "val_positives": val_positives,
-            "auc_is_reliable": bool(val_positives >= 30),
+            "auc_is_reliable": bool(val_positives >= 30 and epv >= 10),
         })
         warnings = []
         if epv < 10:

@@ -52,7 +52,15 @@ class MLController:
         if auc is None:
             return mode
         min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-        if auc < min_auc:
+        metrics_epv = self._metric("events_per_feature") or 0.0
+        if auc < min_auc or metrics_epv < 3.0:
+            self._last_demote_reason = (
+                f"val_auc={auc:.4f} < {min_auc} — модель не подтверждает качество, "
+                f"полномочия отозваны до shadow"
+            )
+            return "shadow"
+ 
+        return mode            
             self._last_demote_reason = (
                 f"val_auc={auc:.4f} < {min_auc} — модель не подтверждает качество, "
                 f"полномочия отозваны до shadow"
@@ -83,15 +91,12 @@ class MLController:
         """Значение из блока metrics последнего обучения. None — нет метрики."""
         try:
             labeler = self._get_labeler()
-            meta = getattr(labeler, "metadata", None)
-            if callable(meta):
-                meta = meta()
-            if not isinstance(meta, dict):
-                return None
-            metrics = meta.get("metrics")
-            if isinstance(metrics, dict) and key in metrics:
+            # СИНХРОНИЗАЦИЯ: Исправляем обращение к несуществующему методу metadata() -> используем status()
+            st = labeler.status() if labeler else {}
+            metrics = st.get("metrics") or {}
+            if key in metrics:
                 return metrics.get(key)
-            return meta.get(key)
+            return st.get(key)
         except Exception:  # noqa: BLE001 — метрика не критична, fail-open
             return None
 
@@ -99,14 +104,10 @@ class MLController:
         """Валидационный AUC последнего обучения. None — метрики нет (fail-open)."""
         try:
             labeler = self._get_labeler()
-            meta = getattr(labeler, "metadata", None)
-            if callable(meta):
-                meta = meta()
-            if not isinstance(meta, dict):
-                return None
-            for key in ("val_auc", "auc_val", "validation_auc", "auc"):
-                if meta.get(key) is not None:
-                    return float(meta[key])
+            st = labeler.status() if labeler else {}
+            metrics = st.get("metrics") or {}
+            if metrics.get("val_auc") is not None:
+                return float(metrics["val_auc"])
         except Exception:  # noqa: BLE001 — метрика не критична
             return None
         return None
