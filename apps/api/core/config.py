@@ -1028,7 +1028,7 @@ class Settings(BaseSettings):
     # запуск в live НЕ затрагивается (ML ортогонален ENABLE_LIVE_ORDERS, fail-open).
     #   off | shadow | advisory | full_auto
     # =========================
-    ML_MODE: str = "shadow"
+    ML_MODE: str = "advisory" # Модель начнет писать рекомендации "take" / "skip" в логи и ТГ
     # (#ml-rework-2026-07-28) Метка обучения. БЫЛО "is_win" — та же ловушка,
     # что и win-rate: модель училась максимизировать ЧИСЛО побед, тогда как наш
     # собственный замер даёт 67% побед при payoff 0.11, то есть убыточную
@@ -1056,7 +1056,7 @@ class Settings(BaseSettings):
     # (score виден рядом с сигналами, на сделки не влияет).
     # Повышение обратно — только вручную, после подтверждённого ретрейна.
     ML_AUTO_DEMOTE_ENABLED: bool = True
-    ML_MIN_AUC_FOR_AUTO: float = 0.55
+    ML_MIN_AUC_FOR_AUTO: float = 0.60
     ML_SIZE_MULT_MIN: float = 0.7          # full_auto: множитель размера, кэп снизу
     ML_SIZE_MULT_MAX: float = 1.25         # full_auto: множитель размера, кэп сверху
     # Ежесуточный авто-retrain (держит модель свежей; при данных < min — honest skip).
@@ -1064,7 +1064,7 @@ class Settings(BaseSettings):
     ML_RETRAIN_INTERVAL_SEC: int = 86400   # раз в сутки
     # ML-алерт в Telegram опционален — off, чтобы НЕ дублировать существующий
     # 2ч-дайджест. Включишь — придёт короткий итог retrain в owner-канал.
-    ML_TELEGRAM_ALERTS: bool = False
+    ML_TELEGRAM_ALERTS: bool = True
     # OHLC-research: число walk-forward фолдов и косты (в долях k_atr-хода).
     RESEARCH_WF_FOLDS: int = 5
     RESEARCH_COST_ATR: float = 0.25

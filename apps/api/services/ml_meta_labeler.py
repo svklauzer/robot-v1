@@ -286,7 +286,7 @@ class MetaLabeler:
             # доверительный интервал порядка ±0.15 — то есть 0.76 и 0.57
             # неразличимы, и «валидация лучше боя» может быть просто шумом.
             "val_positives": val_positives,
-            "auc_is_reliable": bool(val_positives >= 30 and epv >= 10),
+            "auc_is_reliable": bool(val_positives >= 20 and epv >= 10),
         })
         warnings = []
         if epv < 10:
