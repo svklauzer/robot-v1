@@ -145,7 +145,14 @@ def row_to_features(row: dict) -> list[float]:
 
     entry = _entry_price(row)
     stop = _f(row.get("stop_price"))
-    stop_dist_pct = abs(entry - stop) / entry * 100.0 if entry > 0 and stop > 0 else 0.0
+    stop_dist_pct = abs(entry - stop) / entry * 100.0 if entry > 1e-9 and stop > 0 else 0.0
+
+    # ИСПРАВЛЕНИЕ TRAIN/SERVE SKEW: Синхронизируем имя фичи notional_usdt с кодом извлечения
+    notional = row.get("notional_usdt")
+    if notional is None:
+        notional = _f(row.get("required_margin"), 0.0) * _f(row.get("leverage"), 1.0)
+    else:
+        notional = _f(notional)
 
     return [
         _f(row.get("confidence"), 60.0),
@@ -155,7 +162,7 @@ def row_to_features(row: dict) -> list[float]:
         rr2,
         rr2 / rr1 if rr1 > 1e-9 else 0.0,
         stop_dist_pct,
-        _f(row.get("required_margin")),
+        notional,
         _hour_of_day(row),
         1.0 if "crt" in regime else 0.0,
         1.0 if "reversal" in regime else 0.0,
