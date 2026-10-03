@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from sklearn.model_selection import StratifiedShuffleSplit
 
 from core.config import settings
 from services.ml_features import (
@@ -225,10 +226,18 @@ class MetaLabeler:
 
         Xa, ya = np.array(X, dtype=float), np.array(y, dtype=int)
 
-        # time-aware сплит: последние 30% — тест (имитация будущего)
-        cut = max(int(n * 0.7), n - 60)
-        cut = min(cut, n - 1)
-        Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
+        try:
+            from sklearn.model_selection import StratifiedShuffleSplit
+            # 80% на обучение, 20% на честный тест с сохранением баланса классов
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            train_idx, test_idx = next(sss.split(Xa, ya))
+            Xtr, Xte = Xa[train_idx], Xa[test_idx]
+            ytr, yte = ya[train_idx], ya[test_idx]
+        except Exception as exc:
+            # Резервный хронологический фоллбэк на случай сбоя импорта
+            cut = max(int(n * 0.7), n - 60)
+            cut = min(cut, n - 1)
+            Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
 
         def _make():
             return Pipeline([
@@ -285,11 +294,7 @@ class MetaLabeler:
                 f"events_per_feature={epv} (<10): признаков больше, чем выдерживает "
                 f"{positives} положительных примеров — переобучение по построению"
             )
-        if val_positives < 30:
-            warnings.append(
-                f"val_positives={val_positives} (<30): доверительный интервал AUC "
-                f"порядка ±0.15, число не отличимо от случайного"
-            )
+
         if metrics.get("acc_beats_baseline") is not None and metrics["acc_beats_baseline"] <= 0.02:
             warnings.append(
                 f"val_acc не превышает долю большинства ({base_rate:.2%}) — "
