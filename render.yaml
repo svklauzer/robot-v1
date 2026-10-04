@@ -208,8 +208,12 @@ services:
         value: "true"
       
       # ML Mode
+      # Активируем искусственный интеллект на управление деньгами
       - key: ML_MODE
-        value: advisory
+        value: "full_auto"
+      # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
+      - key: ML_MIN_SCORE_TO_TRADE
+        value: "0.50"
       - key: REGIME_EXP_SIZING_ENABLED
         value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
@@ -226,8 +230,9 @@ services:
         value: "30"
 
       # ── TREND ENGINE (Настройка на забор движения + защита от шума) ───────
+      # 1. Запрещаем входы по тренду, если цена улетела далеко от опоры (KAMA/EMA)
       - key: TREND_TRIGGER_MODE
-        value: enforce
+        value: "enforce"
       - key: TREND_MAX_EXTENSION_ATR
         value: "4.5"
       - key: TZ_ADX_MIN
@@ -286,15 +291,15 @@ services:
       - key: TZ_USE_DYNAMIC_ATR_STOPS
         value: "true"
       - key: TZ_STOP_MIN_DIST_ATR_MULT
-        value: "3.0"       # Надежный стоп
+        value: "1.5"
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
         value: "2.0"       # Буфер выхода
       - key: TZ_STOP_LOSS_ATR_MULT
-        value: "4.0"       # Глубокий стоп для удержания позиции
+        value: "2.0"
       - key: TZ_EXIT_ADX_FADE
         value: "2.0"       # Чувствительный выход при затухании
       - key: TZ_HARD_STOP_LOSS_PCT
-        value: "3.0"
+        value: "1.5"
       
       # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
       # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
@@ -343,10 +348,12 @@ services:
       # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED
         value: "true"
+      # Взводим замок фиксации только когда прошли 0.70% движения
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.45"      # Быстрое вооружение
+        value: "0.70"
+      # Ставим пол фиксации на 0.25%, чтобы гарантированно защитить прибыль с учетом комиссий
       - key: BREAKEVEN_LOCK_FLOOR_PCT
-        value: "0.18"      # Покрытие комиссий
+        value: "0.25"
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
         value: "-0.10"
       - key: BREAKEVEN_LOCK_COST_BUFFER_PCT
@@ -373,12 +380,16 @@ services:
       # (`tp_reach.would_block`) — сравнение делается по нему.
       #
       # Возврат в enforce — после разреза stop-forensics по would_block.
+      # 2. Активируем жесткий фильтр достижимости целей. 
+      # Если историческая статистика показывает, что цель по символу сбывается реже, 
+      # чем требует математика RR — такой вход блокируется до старта.
       - key: TP_REACH_MODE
-        value: shadow
+        value: "enforce"
       # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
+      # 3. Включаем блокировку входов, если импульс 15м уже перегрет
       - key: MOMENTUM_GATE_MODE
-        value: shadow
+        value: "enforce"
       - key: TP_REACH_EV_MARGIN
         value: "1.0"
       - key: TP_REACH_MIN_SAMPLE
@@ -405,19 +416,21 @@ services:
       # Настройка на сбор быстрых и частых микродвижений.
       - key: SCALP_MIN_NET_RR_TP2    
         value: "0.50"   # Вход даже при минимальном математическом ожидании
-      - key: SCALP_TARGET_PCT        
-        value: "0.25"   # Очень близкий тейк для мгновенного закрытия в плюс
+      # 1. Возвращаем нормальную геометрию скальпа (цель 0.6%, а не 0.25%)
+      - key: SCALP_TARGET_PCT
+        value: "0.60"
       - key: SCALP_MIN_SETUP_SCORE   
         value: "35.0"   # Снижен порог входа для работы на зашумленном рынке
-      - key: SCALP_BREAKEVEN_ARM_PCT 
-        value: "0.12"   # Моментальный перевод в безубыток при малейшем импульсе
+      # 2. Повышаем пол безубытка, чтобы не крыть сделки в микро-минус из-за шума
+      - key: SCALP_BREAKEVEN_ARM_PCT
+        value: "0.35"
       - key: SCALP_TIME_STOP_MIN     
         value: "30.0"   # Жесткий тайм-стоп: если не пошло за 30 минут — выход
 
       # ── RANGE ENGINE (Переведен из консервативного в агрессивный) ───────
-      # Расширяем границы работы в боковике, жертвуя точностью ради количества сделок.
-      - key: RANGE_MIN_TP1_NET_PCT   
-        value: "0.20"   # Снижено в 2 раза: берем даже мелкие колебания в рендже
+      # 3. Запрещаем RANGE-стратегии собирать 0.2% движения. Минимум 0.8%, иначе комиссии сожрут всё
+      - key: RANGE_MIN_TP1_NET_PCT
+        value: "0.80"
       - key: RANGE_MIN_SETUP_SCORE   
         value: "40.0"   # Снижен порог качества структуры боковика
       - key: RANGE_ENTRY_RSI_MIN     
@@ -426,6 +439,12 @@ services:
         value: "65.0"   # Расширен диапазон RSI (вход ближе к верхней границе)
       - key: RANGE_STOP_ATR_MULT     
         value: "1.2"    # Короткий стоп по ATR (быстрый выход при пробое ренджа)
+
+      # 4. Повышаем порог минимального профита, чтобы гейт отсекал центовый мусор
+      - key: MIN_NET_PNL_TP1_USDT
+        value: "1.00"
+      - key: MIN_NET_PNL_TP2_USDT
+        value: "3.50"
 
       # ── GRID ENGINE (Защита от слива) ─────────────────────────────────────
       # Сетка выключена для направленного live-ramp: усреднение в тренде —
