@@ -1635,7 +1635,7 @@ class Settings(BaseSettings):
     # резало целиком. 5 позиций × ~13% = 65% < общий потолок 70% → диверсификация.
     # weak_structure/overheated/economics-по-TP1 для тренда отключаются в robot_loop
     # (тренд растянут и перегрет by design; награда позиции — на TP2).
-    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 15.0
+    ANTI_DRAIN_POSITION_MAX_MARGIN_PCT: float = 35.0
     ANTI_DRAIN_POSITION_MAX_USED_MARGIN_PCT: float = 70.0
 
     # ── Конверты капитала (#capital-envelopes-2026-08-21) ────────────────────
@@ -2043,7 +2043,7 @@ class Settings(BaseSettings):
     # достижимости) НЕ трогаем — тест test_config_schema_bootstrap.py его
     # защищает как gate от капитального слива, тут правим саму геометрию
     # цели, а не строгость проверки.
-    TREND_TP2_R_MULT: float = 2.0
+    TREND_TP2_R_MULT: float = 2.5
     TREND_TP1_FLOOR_PCT: float = 1.2
     TREND_TP2_FLOOR_PCT: float = 2.0
 
