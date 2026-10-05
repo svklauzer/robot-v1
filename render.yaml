@@ -389,7 +389,7 @@ services:
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
       # 3. Включаем блокировку входов, если импульс 15м уже перегрет
       - key: MOMENTUM_GATE_MODE
-        value: "enforce"
+        value: "shadow"
       - key: TP_REACH_EV_MARGIN
         value: "0.1" # Снижаем требования к частоте до минимума, отключая гейт 05/10/2026
       - key: TP_REACH_MIN_SAMPLE
