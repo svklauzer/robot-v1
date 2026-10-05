@@ -371,7 +371,7 @@ services:
       - key: TP_REACH_CENSOR_ADJUST_ENABLED
         value: "true"
       - key: TP_REACH_MIN_UNCENSORED_SAMPLE
-        value: "12"
+        value: "9999"
       # (#tp-reach-shadow-2026-09-06) Отпущен в shadow. Гейт судит по достижению
       # TP2, а сделка платится через TP1 и трейл: замер 04.09 дал +0.98R у
       # дошедшей до TP1 против −0.83R у недошедшей. Он держал 500+ блокировок в
@@ -393,7 +393,7 @@ services:
       - key: TP_REACH_EV_MARGIN
         value: "0.1" # Снижаем требования к частоте до минимума, отключая гейт 05/10/2026
       - key: TP_REACH_MIN_SAMPLE
-        value: "15"
+        value: "9999"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
         value: "false"
       - key: LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION
