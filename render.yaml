@@ -291,15 +291,15 @@ services:
       - key: TZ_USE_DYNAMIC_ATR_STOPS
         value: "true"
       - key: TZ_STOP_MIN_DIST_ATR_MULT
-        value: "1.5"
+        value: "3"
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
         value: "2.0"       # Буфер выхода
       - key: TZ_STOP_LOSS_ATR_MULT
-        value: "2.0"
+        value: "4.0"
       - key: TZ_EXIT_ADX_FADE
-        value: "2.0"       # Чувствительный выход при затухании
+        value: "6.0"       
       - key: TZ_HARD_STOP_LOSS_PCT
-        value: "1.5"
+        value: "5"
       
       # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
       # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
