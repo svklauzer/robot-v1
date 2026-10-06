@@ -247,7 +247,7 @@ services:
       # всех крупных стопов 01–03.09: 11 сделок с провалом этого условия дали
       # −9.74 USDT, 4 без провала — +8.90.
       - key: TZ_ENFORCE_CONDITIONS
-        value: kama,di,obv # убрали  adx_rising 05.10.2026
+        value: kama,di,obv,adx_rising
       - key: TZ_ENFORCE_MIN_SAMPLE
         value: "0"
 
