@@ -164,7 +164,7 @@ services:
       # них adx_rising был единственным блокером. Обратно в shadow — только
       # после замера когорты `adx_rising_latched` в stop-forensics.
       - key: ENTRY_IMPULSE_LATCH_MODE
-        value: "enforce"
+        value: "shadow"
       - key: ENTRY_IMPULSE_TF
         value: "15m"
       - key: ENTRY_IMPULSE_WINDOW_SEC
@@ -371,7 +371,7 @@ services:
       - key: TP_REACH_CENSOR_ADJUST_ENABLED
         value: "true"
       - key: TP_REACH_MIN_UNCENSORED_SAMPLE
-        value: "9999"
+        value: "12"
       # (#tp-reach-shadow-2026-09-06) Отпущен в shadow. Гейт судит по достижению
       # TP2, а сделка платится через TP1 и трейл: замер 04.09 дал +0.98R у
       # дошедшей до TP1 против −0.83R у недошедшей. Он держал 500+ блокировок в
@@ -393,7 +393,7 @@ services:
       - key: TP_REACH_EV_MARGIN
         value: "0.1" # Снижаем требования к частоте до минимума, отключая гейт 05/10/2026
       - key: TP_REACH_MIN_SAMPLE
-        value: "9999"
+        value: "15"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
         value: "false"
       - key: LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION
@@ -404,7 +404,7 @@ services:
       - key: CRT_MIN_RR_TP1          
         value: "0.30"   # Еще сильнее снижен RR для мгновенной фиксации первой цели
       - key: CRT_MIN_SETUP_SCORE     
-        value: "35.0"   # Минимальный порог качества, берем почти все сетапы
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
       - key: CRT_REQUIRE_CISD        
         value: "false"  # Отключено жесткое подтверждение
       - key: CRT_STOP_BUFFER_PCT     
@@ -420,7 +420,7 @@ services:
       - key: SCALP_TARGET_PCT
         value: "0.60"
       - key: SCALP_MIN_SETUP_SCORE   
-        value: "35.0"   # Снижен порог входа для работы на зашумленном рынке
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
       # 2. Повышаем пол безубытка, чтобы не крыть сделки в микро-минус из-за шума
       - key: SCALP_BREAKEVEN_ARM_PCT
         value: "0.35"
@@ -432,7 +432,7 @@ services:
       - key: RANGE_MIN_TP1_NET_PCT
         value: "0.80"
       - key: RANGE_MIN_SETUP_SCORE   
-        value: "40.0"   # Снижен порог качества структуры боковика
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
       - key: RANGE_ENTRY_RSI_MIN     
         value: "20.0"   # Расширен диапазон RSI (вход при глубоком перепроданности)
       - key: RANGE_ENTRY_RSI_MAX     
