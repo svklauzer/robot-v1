@@ -350,7 +350,7 @@ services:
         value: "true"
       # Взводим замок фиксации только когда прошли 0.70% движения
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.70"
+        value: "0.35"
       # Ставим пол фиксации на 0.25%, чтобы гарантированно защитить прибыль с учетом комиссий
       - key: BREAKEVEN_LOCK_FLOOR_PCT
         value: "0.25"
