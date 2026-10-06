@@ -566,7 +566,7 @@ services:
       # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
       # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
-        value: "1"
+        value: "6"
       - key: MAX_DRAWDOWN_PCT
         value: "15"
 
