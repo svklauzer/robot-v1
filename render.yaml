@@ -343,7 +343,7 @@ services:
       # вдвое. Стенд на свечах: +12..24 п.п. на 485 сделках. Гейт смешанной
       # награды при входе от неё отвязан (MIN_NET_RR_BLENDED_TP1_SHARE).
       - key: TP1_PARTIAL_ENABLED
-        value: "true"
+        value: "false"
 
       # Breakeven Lock (Фиксация прибыли)
       - key: BREAKEVEN_LOCK_ENABLED
