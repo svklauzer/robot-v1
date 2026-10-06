@@ -1799,7 +1799,8 @@ class Settings(BaseSettings):
     # изменена, старые метки устаревают). На live (is_live_enabled) exploration
     # АВТО-ВЫКЛЮЧЕН — гейт режет без исключений, реальные деньги не платят за
     # обучение. Размер пробы: ML_EXPLORE_SIZE_MULT поверх ml-оси 0.5 → ~25% бюджета.
-    ML_EXPLORE_ENABLED: bool = True
+    # Робот больше не имеет права открывать ордера, которые модель считает убыточными:
+    ML_EXPLORE_ENABLED: bool = False 
     ML_EXPLORE_EVERY_N: int = 3
     ML_EXPLORE_SIZE_MULT: float = 0.5
 
@@ -1985,6 +1986,7 @@ class Settings(BaseSettings):
     # которая отшортила даунтренд донизу и продолжала шортить ДНО (#81/82/85/87 —
     # шорты в перепроданность у поддержки → отскок → большая часть убытка). Не
     # шортим истощённый тренд у поддержки и не лонгуем перегрев у сопротивления.
+    # Запрещаем шортить дно и лонговать перегретые хаи у сопротивлений:
     TREND_EXHAUSTION_GUARD: bool = True
     EXHAUSTION_RSI_OVERSOLD: float = 30.0     # 4h RSI ниже → даунтренд истощён
     EXHAUSTION_RSI_OVERBOUGHT: float = 70.0   # 4h RSI выше → аптренд перегрет
