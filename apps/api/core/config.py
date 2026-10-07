@@ -1083,22 +1083,22 @@ class Settings(BaseSettings):
     # движок работает и в Render env стоит True. Держать в коде False —
     # значит иметь конфиг, который не описывает систему.
     ENABLE_RANGE_STRATEGY: bool = True
-    RANGE_MIN_WIDTH_PCT: float = 1.8        # мин. ширина коридора (нужно куда ехать после комиссий)
+    RANGE_MIN_WIDTH_PCT: float = 2.2        # мин. ширина коридора (нужно куда ехать после комиссий)
     RANGE_SUPPORT_ZONE: float = 0.30        # входим, если цена в нижних 30% диапазона (0=поддержка)
     RANGE_ENTRY_RSI_MIN: float = 25.0       # зона разворота у поддержки
     RANGE_ENTRY_RSI_MAX: float = 52.0
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
-    RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
+    RANGE_TP2_RESISTANCE_BUFFER: float = 0.02  # TP2 = на 10% ниже верхней границы
     # (#range-tp2-dynamic-2026-08-27) Буфер TP2 (доля ширины диапазона, на
     # которую TP2 не доходит до дальней границы) СУЖАЕТСЯ при сильном
     # локальном ADX/ATR-expansion — TP2 приближается к границе диапазона.
     # ТОЛЬКО приближает TP2 к границе, никогда не отдаляет его дальше
     # исходного RANGE_TP2_RESISTANCE_BUFFER.
-    RANGE_TP2_DYNAMIC_ENABLED: bool = False
+    RANGE_TP2_DYNAMIC_ENABLED: bool = True
     RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
     RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
     RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
-    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
+    RANGE_STOP_ATR_MULT: float = 1.2        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
