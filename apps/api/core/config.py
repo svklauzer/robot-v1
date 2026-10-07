@@ -1121,7 +1121,7 @@ class Settings(BaseSettings):
     # (#crt-part13-2026-07-10) 5m→15m: по канонической таблице HTF↔LTF пара для
     # 4h — это 15m (5m — пара для HTF 1h). Вызов в market_intelligence и так
     # ожидал 15m (fallback), config переопределял на 5m. MSS/FVG на 15m чище.
-    CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
+    CRT_LTF_TF: str = "5m"                # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
     # (#audit-2026-08-27) Был "either" до commit dd05813 (06.08), тихо ужесточён
     # до "both" (требует ОДНОВРЕМЕННО MSS и FVG на LTF) без обоснования в
@@ -1134,7 +1134,7 @@ class Settings(BaseSettings):
     # «только MSS» — худший (−1.72% на номинал), «только FVG» — почти ноль
     # (−0.14%) на одиннадцати сделках. MSS остаётся бонусом к оценке сетапа,
     # но входить по нему одному больше нельзя.
-    CRT_LTF_CONFIRM: str = "fvg"         # "fvg" | "either" | "both" | "off"
+    CRT_LTF_CONFIRM: str = "both"         # "fvg" | "either" | "both" | "off"
     # (#crt-part13-2026-07-10) CISD-чек из LTF Sequence (CRT→CISD→OTE→MSS→IDM):
     # манипуляционная свеча C2 должна ЗАКРЫТЬСЯ против свипа (свип CRH →
     # медвежье закрытие ниже открытия; свип CRL → бычье выше открытия) — это и
@@ -1146,7 +1146,7 @@ class Settings(BaseSettings):
     # (TP1 = сразу край, TP2 — за диапазоном): телеметрия CRT — missed_profit
     # avg 1.12%, capture −76% — до целей доезжали редко, пик отдавали.
     # "range" = инструкция (с RR-полом CRT_MIN_RR_TP1), "extended" = старое.
-    CRT_TARGETS_MODE: str = "extended"
+    CRT_TARGETS_MODE: str = "rsnge"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
@@ -1161,7 +1161,7 @@ class Settings(BaseSettings):
     # Так как множитель только расширяет RR вверх и никогда не сужает, это
     # может только протолкнуть часть таких сетапов выше порога, не может
     # сделать хуже уже отклонённые.
-    CRT_TP2_DYNAMIC_ENABLED: bool = True
+    CRT_TP2_DYNAMIC_ENABLED: bool = False
     CRT_TP2_DYNAMIC_MAX_RR: float = 3.5
     CRT_TP2_DYNAMIC_ADX_BASE: float = 23.0
     CRT_TP2_DYNAMIC_ADX_SPAN: float = 27.0
