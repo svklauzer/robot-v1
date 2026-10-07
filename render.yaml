@@ -576,7 +576,7 @@ services:
       # худший бакет «только MSS» — −1.72% на номинал против −0.14% у сделок
       # с одним FVG.
       - key: CRT_LTF_CONFIRM
-        value: "fvg"
+        value: "both"
 
       # ── Symbol guard ──────────────────────────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE

@@ -1083,22 +1083,22 @@ class Settings(BaseSettings):
     # движок работает и в Render env стоит True. Держать в коде False —
     # значит иметь конфиг, который не описывает систему.
     ENABLE_RANGE_STRATEGY: bool = True
-    RANGE_MIN_WIDTH_PCT: float = 1.8        # мин. ширина коридора (нужно куда ехать после комиссий)
+    RANGE_MIN_WIDTH_PCT: float = 2.2        # мин. ширина коридора (нужно куда ехать после комиссий)
     RANGE_SUPPORT_ZONE: float = 0.30        # входим, если цена в нижних 30% диапазона (0=поддержка)
     RANGE_ENTRY_RSI_MIN: float = 25.0       # зона разворота у поддержки
     RANGE_ENTRY_RSI_MAX: float = 52.0
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
-    RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
+    RANGE_TP2_RESISTANCE_BUFFER: float = 0.02  # TP2 = на 10% ниже верхней границы
     # (#range-tp2-dynamic-2026-08-27) Буфер TP2 (доля ширины диапазона, на
     # которую TP2 не доходит до дальней границы) СУЖАЕТСЯ при сильном
     # локальном ADX/ATR-expansion — TP2 приближается к границе диапазона.
     # ТОЛЬКО приближает TP2 к границе, никогда не отдаляет его дальше
     # исходного RANGE_TP2_RESISTANCE_BUFFER.
-    RANGE_TP2_DYNAMIC_ENABLED: bool = False
+    RANGE_TP2_DYNAMIC_ENABLED: bool = True
     RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
     RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
     RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
-    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
+    RANGE_STOP_ATR_MULT: float = 1.2        # стоп = поддержка − 0.5·ATR
     RANGE_MIN_SETUP_SCORE: float = 60.0
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
@@ -1121,7 +1121,7 @@ class Settings(BaseSettings):
     # (#crt-part13-2026-07-10) 5m→15m: по канонической таблице HTF↔LTF пара для
     # 4h — это 15m (5m — пара для HTF 1h). Вызов в market_intelligence и так
     # ожидал 15m (fallback), config переопределял на 5m. MSS/FVG на 15m чище.
-    CRT_LTF_TF: str = "15m"                # младший ТФ для входа/MSS/FVG
+    CRT_LTF_TF: str = "5m"                # младший ТФ для входа/MSS/FVG
     CRT_MIN_RANGE_PCT: float = 1.5         # мин. ширина C1-диапазона (%)
     # (#audit-2026-08-27) Был "either" до commit dd05813 (06.08), тихо ужесточён
     # до "both" (требует ОДНОВРЕМЕННО MSS и FVG на LTF) без обоснования в
@@ -1134,7 +1134,7 @@ class Settings(BaseSettings):
     # «только MSS» — худший (−1.72% на номинал), «только FVG» — почти ноль
     # (−0.14%) на одиннадцати сделках. MSS остаётся бонусом к оценке сетапа,
     # но входить по нему одному больше нельзя.
-    CRT_LTF_CONFIRM: str = "fvg"         # "fvg" | "either" | "both" | "off"
+    CRT_LTF_CONFIRM: str = "both"         # "fvg" | "either" | "both" | "off"
     # (#crt-part13-2026-07-10) CISD-чек из LTF Sequence (CRT→CISD→OTE→MSS→IDM):
     # манипуляционная свеча C2 должна ЗАКРЫТЬСЯ против свипа (свип CRH →
     # медвежье закрытие ниже открытия; свип CRL → бычье выше открытия) — это и
@@ -1146,7 +1146,7 @@ class Settings(BaseSettings):
     # (TP1 = сразу край, TP2 — за диапазоном): телеметрия CRT — missed_profit
     # avg 1.12%, capture −76% — до целей доезжали редко, пик отдавали.
     # "range" = инструкция (с RR-полом CRT_MIN_RR_TP1), "extended" = старое.
-    CRT_TARGETS_MODE: str = "extended"
+    CRT_TARGETS_MODE: str = "rsnge"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
     CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
@@ -1161,7 +1161,7 @@ class Settings(BaseSettings):
     # Так как множитель только расширяет RR вверх и никогда не сужает, это
     # может только протолкнуть часть таких сетапов выше порога, не может
     # сделать хуже уже отклонённые.
-    CRT_TP2_DYNAMIC_ENABLED: bool = True
+    CRT_TP2_DYNAMIC_ENABLED: bool = False
     CRT_TP2_DYNAMIC_MAX_RR: float = 3.5
     CRT_TP2_DYNAMIC_ADX_BASE: float = 23.0
     CRT_TP2_DYNAMIC_ADX_SPAN: float = 27.0
