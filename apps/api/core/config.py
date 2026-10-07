@@ -1214,8 +1214,8 @@ class Settings(BaseSettings):
     # для соответствия реальной волатильности крипты на 5m.
     SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
     SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
-    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
-    SCALP_MIN_OBI: float = 0.10               # подтверждение потоком (OBI)
+    SCALP_STOP_BUFFER_ATR: float = 0.5         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
+    SCALP_MIN_OBI: float = 0.25              # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
     SCALP_MIN_SETUP_SCORE: float = 50.0
@@ -1240,9 +1240,9 @@ class Settings(BaseSettings):
     # vs 70/30), чтобы не резать здоровые тренды: проверено по истории —
     # победители TRX #272 (+10.97, 4h RSI 63) и #281 (4h RSI 53) не задеваются,
     # ETH #271 (+0.26, ~70 на входе) прошёл бы; режутся ETH #276 (77) и SOL #278 (72.8).
-    TREND_HTF_EXTREME_VETO: bool = True
-    TREND_HTF_RSI_HARD_OVERHEAT: float = 72.0
-    TREND_HTF_RSI_HARD_OVERSOLD: float = 28.0
+    TREND_HTF_EXTREME_VETO: bool = False
+    TREND_HTF_RSI_HARD_OVERHEAT: float = 80.0
+    TREND_HTF_RSI_HARD_OVERSOLD: float = 20.0
 
     # --- Scalp risk profile (trade_mode="scalp" / regime="range") ---
     # Скальп — маленькая позиция, мелкое движение, мелкие абсолютные суммы.
@@ -1286,8 +1286,8 @@ class Settings(BaseSettings):
     # arm 0.3 / giveback 0.4 / time_stop 45 → +0.64% total против −0.74% факта
     # (все 0.5/0.6-варианты в минусе). Плюс телеметрия: positive_then_negative 57–62%
     # — замок вооружался слишком поздно и отдавал слишком много пика.
-    SCALP_BREAKEVEN_ARM_PCT: float = 0.3         # MFE %, с которого включается замок
-    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.4  # выходим, отдав эту долю пика MFE
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.45         # MFE %, с которого включается замок
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.25  # выходим, отдав эту долю пика MFE
     # (#geometry-arm-2026-07-09) Замок масштабируется ГЕОМЕТРИЕЙ сделки: эффективный
     # arm = max(SCALP_BREAKEVEN_ARM_PCT, TP1_dist × эта доля). Микро-скальп (TP1
     # ~0.8-1%) живёт на абсолютных 0.3%; range-вход (TP1 ~2%) вооружается от ~0.6%.
