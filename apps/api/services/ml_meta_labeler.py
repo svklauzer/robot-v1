@@ -235,14 +235,16 @@ class MetaLabeler:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.preprocessing import StandardScaler
             from sklearn.pipeline import Pipeline
+            from sklearn.calibration import CalibratedClassifierCV
             
             return Pipeline([
                 ("scaler", StandardScaler()),
                 ("clf", RandomForestClassifier(
-                    n_estimators=150,
-                    max_depth=4,              
-                    min_samples_leaf=5,       
-                    class_weight="balanced",  
+                    n_estimators=250,          # Увеличиваем плотность ансамбля для снижения шума
+                    max_depth=5,               # Чуть поднимаем глубину (4 было слишком тесно для 11 фич)
+                    min_samples_leaf=3,        # Снижаем с 5 до 3, чтобы модель точнее вырезала прибыльные окна
+                    class_weight="balanced_subsample", # Более точная динамическая балансировка для деревьев
+                    max_features="sqrt",       # Ограничиваем выбор фич на сплит против переобучения
                     random_state=42,
                     n_jobs=-1
                 ))
@@ -306,7 +308,10 @@ class MetaLabeler:
         metrics["warnings"] = warnings
 
         # финальная модель — на ВСЕХ данных (после валидации)
-        model = _make().fit(Xa, ya)
+        base_pipeline = _make()
+        # Использование кросс-валидации для честной калибровки вероятностей
+        calibrated_model = CalibratedClassifierCV(estimator=base_pipeline, method="sigmoid", cv=3)
+        model = calibrated_model.fit(Xa, ya)
 
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         try:
