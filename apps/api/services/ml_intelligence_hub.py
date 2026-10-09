@@ -120,7 +120,7 @@ class MLIntelligenceHub:
         return self._scorer
     
     def _mode(self) -> str:
-        """Эффективный режим ML с авто-деградацией."""
+        """Эффективный режим ML с авто-деградацией по качеству модели."""
         mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
         if mode not in ("advisory", "full_auto"):
             return mode
@@ -132,11 +132,20 @@ class MLIntelligenceHub:
         if labeler:
             try:
                 st = labeler.status()
-                auc = (st.get("metrics") or {}).get("val_auc")
                 metrics = st.get("metrics") or {}
+                auc = metrics.get("val_auc")
+                
                 if auc is not None:
+                    # Читаем порог из конфига (теперь там будет 0.55 из render.yaml)
                     min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-                    if float(auc) < min_auc or float(metrics.get("events_per_feature", 0)) < 3.0:
+                    epv = float(metrics.get("events_per_feature", 0))
+                    
+                    if float(auc) < min_auc:
+                        self._last_demote_reason = f"val_auc={auc:.4f} < {min_auc} — низкая точность, сброс до shadow"
+                        return "shadow"
+                        
+                    if epv < 3.0:
+                        self._last_demote_reason = f"events_per_feature={epv} < 3.0 — переобучение выборки, сброс до shadow"
                         return "shadow"
             except Exception:
                 pass
