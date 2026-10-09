@@ -1286,7 +1286,7 @@ class Settings(BaseSettings):
     # arm 0.3 / giveback 0.4 / time_stop 45 → +0.64% total против −0.74% факта
     # (все 0.5/0.6-варианты в минусе). Плюс телеметрия: positive_then_negative 57–62%
     # — замок вооружался слишком поздно и отдавал слишком много пика.
-    SCALP_BREAKEVEN_ARM_PCT: float = 0.45         # MFE %, с которого включается замок
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.30         # MFE %, с которого включается замок
     SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.25  # выходим, отдав эту долю пика MFE
     # (#geometry-arm-2026-07-09) Замок масштабируется ГЕОМЕТРИЕЙ сделки: эффективный
     # arm = max(SCALP_BREAKEVEN_ARM_PCT, TP1_dist × эта доля). Микро-скальп (TP1
@@ -1299,7 +1299,7 @@ class Settings(BaseSettings):
     # Если за N минут скальп не вооружился (mfe < arm) — закрываем по текущей цене,
     # чтобы «мёртвая» сделка не дрейфовала в свинг-убыток и освободила слот.
     SCALP_TIME_STOP_ENABLED: bool = True
-    SCALP_TIME_STOP_MIN: float = 120.0            # минут до тайм-стопа невооружённого скальпа
+    SCALP_TIME_STOP_MIN: float = 45.0            # минут до тайм-стопа невооружённого скальпа
     # (#range-time-stop-2026-07-09) Range-сделки (стоп ~2.4%, TP1 ~2%) — другая
     # геометрия, чем микро-скальп: 45 минут не хватает диапазону разрешиться
     # (SOL #214 убит тайм-стопом на пути к TP1, ADA #215 не успела доехать).
