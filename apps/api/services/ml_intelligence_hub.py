@@ -271,29 +271,24 @@ class MLIntelligenceHub:
         return decision
     
     def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
-        """Взвешенное усреднение предсказаний.
-        
-        Веса:
-        - meta_labeler: 0.6 (обученная модель)
-        - outcome_stats: 0.3 (исторические данные)
-        - scorer: 0.1 (эвристика, baseline)
-        """
+        """Динамическое ансамблирование с защитой от сбоя моделей."""
         default_weights = {
-            "meta_labeler": 0.6,
-            "outcome_stats": 0.3,
-            "scorer": 0.1,
+            "meta_labeler": 0.65,  # Приоритет новой нелинейной модели
+            "outcome_stats": 0.25, # Историческая память по Symbol/Side
+            "scorer": 0.10         # Эвристический baseline
         }
         
-        # Динамическая корректировка весов при низкой надежности модели
+        # Авто-корректировка весов в рантайме при деградации валидации
         labeler = self._get_meta_labeler()
         if labeler and "meta_labeler" in predictions:
             try:
                 st = labeler.status()
                 metrics = st.get("metrics") or {}
-                if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.55:
+                # Если AUC не надежен или упал ниже пола — мгновенно отзываем вес
+                if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.58:
                     default_weights["meta_labeler"] = 0.00
-                    default_weights["outcome_stats"] = 0.65
-                    default_weights["scorer"] = 0.20
+                    default_weights["outcome_stats"] = 0.70
+                    default_weights["scorer"] = 0.30
             except Exception:
                 pass        
 
@@ -303,13 +298,11 @@ class MLIntelligenceHub:
         
         for name, score in predictions.items():
             weight = default_weights.get(name, 0.1)
-            # Нормализуем веса под доступные модели
             actual_weights[name] = weight
             weighted_sum += score * weight
             total_weight += weight
         
         if total_weight > 0:
-            # Нормализуем веса до суммы 1.0
             actual_weights = {k: v / total_weight for k, v in actual_weights.items()}
             ensemble_score = weighted_sum / total_weight
         else:
@@ -339,111 +332,70 @@ class MLIntelligenceHub:
     
     def _make_decision(self, score: float, mode: str, uncertainty: float,
                        weights: dict[str, float], explanations: dict) -> MLDecision:
-        """Формирование решения на основе режима и порога."""
-        min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
+        min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.60)) # Повышенный порог гейта
         
-        # Активное обучение: высокая неопределённость → exploration
         is_exploration = False
-        if (
-            uncertainty > 0.3  # Высокая неопределённость
-            and bool(getattr(settings, "ML_EXPLORE_ENABLED", True))
-            and not getattr(settings, "is_live_enabled", False)
-        ):
+        if uncertainty > 0.35 and bool(getattr(settings, "ML_EXPLORE_ENABLED", False)) and not getattr(settings, "is_live_enabled", False):
             is_exploration = True
         
         if mode == "shadow":
             return MLDecision(
-                action="log_only",
-                allow=True,
-                size_multiplier=1.0,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason="shadow_mode_logging_only",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
+                action="log_only", allow=True, size_multiplier=1.0,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason="shadow_mode_logging_only"
             )
         
         if mode == "advisory":
             recommend = "take" if score >= min_score else "skip"
             return MLDecision(
-                action="advise",
-                allow=True,
-                size_multiplier=1.0,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason=f"advisory_{recommend}",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
-                metadata={"recommendation": recommend},
+                action="advise", allow=True, size_multiplier=1.0,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason=f"advisory_{recommend}"
             )
         
         if mode == "full_auto":
             if score < min_score:
                 return MLDecision(
-                    action="block",
-                    allow=False,
-                    size_multiplier=0.0,
-                    ml_score=round(score, 4),
-                    confidence=1.0 - uncertainty,
-                    decision_reason=f"ml_score_below_min:{score:.3f}<{min_score}",
-                    is_exploration=is_exploration,
-                    uncertainty=uncertainty,
+                    action="block", allow=False, size_multiplier=0.0,
+                    ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                    decision_reason=f"ml_score_below_min:{score:.3f}<{min_score}"
                 )
             
-            # Размер в guardrails
+            # Динамический сайзинг в безопасных границах (Guardrails)
             s_min = float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7))
             s_max = float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))
-            # Смещаем span под реальный квантиль распределения (0.75 вместо нереалистичного 0.85)
+            
+            # Реалистичный верхний квантиль сжатия под случайный лес (0.75)
             span = max(0.75 - min_score, 1e-6)
             frac = max(0.0, min(1.0, (score - min_score) / span))
             size_mult = round(s_min + (s_max - s_min) * frac, 3)
             
             return MLDecision(
-                action="size",
-                allow=True,
-                size_multiplier=size_mult,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason=f"ml_score_ok:{score:.3f}",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
+                action="size", allow=True, size_multiplier=size_mult,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason=f"ml_score_ok_size_allocated:{score:.3f}"
             )
         
-        # Неизвестный режим → безопасно
-        return MLDecision(
-            action="passthrough",
-            allow=True,
-            size_multiplier=1.0,
-            decision_reason="unknown_mode_passthrough",
-        )
+        return MLDecision(action="passthrough", allow=True, size_multiplier=1.0)
     
     def _get_feature_contributions(self, labeler, candidate: dict) -> dict[str, float]:
-        """Вычисление вклада признаков (для LogisticRegression)."""
+        """Вычисление вклада признаков (MDI Importance для ансамблей деревьев)."""
         try:
             import numpy as np
-            
             model = getattr(labeler, "_model", None)
             if model is None:
                 return {}
             
-            # Извлекаем признаки
-            from services.ml_features import FEATURE_NAMES, row_to_features
-            x = np.array([row_to_features(candidate)], dtype=float)
+            from services.ml_features import FEATURE_NAMES
             
-            # Для LogisticRegression: coef_ × features
+            # ИСПРАВЛЕНО: Безопасное извлечение важности фич (feature_importances_) для RandomForest пайплайна
             if hasattr(model, 'named_steps'):
-                # Pipeline
-                scaler = model.named_steps.get('scaler')
                 clf = model.named_steps.get('clf')
-                if scaler and clf:
-                    x_scaled = scaler.transform(x)
-                    contributions = clf.coef_[0] * x_scaled[0]
-                else:
-                    return {}
-            else:
-                contributions = model.coef_[0] * x[0]
+                if clf and hasattr(clf, 'feature_importances_'):
+                    importances = clf.feature_importances_
+                    return {name: float(importance) for name, importance in zip(FEATURE_NAMES, importances)}
             
-            return {name: float(contrib) for name, contrib in zip(FEATURE_NAMES, contributions)}
+            return {}
         except Exception:
             return {}
     

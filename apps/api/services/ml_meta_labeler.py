@@ -226,23 +226,26 @@ class MetaLabeler:
 
         Xa, ya = np.array(X, dtype=float), np.array(y, dtype=int)
 
-        try:
-            from sklearn.model_selection import StratifiedShuffleSplit
-            # 80% на обучение, 20% на честный тест с сохранением баланса классов
-            sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-            train_idx, test_idx = next(sss.split(Xa, ya))
-            Xtr, Xte = Xa[train_idx], Xa[test_idx]
-            ytr, yte = ya[train_idx], ya[test_idx]
-        except Exception as exc:
-            # Резервный хронологический фоллбэк на случай сбоя импорта
-            cut = max(int(n * 0.7), n - 60)
-            cut = min(cut, n - 1)
-            Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
+        # Честный хронологический сплит без заглядывания в будущее
+        cut = int(n * 0.80)
+        Xtr, Xte = Xa[:cut], Xa[cut:]
+        ytr, yte = ya[:cut], ya[cut:]
 
         def _make():
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.pipeline import Pipeline
+            
             return Pipeline([
                 ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
+                ("clf", RandomForestClassifier(
+                    n_estimators=150,
+                    max_depth=4,              
+                    min_samples_leaf=5,       
+                    class_weight="balanced",  
+                    random_state=42,
+                    n_jobs=-1
+                ))
             ])
 
         metrics = {"val_auc": None, "val_acc": None, "val_n": int(len(yte))}
@@ -320,18 +323,13 @@ class MetaLabeler:
             "label_kind": label_kind,
             "label_min_r": float(getattr(settings, "ML_LABEL_MIN_R", 0.3)),
             "features": FEATURE_NAMES,
-            # (#ml-rework-2026-07-28) Версия контракта фич. Модель, обученная на
-            # другом наборе, несовместима и по длине вектора, и по смыслу —
-            # предсказывать по ней молча нельзя.
             "feature_version": FEATURE_VERSION,
-            # Что и почему выброшено из датасета. Без этого «samples: 120»
-            # выглядит как потеря данных, хотя это отсев исходов от логики,
-            # которой больше нет.
             "rows_total": len(raw_rows),
             "dropped": dropped,
             "train_window_days": float(getattr(settings, "ML_TRAIN_WINDOW_DAYS", 45)),
             "metrics": metrics,
-            "model": "LogisticRegression+StandardScaler",
+            # ИСПРАВЛЕНО: Корректное имя модели для выгрузки на фронтенд дашборда
+            "model": "RandomForestClassifier+StandardScaler",
         }
         try:
             self.meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
