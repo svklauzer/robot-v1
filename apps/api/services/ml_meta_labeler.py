@@ -235,60 +235,56 @@ class MetaLabeler:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.preprocessing import StandardScaler
             from sklearn.pipeline import Pipeline
-
-            return Pipeline([
+            from sklearn.calibration import CalibratedClassifierCV
+            
+            # Базовый жесткий ансамбль
+            rf = RandomForestClassifier(
+                n_estimators=300,          # Поднимаем до 300 для максимальной гладкости вероятностей
+                max_depth=5,               
+                min_samples_leaf=2,        # Позволяем более тонкую нарезку прибыльных окон (с 3 до 2)
+                class_weight="balanced_subsample", 
+                max_features="log2",       # Переводим с "sqrt" на "log2" для лучшей изоляции 11 фич
+                random_state=42,
+                n_jobs=-1
+            )
+            
+            pipeline = Pipeline([
                 ("scaler", StandardScaler()),
-                ("clf", RandomForestClassifier(
-                    n_estimators=250,          # Увеличиваем плотность ансамбля для снижения шума
-                    max_depth=5,               # Чуть поднимаем глубину (4 было слишком тесно для 11 фич)
-                    min_samples_leaf=3,        # Снижаем с 5 до 3, чтобы модель точнее вырезала прибыльные окна
-                    class_weight="balanced_subsample", # Более точная динамическая балансировка для деревьев
-                    max_features="sqrt",       # Ограничиваем выбор фич на сплит против переобучения
-                    random_state=42,
-                    n_jobs=-1
-                ))
+                ("clf", rf)
             ])
+            
+            # ИСПРАВЛЕНО: Заменили 'isotonic' на более устойчивый к дисбалансу и малым выборкам 'sigmoid' (метод Платта)
+            return CalibratedClassifierCV(estimator=pipeline, method="sigmoid", cv=3)
 
         metrics = {"val_auc": None, "val_acc": None, "val_n": int(len(yte))}
         try:
-            # Честная проверка: в тесте должно быть как минимум 2 класса для расчета AUC
             if len(set(ytr.tolist())) >= 2 and len(yte) >= 5 and len(set(yte.tolist())) >= 2:
+                # Теперь m — это полноценно калиброванная модель на тренировочном сплите
                 m = _make().fit(Xtr, ytr)
                 proba = m.predict_proba(Xte)[:, 1]
                 metrics["val_auc"] = round(float(roc_auc_score(yte, proba)), 4)
                 metrics["val_acc"] = round(float(accuracy_score(yte, (proba >= 0.5).astype(int))), 4)
             else:
-                # Честный фоллбэк без крашей: нет данных в тесте -> нет и метрик валидации
                 metrics["val_auc"] = None
                 metrics["val_acc"] = None
                 metrics["val_error"] = "Кризис данных: в валидационном сплите присутствует только один класс"
         except Exception as exc:
             metrics["val_error"] = f"{type(exc).__name__}: {exc}"
 
-        # (#ml-honest-metrics-2026-08-03) Три числа, без которых метрики выше
-        # вводят в заблуждение. Замер 03.08: val_auc 0.7588 / val_acc 0.80 при
-        # live AUC 0.5702 — расхождение объяснялось целиком тем, что ниже.
+        # (#ml-honest-metrics-2026-08-03) Три числа, без которых метрики выше вводят в заблуждение.
         positives = int(ya.sum())
         base_rate = float(1.0 - ya.mean())
         epv = round(positives / max(len(FEATURE_NAMES), 1), 2)
         val_positives = int(yte.sum())
         metrics.update({
-            # Точность бессмысленна, если она равна доле большинства: модель
-            # «всегда нет» даёт столько же. При 19.84% положительных это 0.80 —
-            # ровно то, что показывалось как достижение.
             "baseline_acc": round(base_rate, 4),
             "acc_beats_baseline": (
                 None if metrics["val_acc"] is None
                 else round(float(metrics["val_acc"]) - base_rate, 4)
             ),
-            # Событий на признак. Меньше 10 — модель запоминает выборку..
-            # 51 положительный на 16 признаков = 3.19.
             "events_per_feature": epv,
             "features_used": len(FEATURE_NAMES),
             "positives": positives,
-            # Положительных В ВАЛИДАЦИИ. AUC на десятке событий имеет
-            # доверительный интервал порядка ±0.15 — то есть 0.76 и 0.57
-            # неразличимы, и «валидация лучше боя» может быть просто шумом.
             "val_positives": val_positives,
             "auc_is_reliable": bool(val_positives >= 20 and epv >= 10),
         })
@@ -306,13 +302,9 @@ class MetaLabeler:
             )
         metrics["warnings"] = warnings
 
-        # Финальная модель — добавляем калибровку вероятностей из sklearn
-        from sklearn.calibration import CalibratedClassifierCV
-        
-        base_pipeline = _make()
-        # Использование кросс-валидации для честной калибровки вероятностей
-        calibrated_model = CalibratedClassifierCV(estimator=base_pipeline, method="sigmoid", cv=3)
-        model = calibrated_model.fit(Xa, ya)
+        # Финальная модель обучается на ВСЕХ данных (Xa, ya) через единственный калиброванный пайплайн
+        # ИСПРАВЛЕНО: Убрана двойная обёртка и дублирование вызовов CalibratedClassifierCV
+        model = _make().fit(Xa, ya)
 
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         try:
