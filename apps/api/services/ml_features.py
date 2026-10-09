@@ -5,7 +5,7 @@ from typing import Any
 from services.close_reasons import reached_tp2
 
 CVD_MIN_TRADES: int = 10
-FEATURE_VERSION: int = 4  # Сброс старых несовместимых моделей
+FEATURE_VERSION: int = 5  # Сброс старых несовместимых моделей
 
 FEATURE_NAMES: list[str] = [
     "stop_distance_pct",
