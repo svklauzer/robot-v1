@@ -235,8 +235,7 @@ class MetaLabeler:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.preprocessing import StandardScaler
             from sklearn.pipeline import Pipeline
-            from sklearn.calibration import CalibratedClassifierCV
-            
+
             return Pipeline([
                 ("scaler", StandardScaler()),
                 ("clf", RandomForestClassifier(
@@ -307,7 +306,9 @@ class MetaLabeler:
             )
         metrics["warnings"] = warnings
 
-        # финальная модель — на ВСЕХ данных (после валидации)
+        # Финальная модель — добавляем калибровку вероятностей из sklearn
+        from sklearn.calibration import CalibratedClassifierCV
+        
         base_pipeline = _make()
         # Использование кросс-валидации для честной калибровки вероятностей
         calibrated_model = CalibratedClassifierCV(estimator=base_pipeline, method="sigmoid", cv=3)
