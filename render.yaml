@@ -164,7 +164,7 @@ services:
       # них adx_rising был единственным блокером. Обратно в shadow — только
       # после замера когорты `adx_rising_latched` в stop-forensics.
       - key: ENTRY_IMPULSE_LATCH_MODE
-        value: "shadow"
+        value: "enforce"
       - key: ENTRY_IMPULSE_TF
         value: "15m"
       - key: ENTRY_IMPULSE_WINDOW_SEC
