@@ -210,10 +210,10 @@ services:
       # ML Mode
       # Активируем искусственный интеллект на управление деньгами
       - key: ML_MODE
-        value: "advisory"
-      # Повышаем планку допуска. Всё, что ниже 0.60 по скору модели — жесткий блок ордера
+        value: "full_auto"
+      # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
       - key: ML_MIN_SCORE_TO_TRADE
-        value: "0.60"
+        value: "0.50"
       - key: REGIME_EXP_SIZING_ENABLED
         value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
