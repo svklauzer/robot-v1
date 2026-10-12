@@ -562,11 +562,11 @@ services:
       # Дневной стоп limited-live: четыре плановых стопа по 0.25% и никаких
       # новых входов до следующего окна наблюдения.
       - key: MAX_DAILY_LOSS_PCT
-        value: "0"
+        value: "100"
       # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
       # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
-        value: "0"
+        value: "100"
       - key: MAX_DRAWDOWN_PCT
         value: "15"
 
