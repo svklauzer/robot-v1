@@ -270,3 +270,16 @@ def test_triple_barrier_same_bar_is_conservative():
     df.loc[20, ["high", "low"]] = [130.0, 70.0]                # оба барьера в одной свече
     y = triple_barrier_labels(df, horizon=5, k_atr=1.5)
     assert y.iloc[19] == 0.0
+
+
+def test_phantom_uses_price_units_not_result_pct():
+    from services.ml_features import is_phantom_row
+    # после #621 result_pct в % маржи (×10), mfe_pct в % цены — это НЕ фантом
+    win = {"side": "long", "result_pct": 16.3, "closed_exit_price": 2705.2,
+           "lifecycle": {"mfe_pct": 1.8, "exit_price": 2705.27, "max_profit_price": 2707.25}}
+    assert is_phantom_row(win) is False
+    # выход выше максимума цены — настоящий фантом (long и short)
+    assert is_phantom_row({"side": "long", "lifecycle": {"exit_price": 101.0, "max_profit_price": 100.0}}) is True
+    assert is_phantom_row({"side": "short", "lifecycle": {"exit_price": 99.0, "max_profit_price": 100.0}}) is True
+    # нет цен — старое сравнение
+    assert is_phantom_row({"result_pct": 2.0, "lifecycle": {"mfe_pct": 1.0}}) is True

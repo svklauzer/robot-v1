@@ -103,7 +103,27 @@ def row_to_features(row: dict) -> list[float]:
 
 
 def is_phantom_row(row: dict) -> bool:
+    """Выход лучше, чем цена когда-либо была (фантомный филл).
+
+    (#phantom-units-2026-10-16) С сигнала #621 (20.09.2026) `result_pct` пишется в
+    процентах от маржи (≈ ×10 плечо), а `mfe_pct` остался в процентах цены. Старое
+    сравнение result_pct > mfe_pct с этого момента помечало фантомами ВСЕ победы
+    (~250 строк, 45–54% свежих сделок), и после фильтра в обучении почти не
+    оставалось позитивов. Поэтому сравниваем в единицах цены: выход против
+    max_profit_price. Старое сравнение — только если цен нет.
+    """
     lc = row.get("lifecycle") if isinstance(row.get("lifecycle"), dict) else {}
+    try:
+        side = str(row.get("side") or "").lower()
+        x = lc.get("exit_price")
+        x = row.get("closed_exit_price") if x is None else x
+        m = lc.get("max_profit_price")
+        if side in ("long", "short") and x is not None and m is not None:
+            x, m = float(x), float(m)
+            if x > 0 and m > 0:
+                return x > m * (1 + 1e-6) if side == "long" else x < m * (1 - 1e-6)
+    except (TypeError, ValueError):
+        pass
     try:
         return float(row["result_pct"]) > float(lc["mfe_pct"]) + 1e-9
     except (KeyError, TypeError, ValueError):
