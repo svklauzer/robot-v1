@@ -88,7 +88,7 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             score = float(score)
         except (TypeError, ValueError):
             continue
-        # (#two-legs-2026-10-10) Результат = остаток + первая нога TP1 (plan.tp1_partial).
+        # (#two-legs-2026-10-10) closed_net_pnl уже итог по всем ногам (ногу не прибавляем).
         # Прежде здесь брался один closed_net_pnl: победители с частичным закрытием
         # занижались и в win/net, и в метке, против которой меряется модель.
         row_for_label = {

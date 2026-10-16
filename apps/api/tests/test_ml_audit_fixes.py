@@ -62,19 +62,20 @@ def cfg(monkeypatch):
     return settings
 
 
-# ── метка: две ноги ───────────────────────────────────────────────────────────
-def test_label_counts_tp1_partial_leg():
-    row = {"closed_net_pnl": 0.2, "net_pnl_stop": -1.0, "plan": {"tp1_partial": {"net_pnl": 0.5}}}
-    assert total_net_pnl(row) == pytest.approx(0.7)
-    assert row_to_label(row, "beats_costs", 0.3) == 1          # было 0: 0.2R < 0.3R
-    flat = {"closed_net_pnl": 0.2, "net_pnl_stop": -1.0, "tp1_partial_net_pnl": 0.5}
-    assert row_to_label(flat, "beats_costs", 0.3) == 1
-    assert row_to_label({"closed_net_pnl": 0.2, "net_pnl_stop": -1.0}, "beats_costs", 0.3) == 0
+# ── метка: closed_net_pnl уже итог по всем ногам (без двойного счёта) ──────────
+def test_total_net_pnl_does_not_add_tp1_leg_again():
+    row = {"closed_net_pnl": 0.7, "net_pnl_stop": -1.0, "plan": {"tp1_partial": {"net_pnl": 0.5}}}
+    assert total_net_pnl(row) == pytest.approx(0.7)             # не 1.2
+    assert row_to_label(row, "beats_costs", 0.3) == 1
+    # строки, дописанные прежним backfill'ом, содержат двойной счёт — игнорируем
+    bad = {"closed_net_pnl": 0.2, "net_pnl_stop": -1.0, "tp1_partial_net_pnl": 0.5, "total_net_pnl": 0.7}
+    assert total_net_pnl(bad) == pytest.approx(0.2)
+    assert row_to_label(bad, "beats_costs", 0.3) == 0
 
 
-def test_label_is_win_uses_total():
-    row = {"closed_net_pnl": -0.1, "tp1_partial_net_pnl": 0.5}
-    assert row_to_label(row, "is_win") == 1
+def test_label_is_win_uses_closed_net_pnl():
+    assert row_to_label({"closed_net_pnl": -0.1, "tp1_partial_net_pnl": 0.5}, "is_win") == 0
+    assert row_to_label({"closed_net_pnl": 0.1}, "is_win") == 1
 
 
 # ── метрики обучения ──────────────────────────────────────────────────────────
@@ -180,10 +181,10 @@ def test_drift_status_is_not_fake_ok():
 
 
 # ── статистика и AUC ──────────────────────────────────────────────────────────
-def test_outcome_stats_counts_both_legs_and_caches(cfg, tmp_path):
+def test_outcome_stats_no_double_count_and_caches(cfg, tmp_path):
     rows = [
-        {"symbol": "A", "side": "long", "status": "closed", "grade": "A", "closed_net_pnl": -0.1,
-         "tp1_partial_net_pnl": 0.5, "closed_total_cost": 0.01, "tp1_partial_total_cost": 0.02},
+        {"symbol": "A", "side": "long", "status": "closed", "grade": "A", "closed_net_pnl": 0.4,
+         "tp1_partial_net_pnl": 0.5, "closed_total_cost": 0.03, "tp1_partial_total_cost": 0.02},
         {"symbol": "A", "side": "long", "status": "closed", "grade": "A", "closed_net_pnl": -0.3},
     ]
     p = tmp_path / "o.jsonl"
@@ -217,48 +218,16 @@ def _signal(i, closed_net, plan):
         created_at=None, plan_json=plan)
 
 
-def test_logger_writes_second_leg_and_total(cfg, tmp_path):
+def test_logger_does_not_double_count_leg_and_backfill_is_off(cfg, tmp_path):
     from services.ml_trade_logger import MLTradeLogger
     lg = MLTradeLogger(path=tmp_path / "t.jsonl")
-    lg.log_closed_signal(_signal(1, -0.1, {"tp1_partial": {"net_pnl": 0.5, "total_cost": 0.02}}))
+    lg.log_closed_signal(_signal(1, 0.4, {"tp1_partial": {"net_pnl": 0.5, "total_cost": 0.02}}))
     lg.log_closed_signal(_signal(2, 0.2, json.dumps({"lifecycle": {}})))     # plan_json строкой
     r1, r2 = [json.loads(x) for x in open(tmp_path / "t.jsonl", encoding="utf-8")]
-    assert r1["tp1_partial_net_pnl"] == 0.5 and r1["total_net_pnl"] == pytest.approx(0.4)
-    assert r1["labels"]["is_win"] is True              # остаток −0.1, но сделка в плюсе
-    assert r2["tp1_partial_net_pnl"] == 0.0
-
-
-def test_logger_backfill_adds_missing_leg_once(cfg, tmp_path, monkeypatch):
-    import models.signal as ms
-    from services.ml_trade_logger import MLTradeLogger
-
-    class _Col:
-        def in_(self, ids):
-            return ids
-
-    class _Sig:
-        id = _Col()
-    monkeypatch.setattr(ms, "Signal", _Sig, raising=False)
-
-    path = tmp_path / "t.jsonl"
-    old_row = {"signal_id": 1, "closed_net_pnl": -0.1, "labels": {"is_win": False}}
-    _write(path, [old_row])
-    sig = _signal(1, -0.1, {"tp1_partial": {"net_pnl": 0.5, "total_cost": 0.02}})
-
-    class _Q:
-        def filter(self, *_a):
-            return self
-        def all(self):
-            return [sig]
-    db = SimpleNamespace(query=lambda *_a: _Q())
-
-    lg = MLTradeLogger(path=path)
-    res = lg.backfill_tp1_partial(db)
-    assert res["status"] == "ok" and res["updated"] == 1 and res["with_partial_leg"] == 1
-    row = json.loads(open(path, encoding="utf-8").read())
-    assert row["tp1_partial_net_pnl"] == 0.5 and row["labels"]["is_win"] is True
-    assert (tmp_path / "t.jsonl.bak-before-tp1-backfill").exists()
-    assert lg.backfill_tp1_partial(db)["updated"] == 0          # повторно не трогает
+    assert r1["tp1_partial_net_pnl"] == 0.5                  # справочно
+    assert r1["total_net_pnl"] == pytest.approx(0.4)         # = closed_net_pnl
+    assert r1["labels"]["is_win"] is True and r2["tp1_partial_net_pnl"] == 0.0
+    assert not hasattr(lg, "backfill_tp1_partial")
 
 
 # ── исследовательский модуль ──────────────────────────────────────────────────

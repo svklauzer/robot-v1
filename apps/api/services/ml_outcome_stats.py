@@ -17,7 +17,7 @@ _ROWS_CACHE_LOCK = threading.Lock()
 
 
 def _net_total(row: dict) -> float:
-    """Полный чистый результат строки (остаток + первая нога TP1), nan/None → 0.0."""
+    """Чистый результат строки (closed_net_pnl уже включает все ноги), nan/None → 0.0."""
     v = total_net_pnl(row)
     return 0.0 if v is None else sanitize_float(v, 0.0)
 
@@ -178,10 +178,9 @@ class MLOutcomeStatsService:
             group["side"] = side
             group["count"] += 1
 
-            # (#two-legs-2026-10-10) Результат и издержки — по обеим ногам сделки.
+            # (#two-legs-2026-10-10) closed_net_pnl и closed_total_cost уже по всем ногам.
             net_pnl = _net_total(row)
-            costs = (sanitize_float(row.get("closed_total_cost"), 0.0)
-                     + sanitize_float(row.get("tp1_partial_total_cost"), 0.0))
+            costs = sanitize_float(row.get("closed_total_cost"), 0.0)  # уже по всем ногам
 
             group["net_pnl"] += net_pnl
             group["costs"] += costs

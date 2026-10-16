@@ -116,12 +116,8 @@ class MLTradeLogger:
                     "error": f"{type(exc).__name__}: {exc}",
                 })
 
-        # Дописать вторую ногу TP1 в строки, записанные до правки. Не должно
-        # ронять добор: любой сбой — в отдельный ключ, status не трогаем.
-        try:
-            backfill = self.backfill_tp1_partial(db)
-        except Exception as exc:  # noqa: BLE001
-            backfill = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        # (#two-legs-revert-2026-10-17) backfill второй ноги убран: closed_net_pnl её уже содержит.
+        backfill = {"status": "disabled"}
 
         return {
             "status": "ok" if not errors else "partial_error",
@@ -131,116 +127,6 @@ class MLTradeLogger:
             "skipped": skipped,
             "errors": errors,
             "backfill": backfill,
-        }
-
-    def backfill_tp1_partial(self, db) -> dict:
-        """(#two-legs-2026-10-10) Дописывает `tp1_partial_net_pnl` в уже записанные строки.
-
-        Раньше логгер писал только `closed_net_pnl` — остаток позиции. Первая нога
-        (частичное закрытие на TP1, `plan.tp1_partial.net_pnl`) в файл не попадала,
-        поэтому метка и `is_win` занижали ровно победителей. Для строк, у которых
-        ключа `tp1_partial_net_pnl` ещё нет, берём значение из БД. Наличие ключа
-        (даже со значением None, если сигнала в БД уже нет) = строка обработана,
-        повторно не трогается.
-
-        Безопасность: перед перезаписью делается одноразовая копия файла
-        (`<имя>.bak-before-tp1-backfill`); запись идёт во временный файл и
-        подменяется атомарно; если файл изменился за время расчёта (параллельная
-        запись из цикла) — подмена откладывается до следующего вызова.
-        """
-        from models.signal import Signal
-
-        if not self.path.exists():
-            return {"status": "no_file", "updated": 0}
-
-        st0 = self.path.stat()
-        parsed: list[tuple[str, dict | None]] = []
-        need: set[int] = set()
-        with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
-                obj = None
-                if line.strip():
-                    try:
-                        candidate = json.loads(line)
-                    except Exception:
-                        candidate = None
-                    if isinstance(candidate, dict):
-                        obj = candidate
-                parsed.append((line, obj))
-                if obj is not None and "tp1_partial_net_pnl" not in obj and obj.get("signal_id") is not None:
-                    try:
-                        need.add(int(obj["signal_id"]))
-                    except (TypeError, ValueError):
-                        pass
-
-        if not need:
-            return {"status": "ok", "updated": 0, "pending": 0}
-
-        sigs = {int(s.id): s for s in db.query(Signal).filter(Signal.id.in_(sorted(need))).all()}
-
-        updated = 0
-        nonzero = 0
-        missing = 0
-        out_lines: list[str] = []
-        for line, obj in parsed:
-            if obj is None or "tp1_partial_net_pnl" in obj or obj.get("signal_id") is None:
-                out_lines.append(line if line.endswith("\n") else line + "\n")
-                continue
-            try:
-                sid = int(obj["signal_id"])
-            except (TypeError, ValueError):
-                out_lines.append(line if line.endswith("\n") else line + "\n")
-                continue
-            sig = sigs.get(sid)
-            if sig is None:
-                obj["tp1_partial_net_pnl"] = None
-                obj["tp1_partial_backfill"] = "signal_missing"
-                missing += 1
-            else:
-                part = _as_dict(_as_dict(sig.plan_json).get("tp1_partial"))
-                pn = _num(part.get("net_pnl"))
-                obj["tp1_partial_net_pnl"] = pn
-                obj["tp1_partial_total_cost"] = _num(part.get("total_cost"))
-                base = obj.get("closed_net_pnl")
-                total = (_num(base) + pn) if base is not None else None
-                obj["total_net_pnl"] = total
-                labels = obj.get("labels") if isinstance(obj.get("labels"), dict) else {}
-                labels["is_win"] = bool(total is not None and total > 0)
-                labels["is_loss"] = bool(total is not None and total < 0)
-                obj["labels"] = labels
-                if pn:
-                    nonzero += 1
-            updated += 1
-            out_lines.append(json.dumps(obj, ensure_ascii=False) + "\n")
-
-        backup = self.path.with_name(self.path.name + ".bak-before-tp1-backfill")
-        if not backup.exists():
-            shutil.copy2(self.path, backup)
-
-        tmp_name = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w", dir=str(self.path.parent), delete=False, encoding="utf-8",
-                newline="\n", suffix=".tmp",
-            ) as tmp:
-                tmp_name = tmp.name
-                tmp.writelines(out_lines)
-            st1 = self.path.stat()
-            if (st1.st_size, st1.st_mtime_ns) != (st0.st_size, st0.st_mtime_ns):
-                os.remove(tmp_name)
-                return {"status": "deferred_file_changed", "updated": 0, "pending": len(need)}
-            os.replace(tmp_name, self.path)
-            tmp_name = None
-        finally:
-            if tmp_name and os.path.exists(tmp_name):
-                try:
-                    os.remove(tmp_name)
-                except OSError:
-                    pass
-
-        return {
-            "status": "ok", "updated": updated, "with_partial_leg": nonzero,
-            "signal_missing": missing, "backup": str(backup),
         }
 
     def log_closed_signal(self, signal, known_logged_ids: set[int] | None = None):
@@ -266,11 +152,11 @@ class MLTradeLogger:
         closed_net_pnl = signal.closed_net_pnl
         closed_reason = signal.closed_reason
 
-        # (#two-legs-2026-10-10) Полный результат = остаток + первая нога TP1.
+        # Первая нога — справочно; closed_net_pnl УЖЕ итог по всем ногам.
         tp1_part = _as_dict(plan.get("tp1_partial"))
         partial_net = _num(tp1_part.get("net_pnl"))
         partial_cost = _num(tp1_part.get("total_cost"))
-        total_net = None if closed_net_pnl is None else _num(closed_net_pnl) + partial_net
+        total_net = None if closed_net_pnl is None else _num(closed_net_pnl)  # уже включает ноги
 
         item = {
             "logged_at": datetime.now(timezone.utc).isoformat(),
@@ -311,8 +197,8 @@ class MLTradeLogger:
             "closed_total_cost": signal.closed_total_cost,
 
             # Первая нога (частичное закрытие на TP1) и полный результат сделки.
-            # `closed_net_pnl` выше — только остаток; читать результат нужно как
-            # closed_net_pnl + tp1_partial_net_pnl (= total_net_pnl).
+            # `closed_net_pnl` выше УЖЕ итог по всем ногам; tp1_partial_* — справочно,
+            # прибавлять их нельзя (двойной счёт).
             "tp1_partial_net_pnl": partial_net,
             "tp1_partial_total_cost": partial_cost,
             "total_net_pnl": total_net,

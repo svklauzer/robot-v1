@@ -130,16 +130,14 @@ def is_phantom_row(row: dict) -> bool:
         return False
 
 def tp1_partial_net_pnl(row: dict) -> float:
-    """Чистый P&L ПЕРВОЙ ноги сделки (частичное закрытие на TP1).
+    """Чистый P&L первой ноги (частичное закрытие на TP1) — ТОЛЬКО для информации.
 
-    Результат закрытой сделки лежит в двух местах: `closed_net_pnl` (остаток
-    позиции) и `plan.tp1_partial.net_pnl` (половина, снятая на TP1). Частичное
-    закрытие бывает только у сделок, дошедших до TP1, то есть у победителей:
-    читать одно `closed_net_pnl` значит занижать только одну сторону выборки.
-
-    Источники по приоритету: плоское поле `tp1_partial_net_pnl` (его пишет
-    ml_trade_logger), затем `plan.tp1_partial.net_pnl` (строки из БД).
-    Нет данных → 0.0 (первой ноги не было или о ней ничего не известно).
+    (#two-legs-revert-2026-10-17) `closed_net_pnl` УЖЕ содержит все ноги сделки:
+    с #tp1-partial-2026-07-09 `_close_signal` прибавляет `plan.tp1_partial` и
+    `tp2_partial` к net и издержкам перед записью. Сверка на 68 сделках с TP1:
+    gross(обеих ног) − closed_total_cost == closed_net_pnl до цента, а остаток
+    без ноги ему НЕ равен. Прибавлять эту величину к closed_net_pnl нельзя —
+    это двойной счёт (прежняя правка #two-legs-2026-10-10 была ошибочной).
     """
     v = row.get("tp1_partial_net_pnl")
     if v is None:
@@ -151,7 +149,11 @@ def tp1_partial_net_pnl(row: dict) -> float:
 
 
 def total_net_pnl(row: dict) -> float | None:
-    """Полный чистый результат сделки = остаток + первая нога. None — нет P&L."""
+    """Полный чистый результат сделки = `closed_net_pnl` (он уже включает все ноги).
+
+    Плоские поля `total_net_pnl` / `tp1_partial_net_pnl` из jsonl игнорируются:
+    строки, дописанные прежним backfill'ом, содержат двойной счёт.
+    """
     pnl = row.get("closed_net_pnl")
     if pnl is None:
         return None
@@ -159,9 +161,7 @@ def total_net_pnl(row: dict) -> float | None:
         pnl = float(pnl)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(pnl):
-        return None
-    return pnl + tp1_partial_net_pnl(row)
+    return pnl if math.isfinite(pnl) else None
 
 
 def row_to_label(row: dict, label_kind: str = "beats_costs", min_r: float = 0.3) -> int | None:
