@@ -22,22 +22,21 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.signal import Signal
-from services.ml_features import row_to_label
+from services.ml_features import row_to_label, total_net_pnl
+from services.ml_outcome_stats import _rank_auc
 
 
 def _auc(scores_win: list[float], scores_loss: list[float]) -> float | None:
-    """Rank-based AUC = P(score_win > score_loss), ничьи = 0.5. Без sklearn."""
+    """Rank-based AUC = P(score_win > score_loss), ничьи = 0.5. Без sklearn.
+
+    (#perf-2026-10-10) Было двойным циклом O(n_pos·n_neg) — до ~10^6 сравнений на
+    2000 сделках в обработчике запроса; теперь по рангам, O(n log n), тот же результат.
+    """
     n_pos, n_neg = len(scores_win), len(scores_loss)
     if n_pos == 0 or n_neg == 0:
         return None
-    greater = ties = 0
-    for w in scores_win:
-        for l in scores_loss:
-            if w > l:
-                greater += 1
-            elif w == l:
-                ties += 1
-    return round((greater + 0.5 * ties) / (n_pos * n_neg), 4)
+    auc = _rank_auc([1] * n_pos + [0] * n_neg, list(scores_win) + list(scores_loss))
+    return None if auc is None else round(auc, 4)
 
 
 def _parse_plan_json(plan_raw: Any) -> dict:
@@ -89,12 +88,18 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             score = float(score)
         except (TypeError, ValueError):
             continue
-        net = s.closed_net_pnl
-        net = float(net) if net is not None else 0.0
-        train_label = row_to_label(
-            {"closed_net_pnl": s.closed_net_pnl, "net_pnl_stop": s.net_pnl_stop},
-            label_kind, min_r,
-        )
+        # (#two-legs-2026-10-10) Результат = остаток + первая нога TP1 (plan.tp1_partial).
+        # Прежде здесь брался один closed_net_pnl: победители с частичным закрытием
+        # занижались и в win/net, и в метке, против которой меряется модель.
+        row_for_label = {
+            "closed_net_pnl": s.closed_net_pnl,
+            "net_pnl_stop": s.net_pnl_stop,
+            "closed_reason": getattr(s, "closed_reason", None),  # для label_kind=hit_tp2
+            "plan": plan,
+        }
+        total = total_net_pnl(row_for_label)
+        net = float(total) if total is not None else 0.0
+        train_label = row_to_label(row_for_label, label_kind, min_r)
         rows.append({
             "id": s.id, "symbol": s.symbol, "side": s.side, "grade": s.grade,
             "score": score, "win": 1 if net > 0 else 0, "net": net,
@@ -214,4 +219,4 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "с live_auc_vs_train_label. avoided_net>0 = порог отрезал бы убыточные. "
             "Выборка мала (<30) → не доверять. Это shadow — на сделки НЕ влияет."
         ),
-    }
+    }

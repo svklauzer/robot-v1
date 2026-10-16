@@ -105,10 +105,17 @@ def triple_barrier_labels(df, horizon: int, k_atr: float):
         end = min(i + horizon, n - 1)
         label = np.nan
         for j in range(i + 1, end + 1):
-            if h[j] >= up:
+            hit_up, hit_dn = h[j] >= up, l[j] <= dn
+            if hit_up and hit_dn:
+                # Оба барьера в одной свече: порядок внутри свечи неизвестен. Раньше
+                # засчитывался верхний — систематический оптимизм в пользу лонга.
+                # Консервативно: стоп первым.
+                label = 0.0
+                break
+            if hit_up:
                 label = 1.0  # верхний барьер первым
                 break
-            if l[j] <= dn:
+            if hit_dn:
                 label = 0.0  # нижний барьер первым
                 break
         y[i] = label  # NaN если ни один барьер не задет за горизонт
@@ -162,7 +169,7 @@ def evaluate(symbol: str, timeframe: str = "1h", limit: int = 1500,
         # n_estimators 120→60: вдвое меньше CPU при scan, чтобы тяжёлый прогон не
         # «душил» event loop и не ронял WS-фид (pong-таймаут 1003). logreg —
         # основной по вердикту, gbm лишь для сравнения, поэтому потеря точности ок.
-        return GradientBoostingClassifier(max_depth=3, n_estimators=60, learning_rate=0.08)
+        return GradientBoostingClassifier(max_depth=3, n_estimators=60, learning_rate=0.08, random_state=42)
 
     def _walk_forward(name):
         # Purged walk-forward: расширяющееся окно train, последовательные тест-окна,

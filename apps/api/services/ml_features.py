@@ -109,6 +109,41 @@ def is_phantom_row(row: dict) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
 
+def tp1_partial_net_pnl(row: dict) -> float:
+    """Чистый P&L ПЕРВОЙ ноги сделки (частичное закрытие на TP1).
+
+    Результат закрытой сделки лежит в двух местах: `closed_net_pnl` (остаток
+    позиции) и `plan.tp1_partial.net_pnl` (половина, снятая на TP1). Частичное
+    закрытие бывает только у сделок, дошедших до TP1, то есть у победителей:
+    читать одно `closed_net_pnl` значит занижать только одну сторону выборки.
+
+    Источники по приоритету: плоское поле `tp1_partial_net_pnl` (его пишет
+    ml_trade_logger), затем `plan.tp1_partial.net_pnl` (строки из БД).
+    Нет данных → 0.0 (первой ноги не было или о ней ничего не известно).
+    """
+    v = row.get("tp1_partial_net_pnl")
+    if v is None:
+        plan = row.get("plan")
+        part = plan.get("tp1_partial") if isinstance(plan, dict) else None
+        v = part.get("net_pnl") if isinstance(part, dict) else None
+    out = _f(v, 0.0)
+    return out if math.isfinite(out) else 0.0
+
+
+def total_net_pnl(row: dict) -> float | None:
+    """Полный чистый результат сделки = остаток + первая нога. None — нет P&L."""
+    pnl = row.get("closed_net_pnl")
+    if pnl is None:
+        return None
+    try:
+        pnl = float(pnl)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(pnl):
+        return None
+    return pnl + tp1_partial_net_pnl(row)
+
+
 def row_to_label(row: dict, label_kind: str = "beats_costs", min_r: float = 0.3) -> int | None:
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     if label_kind == "hit_tp2":
@@ -116,12 +151,9 @@ def row_to_label(row: dict, label_kind: str = "beats_costs", min_r: float = 0.3)
             return 1 if labels.get("hit_tp2") else 0
         return 1 if reached_tp2(row.get("closed_reason"), row.get("plan") or {}) else 0
 
-    pnl = row.get("closed_net_pnl")
+    # (#two-legs-2026-10-10) Метка считается по ПОЛНОМУ результату (обе ноги).
+    pnl = total_net_pnl(row)
     if pnl is None:
-        return None
-    try:
-        pnl = float(pnl)
-    except (TypeError, ValueError):
         return None
 
     if label_kind == "is_win":
