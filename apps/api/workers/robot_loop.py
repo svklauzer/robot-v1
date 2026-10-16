@@ -1234,6 +1234,11 @@ class RobotLoop:
                     "net_rr_tp1": plan.net_rr_tp1,
                     "net_rr_tp2": plan.net_rr_tp2,
                     "entry_depth": _ml_depth,
+                    # (#ml-serve-parity-2026-10-17) Признаки is_scalp/is_crt модель берёт из
+                    # rationale и trade_mode (как в trade_outcomes.jsonl). Без них на живом
+                    # предсказании оба были константой 0. Значения — те же, что пишутся в сигнал.
+                    "rationale": f"intelligence_{result.reason}",
+                    "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
                     # (#audit-2026-08-27) stop_price/required_margin/entry_price
                     # были доступны здесь и раньше (тот же объект plan, из
                     # которого уже брались net_rr_tp1/tp2), но не форвардились —
