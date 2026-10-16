@@ -120,38 +120,25 @@ class MLIntelligenceHub:
         return self._scorer
     
     def _mode(self) -> str:
-        """Эффективный режим ML с авто-деградацией по качеству модели."""
-        mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
-        if mode not in ("advisory", "full_auto"):
-            return mode
-        
-        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
-            return mode
-        
+        """Эффективный режим ML с авто-деградацией по качеству модели.
+
+        (#authority-2026-10-10) Единая логика с MLController: resolve_effective_mode().
+        Раньше здесь была своя копия без проверки auc_is_reliable и с сохранением
+        полномочий при отсутствии val_auc.
+        """
+        from services.ml_controller import resolve_effective_mode
+        configured = str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        metrics = None
         labeler = self._get_meta_labeler()
         if labeler:
             try:
-                st = labeler.status()
-                metrics = st.get("metrics") or {}
-                auc = metrics.get("val_auc")
-                
-                if auc is not None:
-                    # Читаем порог из конфига (теперь там будет 0.55 из render.yaml)
-                    min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-                    epv = float(metrics.get("events_per_feature", 0))
-                    
-                    if float(auc) < min_auc:
-                        self._last_demote_reason = f"val_auc={auc:.4f} < {min_auc} — низкая точность, сброс до shadow"
-                        return "shadow"
-                        
-                    if epv < 3.0:
-                        self._last_demote_reason = f"events_per_feature={epv} < 3.0 — переобучение выборки, сброс до shadow"
-                        return "shadow"
-            except Exception:
-                pass
-
+                metrics = labeler.status().get("metrics") or {}
+            except Exception:  # noqa: BLE001
+                metrics = None
+        mode, reason = resolve_effective_mode(configured, metrics)
+        self._last_demote_reason = reason
         return mode
-    
+
     def evaluate_candidate(self, candidate: dict) -> MLDecision:
         """Оценка кандидата с использованием ансамбля методов.
         
@@ -294,7 +281,11 @@ class MLIntelligenceHub:
                 st = labeler.status()
                 metrics = st.get("metrics") or {}
                 # Если AUC не надежен или упал ниже пола — мгновенно отзываем вес
-                if not metrics.get("auc_is_reliable", True) or metrics.get("val_auc", 0) < 0.58:
+                auc_v = metrics.get("val_auc")
+                # (#audit-2026-10-10) val_auc=None давал TypeError на сравнении, его глотал
+                # except — и вес модели молча оставался 0.65 именно при отсутствии метрики.
+                if (auc_v is None or not metrics.get("auc_is_reliable", True)
+                        or float(auc_v) < 0.58):
                     default_weights["meta_labeler"] = 0.00
                     default_weights["outcome_stats"] = 0.70
                     default_weights["scorer"] = 0.30
@@ -388,26 +379,46 @@ class MLIntelligenceHub:
         return MLDecision(action="passthrough", allow=True, size_multiplier=1.0)
     
     def _get_feature_contributions(self, labeler, candidate: dict) -> dict[str, float]:
-        """Вычисление вклада признаков (MDI Importance для ансамблей деревьев)."""
+        """Глобальная важность признаков (MDI) обученной модели.
+
+        (#audit-2026-10-10) Модель — CalibratedClassifierCV, у неё нет `named_steps`,
+        поэтому прежний код ВСЕГДА возвращал {}: объяснимость не работала. Достаём
+        важности из каждого калиброванного под-пайплайна и усредняем. Это важность
+        по модели в целом, не вклад в конкретное решение.
+        """
         try:
             import numpy as np
+            from services.ml_features import FEATURE_NAMES
             model = getattr(labeler, "_model", None)
             if model is None:
                 return {}
-            
-            from services.ml_features import FEATURE_NAMES
-            
-            # ИСПРАВЛЕНО: Безопасное извлечение важности фич (feature_importances_) для RandomForest пайплайна
-            if hasattr(model, 'named_steps'):
-                clf = model.named_steps.get('clf')
-                if clf and hasattr(clf, 'feature_importances_'):
-                    importances = clf.feature_importances_
-                    return {name: float(importance) for name, importance in zip(FEATURE_NAMES, importances)}
-            
-            return {}
+            cache = getattr(self, "_imp_cache", None)
+            if cache and cache[0] == id(model):
+                return dict(cache[1])
+
+            def _clf_importances(est):
+                step = est.named_steps.get("clf") if hasattr(est, "named_steps") else est
+                return getattr(step, "feature_importances_", None)
+
+            imps = []
+            for cc in getattr(model, "calibrated_classifiers_", None) or []:
+                base = getattr(cc, "estimator", None) or getattr(cc, "base_estimator", None)
+                v = _clf_importances(base) if base is not None else None
+                if v is not None:
+                    imps.append(np.asarray(v, dtype=float))
+            if not imps:
+                v = _clf_importances(model)
+                if v is not None:
+                    imps.append(np.asarray(v, dtype=float))
+            if not imps:
+                return {}
+            mean = np.mean(imps, axis=0)
+            out = {name: float(x) for name, x in zip(FEATURE_NAMES, mean)}
+            self._imp_cache = (id(model), out)
+            return dict(out)
         except Exception:
             return {}
-    
+
     def _extract_features_for_scorer(self, candidate: dict) -> dict:
         """Извлечение признаков для MLScorer из кандидата."""
         # Пытаемся получить технические индикаторы из entry_depth или radar_state
@@ -515,6 +526,7 @@ class MLIntelligenceHub:
             "configured_mode": configured,
             "effective_mode": effective,
             "demoted": configured != effective,
+            "demote_reason": getattr(self, "_last_demote_reason", None) if configured != effective else None,
             "val_auc": auc,
             "min_auc_for_auto": float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55)),
             "auto_demote_enabled": bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)),
@@ -527,7 +539,7 @@ class MLIntelligenceHub:
             # Для совместимости с фронтендом
             "model": model_info,
             "metrics": metrics,
-            "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45)),
+            "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.60)),
             "size_mult_range": [
                 float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7)),
                 float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25)),
@@ -553,7 +565,11 @@ class DriftMonitor:
             "enabled": True,
             "baseline_available": self._baseline_stats is not None,
             "window_size": self._window_size,
-            "status": "ok",
+            # (#audit-2026-10-10) Было безусловное "ok", хотя record_prediction и
+            # check_drift — заглушки: дашборд показывал зелёный статус мониторинга,
+            # который ничего не мониторит.
+            "implemented": False,
+            "status": "ok" if self._baseline_stats is not None else "no_baseline",
         }
     
     def record_prediction(self, candidate: dict, prediction: float, actual: float | None = None):
