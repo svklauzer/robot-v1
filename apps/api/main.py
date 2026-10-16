@@ -1467,6 +1467,29 @@ def ml_outcomes_stats():
     return payload
 
 
+@app.get("/ml/outcomes/download", dependencies=[Depends(require_owner_action)])
+def ml_outcomes_download(slim: bool = False):
+    """(#outcomes-download-2026-10-17) Скачать trade_outcomes.jsonl с персистентного диска.
+
+    slim=true — без lifecycle.traj/traj_step. Файл целиком может расти вместе с
+    траекториями; для разбора признаков и меток траектория не нужна.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse, StreamingResponse
+    from services.ml_outcomes_export import iter_slim_lines
+    from services.ml_trade_logger import MLTradeLogger
+
+    p = MLTradeLogger().path
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="trade_outcomes.jsonl не найден")
+    if slim:
+        return StreamingResponse(
+            iter_slim_lines(p), media_type="application/x-ndjson",
+            headers={"Content-Disposition": 'attachment; filename="trade_outcomes_slim.jsonl"'},
+        )
+    return FileResponse(p, media_type="application/x-ndjson", filename="trade_outcomes.jsonl")
+
+
 @app.get("/ml/features/analysis", dependencies=[Depends(require_owner_action)])
 def ml_feature_analysis():
     """Дешёвый descriptive-тест: какие фичи (вкл. стакан OBI/CVD) разделяют
