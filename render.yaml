@@ -98,7 +98,7 @@ services:
       # добавлены DOGE и HYPE, CHIP и PI — эксперимент (нет на HTX); убраны
       # AVAX, TRX, DOT, ADA — на OKX тонкие (открытые по ним доживут до закрытия).
       - key: OKX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT,BCH/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
@@ -210,7 +210,7 @@ services:
       # ML Mode
       # Активируем искусственный интеллект на управление деньгами
       - key: ML_MODE
-        value: "advisory"
+        value: "shadow"
       # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
       - key: ML_MIN_SCORE_TO_TRADE
         value: "0.50"
