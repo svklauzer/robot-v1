@@ -1240,7 +1240,7 @@ class Settings(BaseSettings):
     # vs 70/30), чтобы не резать здоровые тренды: проверено по истории —
     # победители TRX #272 (+10.97, 4h RSI 63) и #281 (4h RSI 53) не задеваются,
     # ETH #271 (+0.26, ~70 на входе) прошёл бы; режутся ETH #276 (77) и SOL #278 (72.8).
-    TREND_HTF_EXTREME_VETO: bool = True
+    TREND_HTF_EXTREME_VETO: bool = False
     TREND_HTF_RSI_HARD_OVERHEAT: float = 80.0
     TREND_HTF_RSI_HARD_OVERSOLD: float = 20.0
 
