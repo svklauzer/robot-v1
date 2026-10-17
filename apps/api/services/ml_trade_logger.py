@@ -1,8 +1,33 @@
 import json
+import math
+import os
+import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from core.config import settings
 from services.close_reasons import reached_tp2
+
+
+def _as_dict(raw) -> dict:
+    """plan_json бывает dict (Postgres JSON) или строкой (текстовые бэкенды)."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _num(v, default: float = 0.0) -> float:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if math.isfinite(f) else default
 
 
 class MLTradeLogger:
@@ -47,12 +72,24 @@ class MLTradeLogger:
         return int(signal_id) in self._iter_logged_signal_ids()
 
     def log_unlogged_closed_signals(self, db, limit: int = 500) -> dict:
+        from sqlalchemy import and_
         from models.signal import Signal
 
         logged_ids = self._iter_logged_signal_ids()
+
+        # (#catchup-starvation-2026-10-10) Раньше: `status == closed ORDER BY id ASC
+        # LIMIT 500`. Это 500 САМЫХ СТАРЫХ закрытых сигналов; как только их набралось
+        # больше 500 и все они уже в файле, добор не видел ни одного нового — молча,
+        # а заодно каждый вызов тянул из БД до 500 полных plan_json впустую.
+        # Теперь в запрос идут только ещё не записанные, а limit ограничивает число
+        # НОВЫХ записей за вызов.
+        if logged_ids:
+            cond = and_(Signal.status == "closed", ~Signal.id.in_(sorted(logged_ids)))
+        else:
+            cond = Signal.status == "closed"
         closed = (
             db.query(Signal)
-            .filter(Signal.status == "closed")
+            .filter(cond)
             .order_by(Signal.id.asc())
             .limit(max(int(limit), 1))
             .all()
@@ -79,6 +116,9 @@ class MLTradeLogger:
                     "error": f"{type(exc).__name__}: {exc}",
                 })
 
+        # (#two-legs-revert-2026-10-17) backfill второй ноги убран: closed_net_pnl её уже содержит.
+        backfill = {"status": "disabled"}
+
         return {
             "status": "ok" if not errors else "partial_error",
             "path": str(self.path),
@@ -86,6 +126,7 @@ class MLTradeLogger:
             "logged": logged,
             "skipped": skipped,
             "errors": errors,
+            "backfill": backfill,
         }
 
     def log_closed_signal(self, signal, known_logged_ids: set[int] | None = None):
@@ -104,12 +145,18 @@ class MLTradeLogger:
                 "path": str(self.path),
             }
 
-        plan = signal.plan_json or {}
-        lifecycle = plan.get("lifecycle") or {}
-        ml_data = plan.get("ml") or {}
+        plan = _as_dict(signal.plan_json)
+        lifecycle = _as_dict(plan.get("lifecycle"))
+        ml_data = _as_dict(plan.get("ml"))
 
         closed_net_pnl = signal.closed_net_pnl
         closed_reason = signal.closed_reason
+
+        # Первая нога — справочно; closed_net_pnl УЖЕ итог по всем ногам.
+        tp1_part = _as_dict(plan.get("tp1_partial"))
+        partial_net = _num(tp1_part.get("net_pnl"))
+        partial_cost = _num(tp1_part.get("total_cost"))
+        total_net = None if closed_net_pnl is None else _num(closed_net_pnl)  # уже включает ноги
 
         item = {
             "logged_at": datetime.now(timezone.utc).isoformat(),
@@ -148,6 +195,13 @@ class MLTradeLogger:
             "closed_exit_price": signal.closed_exit_price,
             "closed_net_pnl": closed_net_pnl,
             "closed_total_cost": signal.closed_total_cost,
+
+            # Первая нога (частичное закрытие на TP1) и полный результат сделки.
+            # `closed_net_pnl` выше УЖЕ итог по всем ногам; tp1_partial_* — справочно,
+            # прибавлять их нельзя (двойной счёт).
+            "tp1_partial_net_pnl": partial_net,
+            "tp1_partial_total_cost": partial_cost,
+            "total_net_pnl": total_net,
 
             "opened_at": str(signal.opened_at) if signal.opened_at else None,
             "closed_at": str(signal.closed_at) if signal.closed_at else None,
@@ -197,8 +251,9 @@ class MLTradeLogger:
             },
 
             "labels": {
-                "is_win": bool(closed_net_pnl is not None and float(closed_net_pnl) > 0),
-                "is_loss": bool(closed_net_pnl is not None and float(closed_net_pnl) < 0),
+                # is_win / is_loss — по ПОЛНОМУ результату (обе ноги).
+                "is_win": bool(total_net is not None and total_net > 0),
+                "is_loss": bool(total_net is not None and total_net < 0),
                 "hit_stop": closed_reason == "stop_loss",
                 # (#tp2-stage-2026-09-12) Этап TP2 закрывает хвост своими
                 # причинами — сделка до TP2 при этом дошла.

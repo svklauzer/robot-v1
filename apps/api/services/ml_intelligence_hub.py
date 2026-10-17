@@ -120,33 +120,25 @@ class MLIntelligenceHub:
         return self._scorer
     
     def _mode(self) -> str:
-        """Эффективный режим ML с авто-деградацией."""
-        mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
-        if mode not in ("advisory", "full_auto"):
-            return mode
-        
-        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
-            return mode
-        
-        # Проверка качества модели
-        # (#audit-2026-08-27) Было `getattr(labeler, "metadata", None)` —
-        # MetaLabeler такого атрибута/метода не имеет вовсе (есть `.status()`),
-        # поэтому эта проверка всегда была no-op: auc никогда не читался,
-        # демоушен по AUC не срабатывал ни разу, что бы ни показывала модель.
+        """Эффективный режим ML с авто-деградацией по качеству модели.
+
+        (#authority-2026-10-10) Единая логика с MLController: resolve_effective_mode().
+        Раньше здесь была своя копия без проверки auc_is_reliable и с сохранением
+        полномочий при отсутствии val_auc.
+        """
+        from services.ml_controller import resolve_effective_mode
+        configured = str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        metrics = None
         labeler = self._get_meta_labeler()
         if labeler:
             try:
-                st = labeler.status()
-                auc = (st.get("metrics") or {}).get("val_auc")
-                if auc is not None:
-                    min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-                    if float(auc) < min_auc:
-                        return "shadow"
-            except Exception:
-                pass
-
+                metrics = labeler.status().get("metrics") or {}
+            except Exception:  # noqa: BLE001
+                metrics = None
+        mode, reason = resolve_effective_mode(configured, metrics)
+        self._last_demote_reason = reason
         return mode
-    
+
     def evaluate_candidate(self, candidate: dict) -> MLDecision:
         """Оценка кандидата с использованием ансамбля методов.
         
@@ -275,32 +267,42 @@ class MLIntelligenceHub:
         return decision
     
     def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
-        """Взвешенное усреднение предсказаний.
-        
-        Веса:
-        - meta_labeler: 0.6 (обученная модель)
-        - outcome_stats: 0.3 (исторические данные)
-        - scorer: 0.1 (эвристика, baseline)
-        """
+        """Динамическое ансамблирование с защитой от сбоя моделей."""
         default_weights = {
-            "meta_labeler": 0.6,
-            "outcome_stats": 0.3,
-            "scorer": 0.1,
+            "meta_labeler": 0.65,  # Приоритет новой нелинейной модели
+            "outcome_stats": 0.25, # Историческая память по Symbol/Side
+            "scorer": 0.10         # Эвристический baseline
         }
         
+        # Авто-корректировка весов в рантайме при деградации валидации
+        labeler = self._get_meta_labeler()
+        if labeler and "meta_labeler" in predictions:
+            try:
+                st = labeler.status()
+                metrics = st.get("metrics") or {}
+                # Если AUC не надежен или упал ниже пола — мгновенно отзываем вес
+                auc_v = metrics.get("val_auc")
+                # (#audit-2026-10-10) val_auc=None давал TypeError на сравнении, его глотал
+                # except — и вес модели молча оставался 0.65 именно при отсутствии метрики.
+                if (auc_v is None or not metrics.get("auc_is_reliable", True)
+                        or float(auc_v) < 0.58):
+                    default_weights["meta_labeler"] = 0.00
+                    default_weights["outcome_stats"] = 0.70
+                    default_weights["scorer"] = 0.30
+            except Exception:
+                pass        
+
         total_weight = 0.0
         weighted_sum = 0.0
         actual_weights = {}
         
         for name, score in predictions.items():
             weight = default_weights.get(name, 0.1)
-            # Нормализуем веса под доступные модели
             actual_weights[name] = weight
             weighted_sum += score * weight
             total_weight += weight
         
         if total_weight > 0:
-            # Нормализуем веса до суммы 1.0
             actual_weights = {k: v / total_weight for k, v in actual_weights.items()}
             ensemble_score = weighted_sum / total_weight
         else:
@@ -330,113 +332,93 @@ class MLIntelligenceHub:
     
     def _make_decision(self, score: float, mode: str, uncertainty: float,
                        weights: dict[str, float], explanations: dict) -> MLDecision:
-        """Формирование решения на основе режима и порога."""
-        min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
+        min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.60)) # Повышенный порог гейта
         
-        # Активное обучение: высокая неопределённость → exploration
         is_exploration = False
-        if (
-            uncertainty > 0.3  # Высокая неопределённость
-            and bool(getattr(settings, "ML_EXPLORE_ENABLED", True))
-            and not getattr(settings, "is_live_enabled", False)
-        ):
+        if uncertainty > 0.35 and bool(getattr(settings, "ML_EXPLORE_ENABLED", False)) and not getattr(settings, "is_live_enabled", False):
             is_exploration = True
         
         if mode == "shadow":
             return MLDecision(
-                action="log_only",
-                allow=True,
-                size_multiplier=1.0,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason="shadow_mode_logging_only",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
+                action="log_only", allow=True, size_multiplier=1.0,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason="shadow_mode_logging_only"
             )
         
         if mode == "advisory":
             recommend = "take" if score >= min_score else "skip"
             return MLDecision(
-                action="advise",
-                allow=True,
-                size_multiplier=1.0,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason=f"advisory_{recommend}",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
-                metadata={"recommendation": recommend},
+                action="advise", allow=True, size_multiplier=1.0,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason=f"advisory_{recommend}"
             )
         
         if mode == "full_auto":
             if score < min_score:
                 return MLDecision(
-                    action="block",
-                    allow=False,
-                    size_multiplier=0.0,
-                    ml_score=round(score, 4),
-                    confidence=1.0 - uncertainty,
-                    decision_reason=f"ml_score_below_min:{score:.3f}<{min_score}",
-                    is_exploration=is_exploration,
-                    uncertainty=uncertainty,
+                    action="block", allow=False, size_multiplier=0.0,
+                    ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                    decision_reason=f"ml_score_below_min:{score:.3f}<{min_score}"
                 )
             
-            # Размер в guardrails
+            # Динамический сайзинг в безопасных границах (Guardrails)
             s_min = float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7))
             s_max = float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25))
-            span = max(0.85 - min_score, 1e-6)
+            
+            # Реалистичный верхний квантиль сжатия под случайный лес (0.75)
+            span = max(0.75 - min_score, 1e-6)
             frac = max(0.0, min(1.0, (score - min_score) / span))
             size_mult = round(s_min + (s_max - s_min) * frac, 3)
             
             return MLDecision(
-                action="size",
-                allow=True,
-                size_multiplier=size_mult,
-                ml_score=round(score, 4),
-                confidence=1.0 - uncertainty,
-                decision_reason=f"ml_score_ok:{score:.3f}",
-                is_exploration=is_exploration,
-                uncertainty=uncertainty,
+                action="size", allow=True, size_multiplier=size_mult,
+                ml_score=round(score, 4), confidence=1.0 - uncertainty,
+                decision_reason=f"ml_score_ok_size_allocated:{score:.3f}"
             )
         
-        # Неизвестный режим → безопасно
-        return MLDecision(
-            action="passthrough",
-            allow=True,
-            size_multiplier=1.0,
-            decision_reason="unknown_mode_passthrough",
-        )
+        return MLDecision(action="passthrough", allow=True, size_multiplier=1.0)
     
     def _get_feature_contributions(self, labeler, candidate: dict) -> dict[str, float]:
-        """Вычисление вклада признаков (для LogisticRegression)."""
+        """Глобальная важность признаков (MDI) обученной модели.
+
+        (#audit-2026-10-10) Модель — CalibratedClassifierCV, у неё нет `named_steps`,
+        поэтому прежний код ВСЕГДА возвращал {}: объяснимость не работала. Достаём
+        важности из каждого калиброванного под-пайплайна и усредняем. Это важность
+        по модели в целом, не вклад в конкретное решение.
+        """
         try:
             import numpy as np
-            
+            from services.ml_features import FEATURE_NAMES
             model = getattr(labeler, "_model", None)
             if model is None:
                 return {}
-            
-            # Извлекаем признаки
-            from services.ml_features import FEATURE_NAMES, row_to_features
-            x = np.array([row_to_features(candidate)], dtype=float)
-            
-            # Для LogisticRegression: coef_ × features
-            if hasattr(model, 'named_steps'):
-                # Pipeline
-                scaler = model.named_steps.get('scaler')
-                clf = model.named_steps.get('clf')
-                if scaler and clf:
-                    x_scaled = scaler.transform(x)
-                    contributions = clf.coef_[0] * x_scaled[0]
-                else:
-                    return {}
-            else:
-                contributions = model.coef_[0] * x[0]
-            
-            return {name: float(contrib) for name, contrib in zip(FEATURE_NAMES, contributions)}
+            cache = getattr(self, "_imp_cache", None)
+            if cache and cache[0] == id(model):
+                return dict(cache[1])
+
+            def _clf_importances(est):
+                step = est.named_steps.get("clf") if hasattr(est, "named_steps") else est
+                return getattr(step, "feature_importances_", None)
+
+            imps = []
+            for cc in getattr(model, "calibrated_classifiers_", None) or []:
+                base = getattr(cc, "estimator", None) or getattr(cc, "base_estimator", None)
+                v = _clf_importances(base) if base is not None else None
+                if v is not None:
+                    imps.append(np.asarray(v, dtype=float))
+            if not imps:
+                v = _clf_importances(model)
+                if v is not None:
+                    imps.append(np.asarray(v, dtype=float))
+            if not imps:
+                return {}
+            mean = np.mean(imps, axis=0)
+            out = {name: float(x) for name, x in zip(FEATURE_NAMES, mean)}
+            self._imp_cache = (id(model), out)
+            return dict(out)
         except Exception:
             return {}
-    
+
     def _extract_features_for_scorer(self, candidate: dict) -> dict:
         """Извлечение признаков для MLScorer из кандидата."""
         # Пытаемся получить технические индикаторы из entry_depth или radar_state
@@ -544,6 +526,7 @@ class MLIntelligenceHub:
             "configured_mode": configured,
             "effective_mode": effective,
             "demoted": configured != effective,
+            "demote_reason": getattr(self, "_last_demote_reason", None) if configured != effective else None,
             "val_auc": auc,
             "min_auc_for_auto": float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55)),
             "auto_demote_enabled": bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)),
@@ -556,7 +539,7 @@ class MLIntelligenceHub:
             # Для совместимости с фронтендом
             "model": model_info,
             "metrics": metrics,
-            "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45)),
+            "min_score_to_trade": float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.60)),
             "size_mult_range": [
                 float(getattr(settings, "ML_SIZE_MULT_MIN", 0.7)),
                 float(getattr(settings, "ML_SIZE_MULT_MAX", 1.25)),
@@ -582,7 +565,11 @@ class DriftMonitor:
             "enabled": True,
             "baseline_available": self._baseline_stats is not None,
             "window_size": self._window_size,
-            "status": "ok",
+            # (#audit-2026-10-10) Было безусловное "ok", хотя record_prediction и
+            # check_drift — заглушки: дашборд показывал зелёный статус мониторинга,
+            # который ничего не мониторит.
+            "implemented": False,
+            "status": "ok" if self._baseline_stats is not None else "no_baseline",
         }
     
     def record_prediction(self, candidate: dict, prediction: float, actual: float | None = None):

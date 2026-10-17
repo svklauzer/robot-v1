@@ -1,11 +1,48 @@
 import json
 import math
+import threading
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from core.config import settings
-from services.ml_features import row_to_label
+from services.ml_features import row_to_label, total_net_pnl
+
+# (#perf-2026-10-10) Кэш разобранных строк trade_outcomes.jsonl по (размер, mtime).
+# Файл ~2.8 МБ (в строках лежит lifecycle.traj) и растёт; хаб на КАЖДОГО кандидата
+# звал grade_stats() дважды и penalty_for() → summary(), то есть 2–3 полных
+# json-разбора файла за кандидата. Теперь файл разбирается один раз на изменение.
+_ROWS_CACHE: dict[str, tuple[tuple[int, int], list[dict], int]] = {}
+_ROWS_CACHE_LOCK = threading.Lock()
+
+
+def _net_total(row: dict) -> float:
+    """Чистый результат строки (closed_net_pnl уже включает все ноги), nan/None → 0.0."""
+    v = total_net_pnl(row)
+    return 0.0 if v is None else sanitize_float(v, 0.0)
+
+
+def _rank_auc(y_true: list[int], y_score: list[float]) -> float | None:
+    """AUC через ранги (Манна—Уитни) с усреднением рангов при ничьих. O(n log n)."""
+    n = len(y_true)
+    n_pos = sum(1 for y in y_true if y == 1)
+    n_neg = n - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+    order = sorted(range(n), key=lambda i: y_score[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and y_score[order[j + 1]] == y_score[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    rank_sum_pos = sum(ranks[i] for i in range(n) if y_true[i] == 1)
+    return (rank_sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
 
 def sanitize_float(value, default=0.0) -> float:
     """Санитизация float-значений для JSON: nan/inf -> default."""
@@ -46,9 +83,33 @@ class MLOutcomeStatsService:
             }
 
     def _load_rows(self) -> list[dict]:
+        """Строки датасета. Результат кэшируется по (размер, mtime) файла.
+
+        Возвращается КОПИЯ списка; сами словари-строки общие — читать, не менять.
+        """
         if not self.file_path.exists():
             return []
 
+        try:
+            st = self.file_path.stat()
+            sig = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            sig = None
+        key = str(self.file_path)
+        if sig is not None:
+            with _ROWS_CACHE_LOCK:
+                hit = _ROWS_CACHE.get(key)
+            if hit is not None and hit[0] == sig:
+                self._parse_errors = hit[2]
+                return list(hit[1])
+
+        rows = self._parse_file()
+        if sig is not None:
+            with _ROWS_CACHE_LOCK:
+                _ROWS_CACHE[key] = (sig, rows, getattr(self, "_parse_errors", 0))
+        return list(rows)
+
+    def _parse_file(self) -> list[dict]:
         rows = []
         self._parse_errors = 0
 
@@ -117,8 +178,9 @@ class MLOutcomeStatsService:
             group["side"] = side
             group["count"] += 1
 
-            net_pnl = sanitize_float(row.get("closed_net_pnl"), 0.0)
-            costs = sanitize_float(row.get("closed_total_cost"), 0.0)
+            # (#two-legs-2026-10-10) closed_net_pnl и closed_total_cost уже по всем ногам.
+            net_pnl = _net_total(row)
+            costs = sanitize_float(row.get("closed_total_cost"), 0.0)  # уже по всем ногам
 
             group["net_pnl"] += net_pnl
             group["costs"] += costs
@@ -377,7 +439,7 @@ class MLOutcomeStatsService:
 
         for r in closed:
             grade = str(r.get("grade") or "unknown").upper()
-            pnl = sanitize_float(r.get("closed_net_pnl"), 0.0)
+            pnl = _net_total(r)
             labels = r.get("labels") or {}
             b = buckets[grade]
             b["count"] += 1
@@ -450,7 +512,7 @@ class MLOutcomeStatsService:
         nets: list[float] = []
         train_labels: list[int | None] = []
         for r in closed_with_score:
-            pnl = sanitize_float(r.get("closed_net_pnl"), 0.0)
+            pnl = _net_total(r)
             y_true.append(1 if pnl > 0 else 0)
             nets.append(pnl)
             score_raw = r.get("ml_score")
@@ -535,23 +597,14 @@ class MLOutcomeStatsService:
             return self._simple_auc(y_true, y_pred)
     
     def _simple_auc(self, y_true: list[int], y_pred: list[float]) -> float:
-        """Простая оценка AUC без sklearn."""
-        n_pos = sum(y_true)
-        n_neg = len(y_true) - n_pos
-        
-        if n_pos == 0 or n_neg == 0:
+        """AUC без sklearn: ранги Манна—Уитни с усреднением рангов при ничьих.
+
+        (#audit-2026-10-10) Прежняя версия не усредняла ранги при равных score —
+        а у модели с дискретным выходом ничьих много, и AUC смещался.
+        """
+        auc = _rank_auc(y_true, y_pred)
+        if auc is None:
             return 0.5
-        
-        # Ранжируем предсказания
-        ranked = sorted(zip(y_pred, y_true), reverse=True)
-        
-        # Считаем сумму рангов положительных
-        rank_sum = 0
-        for i, (_, label) in enumerate(ranked):
-            if label == 1:
-                rank_sum += (len(ranked) - i)
-        
-        auc = (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
         return round(max(0.0, min(1.0, auc)), 4)
     
     def _calibration_buckets(self, y_true: list[int], y_pred: list[float],
@@ -643,4 +696,4 @@ class MLOutcomeStatsService:
             "skipped_winrate_pct": skipped_winrate_pct,
             "skipped_net_usdt": skipped_net,
             "ml_gate_benefit_usdt": ml_gate_benefit_usdt,
-        }
+        }

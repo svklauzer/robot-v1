@@ -98,7 +98,7 @@ services:
       # добавлены DOGE и HYPE, CHIP и PI — эксперимент (нет на HTX); убраны
       # AVAX, TRX, DOT, ADA — на OKX тонкие (открытые по ним доживут до закрытия).
       - key: OKX_SYMBOLS
-        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT
+        value: BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,HYPE/USDT,LINK/USDT,LTC/USDT,CHIP/USDT,PI/USDT,BCH/USDT
 
       # ── OKX ───────────────────────────────────────────────────────────────
       # Ключи и ACTIVE_EXCHANGE живут в дашборде и блюпринтом не управляются.
@@ -208,8 +208,12 @@ services:
         value: "true"
       
       # ML Mode
+      # Активируем искусственный интеллект на управление деньгами
       - key: ML_MODE
-        value: shadow
+        value: "shadow"
+      # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
+      - key: ML_MIN_SCORE_TO_TRADE
+        value: "0.50"
       - key: REGIME_EXP_SIZING_ENABLED
         value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
@@ -226,14 +230,15 @@ services:
         value: "30"
 
       # ── TREND ENGINE (Настройка на забор движения + защита от шума) ───────
+      # 1. Запрещаем входы по тренду, если цена улетела далеко от опоры (KAMA/EMA)
       - key: TREND_TRIGGER_MODE
-        value: enforce
+        value: "enforce"
       - key: TREND_MAX_EXTENSION_ATR
-        value: "3.5"
+        value: "4.5"
       - key: TZ_ADX_MIN
-        value: "15.0"
+        value: "20.0"
       - key: TZ_STOCH_ZONE
-        value: "45.0"
+        value: "20.0"
       - key: TZ_MODE
         value: enforce
       # (#tz-enforce-adx-rising-2026-09-03) Добавлено adx_rising — беспороговое
@@ -286,15 +291,15 @@ services:
       - key: TZ_USE_DYNAMIC_ATR_STOPS
         value: "true"
       - key: TZ_STOP_MIN_DIST_ATR_MULT
-        value: "3.0"       # Надежный стоп
+        value: "3"
       - key: TZ_EXIT_KAMA_BUFFER_ATR_MULT
         value: "2.0"       # Буфер выхода
       - key: TZ_STOP_LOSS_ATR_MULT
-        value: "4.0"       # Глубокий стоп для удержания позиции
+        value: "4.0"
       - key: TZ_EXIT_ADX_FADE
-        value: "2.0"       # Чувствительный выход при затухании
+        value: "6.0"       
       - key: TZ_HARD_STOP_LOSS_PCT
-        value: "3.0"
+        value: "5"
       
       # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
       # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
@@ -341,12 +346,15 @@ services:
         value: "true"
 
       # Breakeven Lock (Фиксация прибыли)
+      # Для микро-скальпа до TP1 замок BE вреден, так как зазор внутри шума
       - key: BREAKEVEN_LOCK_ENABLED
-        value: "true"
+        value: "false"
+      # Взводим замок фиксации только когда прошли 0.70% движения
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.35"      # Быстрое вооружение
+        value: "0.35"
+      # Ставим пол фиксации на 0.25%, чтобы гарантированно защитить прибыль с учетом комиссий
       - key: BREAKEVEN_LOCK_FLOOR_PCT
-        value: "0.18"      # Покрытие комиссий
+        value: "0.25"
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
         value: "-0.10"
       - key: BREAKEVEN_LOCK_COST_BUFFER_PCT
@@ -373,14 +381,18 @@ services:
       # (`tp_reach.would_block`) — сравнение делается по нему.
       #
       # Возврат в enforce — после разреза stop-forensics по would_block.
+      # 2. Активируем жесткий фильтр достижимости целей. 
+      # Если историческая статистика показывает, что цель по символу сбывается реже, 
+      # чем требует математика RR — такой вход блокируется до старта.
       - key: TP_REACH_MODE
-        value: shadow
+        value: "enforce"
       # Вход при импульсе 15m по тренду (#momentum-late-2026-09-12): в тени
       # вердикт пишется в план сделки, enforce — такой вход не открывается.
+      # 3. Включаем блокировку входов, если импульс 15м уже перегрет
       - key: MOMENTUM_GATE_MODE
-        value: shadow
+        value: "shadow"
       - key: TP_REACH_EV_MARGIN
-        value: "1.0"
+        value: "0.1" # Снижаем требования к частоте до минимума, отключая гейт 05/10/2026
       - key: TP_REACH_MIN_SAMPLE
         value: "15"
       - key: ALLOW_WEAK_VOLUME_TREND_ENTRIES
@@ -388,54 +400,71 @@ services:
       - key: LEARNING_TREND_CONTINUATION_MIN_VOLUME_CONFIRMATION
         value: "8.0"
 
-      # ── CRT ENGINE (Настройка на вход без жестких фильтров) ───────────────
-      # CRT часто молчит из-за слишком строгих требований к подтверждению (CISD)
-      # и высокому RR. Снижаем планку входа.
-      - key: CRT_MIN_RR_TP1
-        value: "0.50"      # Допускаем меньший RR для входа
-      - key: CRT_MIN_SETUP_SCORE
-        value: "45.0"      # Снижен порог качества сетапа
-      - key: CRT_REQUIRE_CISD
-        value: "false"     # Не требуем жесткого CISD, торгуем по структуре
-      - key: CRT_STOP_BUFFER_PCT
-        value: "0.08"      # Адекватный буфер стопа
-      - key: CRT_TP2_RR
-        value: "1.5"       # Цель на продолжение
+      # ── CRT ENGINE (Агрессивная настройка на частый вход) ──────────────────
+      # Максимально снижаем требования к качеству сетапа и фильтрам для высокой частоты сделок.
+      - key: CRT_MIN_RR_TP1          
+        value: "0.30"   # Еще сильнее снижен RR для мгновенной фиксации первой цели
+      - key: CRT_MIN_SETUP_SCORE     
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
+      - key: CRT_REQUIRE_CISD        
+        value: "false"  # Отключено жесткое подтверждение
+      - key: CRT_STOP_BUFFER_PCT     
+        value: "0.05"   # Плотный стоп для увеличения объема позиции
+      - key: CRT_TP2_RR              
+        value: "2.5"    # Увеличен потенциал второй цели (выжимаем максимум из движения)
 
-      # ── SCALP ENGINE (Настройка на частые сделки) ─────────────────────────
-      # Scalp не торговал из-за нереалистичных требований к RR и Target %
-      - key: SCALP_MIN_NET_RR_TP2
-        value: "0.70"      # Снижено с 1.5+ до реалистичного 0.7
+      # ── SCALP ENGINE (Максимально агрессивный скальпинг) ────────────────
+      # Настройка на сбор быстрых и частых микродвижений.
+      - key: SCALP_MIN_NET_RR_TP2    
+        value: "1.10"   # Вход даже при минимальном математическом ожидании
+      # 1. Возвращаем нормальную геометрию скальпа (цель 0.6%, а не 0.25%)
       - key: SCALP_TARGET_PCT
-        value: "0.40"      # Реалистичная цель скальпа (0.4%)
-      - key: SCALP_MIN_SETUP_SCORE
-        value: "45.0"      # Порог входа
+        value: "0.40" # Снизить до 0.4%, чтобы бот целился в реальную медиану волатильности
+      - key: SCALP_MIN_NET_PNL_TP1_USDT
+        value: "0.10" # Убрать завышенные требования к долларовой прибыли на микро-сделках
+      - key: SCALP_MIN_NET_PNL_TP2_USDT
+        value: "0.30"    
+      - key: SCALP_TP2_MULT
+        value: "2.0"  # TP2 выставить дальше, чтобы вытягивать математику за счет раннеров
+      - key: SCALP_MIN_SETUP_SCORE   
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
+      # 2. Повышаем пол безубытка, чтобы не крыть сделки в микро-минус из-за шума
       - key: SCALP_BREAKEVEN_ARM_PCT
-        value: "0.25"      # Быстрый выход в БЗ
-      - key: SCALP_TIME_STOP_MIN
-        value: "60.0"      # Тайм-стоп 1 час
+        value: "0.30" # Взводить BE-замок при достижении 0.3% прибыли
+      - key: SCALP_BREAKEVEN_GIVEBACK_SHARE
+        value: "0.20" # Отдавать не более 20% от пика MFE (фиксировать чистый профит)
+      - key: SCALP_TIME_STOP_MIN     
+        value: "45.0"   # Жесткий тайм-стоп: если не пошло за 120 минут.
 
-      # ── RANGE ENGINE (Консервативный) ─────────────────────────────────────
+      # ── RANGE ENGINE (Переведен из консервативного в агрессивный) ───────
+      # 3. Запрещаем RANGE-стратегии собирать 0.2% движения. Минимум 0.8%, иначе комиссии сожрут всё
       - key: RANGE_MIN_TP1_NET_PCT
-        value: "0.40"
-      - key: RANGE_MIN_SETUP_SCORE
-        value: "50.0"
-      - key: RANGE_ENTRY_RSI_MIN
-        value: "30.0"
-      - key: RANGE_ENTRY_RSI_MAX
-        value: "55.0"
-      - key: RANGE_STOP_ATR_MULT
-        value: "2.0"
+        value: "0.80"
+      - key: RANGE_MIN_SETUP_SCORE   
+        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
+      - key: RANGE_ENTRY_RSI_MIN     
+        value: "20.0"   # Расширен диапазон RSI (вход при глубоком перепроданности)
+      - key: RANGE_ENTRY_RSI_MAX     
+        value: "65.0"   # Расширен диапазон RSI (вход ближе к верхней границе)
+      - key: RANGE_STOP_ATR_MULT     
+        value: "1.2"    # Короткий стоп по ATR (быстрый выход при пробое ренджа)
+
+      # 4. Повышаем порог минимального профита, чтобы гейт отсекал центовый мусор
+      - key: MIN_NET_PNL_TP1_USDT
+        value: "0.20"
+      - key: MIN_NET_PNL_TP2_USDT
+        value: "2.50"
 
       # ── GRID ENGINE (Защита от слива) ─────────────────────────────────────
-      # Grid лил деньги из-за агрессивного плеча и усреднения в сильный тренд.
-      # Теперь: меньше маржи, меньше ордеров усреднения, шире шаг.
+      # Сетка выключена для направленного live-ramp: усреднение в тренде —
+      # отдельный потребитель капитала с иным профилем риска. Возвращать её
+      # можно только после отдельного walk-forward и сверки общей маржи.
       - key: GRID_ENABLED
-        value: "true"
+        value: "false"
       - key: GRID_SYMBOLS
         value: BTC/USDT,ETH/USDT
       - key: GRID_KILL_SWITCH_ENABLED
-        value: "false"
+        value: "true"
       - key: GRID_REGIME_EMA_BAND_PCT
         value: "0.70"      # Строгий фильтр флэта (уже 0.8 было)
       - key: GRID_TP_PCT
@@ -476,9 +505,8 @@ services:
       # ── Risk management ───────────────────────────────────────────────────
       - key: RISK_EQUITY_USDT
         value: "300"
-      # (#risk-one-percent-2026-09-20) 0.4 → 1.0. Прежние 0.4% на счёте 300 с
-      # плечом 10 давали сделку ~80 USDT и занимали 13% экспозиции: заданное
-      # плечо 10× работало как 1.3×. При 1% это 200 USDT и 33% экспозиции.
+      # Limited-live стартует с 0.25% капитала на стоп: повышение разрешено
+      # только после out-of-sample когорты по каждому режиму и venue.
       - key: RISK_PER_TRADE_PCT
         value: "1.0"
       # (#equity-is-margin-2026-09-20) Плечо не было закреплено НИГДЕ, кроме
@@ -494,12 +522,13 @@ services:
       # А вот предохранитель — код. Он режет FUTURES_LEVERAGE МОЛЧА: 10× при
       # этом потолке дают 10×, и позиции выходят вдвое меньше ожидаемых, что
       # видно только по размеру сделок. Поднимать вместе с плечом, не после.
+      - key: MAX_LEVERAGE
+        value: "10"
       - key: LIVE_MAX_LEVERAGE
         value: "10"
-      # Доля эквити на одну позицию (маржа). Вместе с плечом задаёт нотионал:
-      # 0.13 × 5 = 65% экспозиции на сделку.
+      # Максимум 10% эквити маржи на одну позицию в limited-live.
       - key: MAX_POSITION_MARGIN_PCT
-        value: "0.13"
+        value: "0.30"
       # (#no-static-position-size-2026-09-20) Абсолютный потолок ВЫКЛЮЧЕН.
       # 250 были настоящим ограничителем размера: при эквити 3000 резали сделку
       # до 250 там, где маржевый лимит разрешал 390, и не росли ни со счётом,
@@ -509,8 +538,8 @@ services:
         value: "0"
       # (#sizing-scales-with-equity-2026-09-19) Действующий потолок — ДОЛЯ
       # экспозиции (капитал × плечо), растёт со счётом и плечом сама.
-      # 20% = 100 / ANTI_DRAIN_MAX_OPEN_POSITIONS — равная доля на каждую из
-      # пяти одновременных позиций. Размер сделки всё равно задаёт минимум из
+      # 20% задаёт верхнюю границу одной сделки независимо от доступного плеча. Размер
+      # сделки всё равно задаёт минимум из
       # риска, капитала, MAX_POSITION_MARGIN_PCT × плечо и этой доли.
       - key: LIVE_MAX_ORDER_NOTIONAL_PCT
         value: "20"
@@ -539,16 +568,14 @@ services:
         value: "100"
       - key: MAX_TRADES_PER_DAY
         value: "100"       # Разблокировано (было 3)
-      # Поднят вместе с риском: стопов подряд за день = лимит / риск. При
-      # риске 1% лимит 3% давал три стопа, 6% дают шесть — на один больше, чем
-      # стоят пять одновременных позиций (5 × 1% = 5%).
+      # Дневной стоп limited-live: четыре плановых стопа по 0.25% и никаких
+      # новых входов до следующего окна наблюдения.
       - key: MAX_DAILY_LOSS_PCT
-        value: "6"
-      # ВТОРОЙ дневной лимит — anti-drain, и он строже общего. При риске 1%
-      # прежние 2% давали два стопа и срабатывали раньше, перекрывая поднятый
-      # общий лимит целиком. Держим вровень, иначе решает он.
+        value: "100"
+      # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
+      # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
-        value: "6"
+        value: "100"
       - key: MAX_DRAWDOWN_PCT
         value: "15"
 
@@ -558,7 +585,7 @@ services:
       # худший бакет «только MSS» — −1.72% на номинал против −0.14% у сделок
       # с одним FVG.
       - key: CRT_LTF_CONFIRM
-        value: "fvg"
+        value: "both"
 
       # ── Symbol guard ──────────────────────────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE

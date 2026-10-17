@@ -147,15 +147,17 @@ def test_real_setting_change_still_splits_generations():
     assert ebf._system_key(old) != ebf._system_key(new)
 
 
-def test_tp1_partial_leg_is_counted():
-    """Половина, снятая на TP1, обязана попасть в результат сделки.
+def test_tp1_partial_leg_is_not_added_twice():
+    """`closed_net_pnl` УЖЕ итог по всем ногам — ногу TP1 прибавлять нельзя.
 
-    `closed_net_pnl` — только остаток позиции. Частичное закрытие срабатывает
-    ТОЛЬКО у сделок, дошедших до TP1, то есть у победителей, поэтому его
-    пропуск занижал одну сторону выборки систематически, а не случайно.
-    XRP #431: 3.2778 в остатке + 0.5716 на TP1 = 3.8494.
+    (#two-legs-revert-2026-10-17) `_close_signal` складывает `plan.tp1_partial` и
+    `tp2_partial` с остатком до записи closed_net_pnl / closed_total_cost. Сверка
+    на 68 боевых сделках с TP1: gross(обеих ног) − closed_total_cost ==
+    closed_net_pnl до цента. Прежняя версия этого теста (XRP #431: 3.2778 + 0.5716)
+    описывала строки, записанные до этой логики; на текущих данных она считала
+    бы ногу дважды и завышала ровно победителей.
     """
-    row = _row(1, "fp", net=3.2778, cost=0.3414)
+    row = _row(1, "fp", net=3.8494, cost=0.5114)
     row["plan"]["tp1_partial"] = {"net_pnl": 0.5716, "total_cost": 0.1700}
 
     net, gross = ebf._money(row)

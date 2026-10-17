@@ -14,8 +14,15 @@ trade_outcomes.jsonl. Подход López de Prado (meta-labeling): не пре�
 from __future__ import annotations
 
 import json
+import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+# (#audit-2026-10-10) Здесь был `from sklearn.model_selection import
+# StratifiedShuffleSplit` — нигде не использовался, но на уровне модуля: при
+# отсутствии sklearn падал импорт всего модуля, и честная ветка
+# `sklearn_unavailable` внутри train() была недостижима. sklearn импортируется лениво.
 
 from core.config import settings
 from services.ml_features import (
@@ -25,6 +32,127 @@ from services.ml_features import (
     row_to_features,
     row_to_label,
 )
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _parse_ts(raw) -> datetime | None:
+    """ISO-время строки датасета → aware-datetime (naive считается UTC)."""
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def _build_estimator():
+    """Калиброванный случайный лес. Гиперпараметры — прежние (без подбора по метрикам).
+
+    n_jobs=1 (было -1): на 600–800 строках параллелизм ничего не даёт, зато
+    n_jobs=-1 занимал ВСЕ ядра на время ретрейна — ровно то, из-за чего в
+    ml_market_research уже приходилось урезать n_estimators, чтобы «не душить
+    event loop и не ронять WS-фид».
+    """
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    rf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=5,
+        min_samples_leaf=2,
+        class_weight="balanced_subsample",
+        max_features="log2",
+        random_state=42,
+        n_jobs=1,
+    )
+    pipeline = Pipeline([("scaler", StandardScaler()), ("clf", rf)])
+    # Платт (sigmoid), а не isotonic: устойчивее на малых и несбалансированных выборках.
+    return CalibratedClassifierCV(estimator=pipeline, method="sigmoid", cv=3)
+
+
+def _walk_forward_oos(Xa, ya, n_folds: int = 4, start_frac: float = 0.4,
+                      embargo: int = 5, block: int = 20, n_boot: int = 500,
+                      seed: int = 42) -> dict:
+    """Расширяющееся хронологическое окно с несколькими тест-фолдами.
+
+    (#wf-2026-10-10) Один сплит 80/20 на 138 валидационных строках с 10
+    положительными даёт AUC с погрешностью около ±0.09: отличить 0.49 от 0.60 по
+    нему нельзя. Здесь первые `start_frac` данных — только обучение, остальное
+    режется на `n_folds` последовательных тест-окон; перед каждым окном модель
+    переобучается на всём предшествующем (минус `embargo` строк у границы).
+    Предсказания всех окон объединяются, и AUC считается по ОБЪЁДИНЁННОЙ
+    выборке — это в разы больше положительных, чем в одном срезе.
+
+    Доверительный интервал AUC — блочный bootstrap (блоки по `block` сделок
+    подряд, чтобы учесть автокорреляцию соседних сделок). Параметры не
+    подбирались по метрикам.
+    """
+    import numpy as np
+    from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+
+    n = len(ya)
+    start = int(n * start_frac)
+    if n - start < n_folds * 10:
+        return {"wf_status": "too_few_rows", "wf_folds": 0}
+
+    edges = [start + (n - start) * k // n_folds for k in range(n_folds + 1)]
+    oy, op, ob, fold_aucs = [], [], [], []
+    used = 0
+    for k in range(n_folds):
+        te0, te1 = edges[k], edges[k + 1]
+        tr_end = max(te0 - embargo, 0)
+        ytr, yte = ya[:tr_end], ya[te0:te1]
+        if len(yte) == 0 or len(set(ytr.tolist())) < 2:
+            continue
+        model = _build_estimator().fit(Xa[:tr_end], ytr)
+        p = model.predict_proba(Xa[te0:te1])[:, 1]
+        oy.extend(yte.tolist())
+        op.extend(p.tolist())
+        ob.extend([float(ytr.mean())] * len(yte))
+        used += 1
+        if len(set(yte.tolist())) == 2:
+            fold_aucs.append(round(float(roc_auc_score(yte, p)), 4))
+
+    out: dict = {"wf_folds": used, "wf_fold_aucs": fold_aucs, "wf_embargo": embargo}
+    if not oy:
+        out["wf_status"] = "no_usable_folds"
+        return out
+
+    y_arr, p_arr, b_arr = np.array(oy), np.array(op), np.array(ob)
+    m = len(y_arr)
+    out["wf_oos_n"] = int(m)
+    out["wf_oos_positives"] = int(y_arr.sum())
+    out["wf_oos_positive_rate"] = round(float(y_arr.mean()), 4)
+    out["wf_brier"] = round(float(brier_score_loss(y_arr, p_arr)), 5)
+    out["wf_brier_baseline"] = round(float(np.mean((b_arr - y_arr) ** 2)), 5)
+    if len(set(oy)) < 2:
+        out["wf_status"] = "single_class_oos"
+        return out
+
+    out["wf_status"] = "ok"
+    out["wf_auc"] = round(float(roc_auc_score(y_arr, p_arr)), 4)
+    out["wf_pr_auc"] = round(float(average_precision_score(y_arr, p_arr)), 4)
+
+    rng = np.random.default_rng(seed)
+    n_blocks = max(1, int(math.ceil(m / block)))
+    boots = []
+    for _ in range(n_boot):
+        starts = rng.integers(0, max(m - block, 0) + 1, size=n_blocks)
+        idx = np.concatenate([np.arange(s, min(s + block, m)) for s in starts])[:m]
+        yb = y_arr[idx]
+        if yb.min() == yb.max():
+            continue
+        boots.append(roc_auc_score(yb, p_arr[idx]))
+    if len(boots) >= 50:
+        lo, hi = np.percentile(boots, [2.5, 97.5])
+        out["wf_auc_ci95"] = [round(float(lo), 4), round(float(hi), 4)]
+    else:
+        out["wf_auc_ci95"] = None
+    return out
 
 
 class MetaLabeler:
@@ -42,6 +170,9 @@ class MetaLabeler:
         # попытку СЮДА при любом исходе, status() это читает.
         self.last_attempt_path = base / "meta_labeler_last_attempt.json"
         self._model = None  # лениво загружается
+        # mtime файла модели на момент загрузки с диска. None — модель не с диска
+        # (обучена этим же экземпляром до первой проверки или подставлена снаружи).
+        self._model_mtime: int | None = None
 
     # ── данные ────────────────────────────────────────────────────────────────
     def _load_rows(self) -> list[dict]:
@@ -53,7 +184,7 @@ class MetaLabeler:
         наружу — иначе о порче узнать неоткуда.
         """
         self._load_report = {"lines": 0, "parsed": 0, "bad_json": 0, "not_dict": 0,
-                             "bad_samples": []}
+                             "duplicates": 0, "bad_samples": []}
         if not self.dataset_path.exists():
             return []
         rows: list[dict] = []
@@ -77,8 +208,28 @@ class MetaLabeler:
                     continue
                 self._load_report["parsed"] += 1
                 rows.append(obj)
-        # хронологический порядок для time-aware сплита
-        rows.sort(key=lambda r: str(r.get("closed_at") or r.get("created_at") or ""))
+
+        # (#dedup-2026-10-10) Одна сделка могла попасть в файл дважды (параллельная
+        # запись из цикла и из добора: проверка «уже записан» и дозапись не атомарны).
+        # Дубль при хронологическом сплите оказывается и в train, и в validation —
+        # прямая утечка метки в оценку. Оставляем последнюю запись по signal_id
+        # (более поздняя — дополненная backfill'ом).
+        by_id: dict = {}
+        no_id: list[dict] = []
+        for r in rows:
+            sid = r.get("signal_id")
+            if sid is None:
+                no_id.append(r)
+                continue
+            if sid in by_id:
+                self._load_report["duplicates"] += 1
+            by_id[sid] = r
+        rows = list(by_id.values()) + no_id
+
+        # Хронологический порядок для time-aware сплита — по РАЗОБРАННОМУ времени:
+        # строковая сортировка ломается, если формат времени разный ('T' / пробел,
+        # с суффиксом пояса и без).
+        rows.sort(key=lambda r: _parse_ts(r.get("closed_at") or r.get("created_at")) or _EPOCH)
         return rows
 
     def _usable_rows(self, rows: list[dict]) -> tuple[list[dict], dict]:
@@ -176,7 +327,9 @@ class MetaLabeler:
         return result
 
     def _train_inner(self) -> dict:
-        label_kind = str(getattr(settings, "ML_LABEL_KIND", "is_win"))
+        # Дефолт «beats_costs» — как в ml_shadow_report/ml_outcome_stats и в config.
+        # Был «is_win»: при отсутствии настройки обучение и отчёты мерили разные цели.
+        label_kind = str(getattr(settings, "ML_LABEL_KIND", "beats_costs"))
         min_samples = int(getattr(settings, "ML_MIN_TRAIN_SAMPLES", 150))
 
         raw_rows = self._load_rows()
@@ -216,10 +369,9 @@ class MetaLabeler:
 
         try:
             import numpy as np
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.preprocessing import StandardScaler
-            from sklearn.pipeline import Pipeline
-            from sklearn.metrics import roc_auc_score, accuracy_score
+            from sklearn.metrics import (
+                accuracy_score, average_precision_score, brier_score_loss, roc_auc_score,
+            )
         except Exception as exc:
             return {"status": "sklearn_unavailable", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -234,74 +386,127 @@ class MetaLabeler:
 
         Xtr, Xte, ytr, yte = Xa[:cut], Xa[cut:], ya[:cut], ya[cut:]
 
-        def _make():
-            return Pipeline([
-                ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
-            ])
+        _make = _build_estimator
 
         metrics = {"val_auc": None, "val_acc": None, "val_n": int(len(yte))}
+        proba = None
         try:
             if len(set(ytr.tolist())) >= 2 and len(yte) >= 5 and len(set(yte.tolist())) >= 2:
+                # m — калиброванная модель, обученная на тренировочном сплите
                 m = _make().fit(Xtr, ytr)
                 proba = m.predict_proba(Xte)[:, 1]
                 metrics["val_auc"] = round(float(roc_auc_score(yte, proba)), 4)
                 metrics["val_acc"] = round(float(accuracy_score(yte, (proba >= 0.5).astype(int))), 4)
+            else:
+                metrics["val_auc"] = None
+                metrics["val_acc"] = None
+                metrics["val_error"] = "Кризис данных: в валидационном сплите присутствует только один класс"
         except Exception as exc:
             metrics["val_error"] = f"{type(exc).__name__}: {exc}"
 
-        # (#ml-honest-metrics-2026-08-03) Три числа, без которых метрики выше
-        # вводят в заблуждение. Замер 03.08: val_auc 0.7588 / val_acc 0.80 при
-        # live AUC 0.5702 — расхождение объяснялось целиком тем, что ниже.
+        # (#ml-honest-metrics-2026-08-03, исправлено 2026-10-10)
+        # Раньше baseline_acc считался по ВСЕЙ выборке (1 − доля позитивов всех
+        # данных = 0.7884), а val_acc — по валидационному срезу, где позитивов было 10
+        # из 138, и «всегда предсказывай негатив» давало 0.9275 — ровно val_acc.
+        # Итог: acc_beats_baseline = +0.139 при фактическом нуле — метрика
+        # сообщала об обыгрыше базы, которого не было. Сравнивать надо на ТОМ ЖЕ срезе.
         positives = int(ya.sum())
-        base_rate = float(1.0 - ya.mean())
-        epv = round(positives / max(len(FEATURE_NAMES), 1), 2)
+        train_positives = int(ytr.sum())
         val_positives = int(yte.sum())
+        train_rate = train_positives / max(len(ytr), 1)
+        val_rate = val_positives / max(len(yte), 1)
+        val_majority = max(val_rate, 1.0 - val_rate) if len(yte) else None
+        n_feat = max(len(FEATURE_NAMES), 1)
+        epv = round(positives / n_feat, 2)                 # для итоговой модели (все данные)
+        train_epv = round(train_positives / n_feat, 2)     # для модели, чей AUC мы видим
+
         metrics.update({
-            # Точность бессмысленна, если она равна доле большинства: модель
-            # «всегда нет» даёт столько же. При 19.84% положительных это 0.80 —
-            # ровно то, что показывалось как достижение.
-            "baseline_acc": round(base_rate, 4),
+            "baseline_acc": None if val_majority is None else round(val_majority, 4),
             "acc_beats_baseline": (
-                None if metrics["val_acc"] is None
-                else round(float(metrics["val_acc"]) - base_rate, 4)
+                None if metrics["val_acc"] is None or val_majority is None
+                else round(float(metrics["val_acc"]) - val_majority, 4)
             ),
-            # Событий на признак. Меньше 10 — модель запоминает выборку.
-            # 51 положительный на 16 признаков = 3.19.
+            "train_positive_rate": round(train_rate, 4),
+            "val_positive_rate": round(val_rate, 4),
             "events_per_feature": epv,
+            "train_events_per_feature": train_epv,
             "features_used": len(FEATURE_NAMES),
             "positives": positives,
-            # Положительных В ВАЛИДАЦИИ. AUC на десятке событий имеет
-            # доверительный интервал порядка ±0.15 — то есть 0.76 и 0.57
-            # неразличимы, и «валидация лучше боя» может быть просто шумом.
+            "train_positives": train_positives,
             "val_positives": val_positives,
-            "auc_is_reliable": bool(val_positives >= 30),
         })
+        if proba is not None:
+            try:
+                metrics["val_pr_auc"] = round(float(average_precision_score(yte, proba)), 4)
+                metrics["val_brier"] = round(float(brier_score_loss(yte, proba)), 5)
+                metrics["val_brier_baseline"] = round(
+                    float(np.mean((train_rate - yte) ** 2)), 5)   # константа = доля позитивов train
+            except Exception:  # noqa: BLE001 — дополнительные метрики не критичны
+                pass
+
+        # Несколько тест-окон вместо одного: см. _walk_forward_oos.
+        try:
+            wf = _walk_forward_oos(Xa, ya)
+        except Exception as exc:  # noqa: BLE001
+            wf = {"wf_status": "error", "wf_error": f"{type(exc).__name__}: {exc}"}
+        metrics.update(wf)
+
+        # Надёжность оценки: ≥30 позитивов в объединённой OOS-выборке и ≥10
+        # положительных событий на признак В ОБУЧЕНИИ валидируемой модели. Одиночный
+        # срез с 10 позитивами надёжным не считается ни при каком val_auc.
+        metrics["auc_is_reliable"] = bool(
+            int(wf.get("wf_oos_positives", 0) or 0) >= 30 and train_epv >= 10
+        )
+
         warnings = []
         if epv < 10:
             warnings.append(
                 f"events_per_feature={epv} (<10): признаков больше, чем выдерживает "
                 f"{positives} положительных примеров — переобучение по построению"
             )
-        if val_positives < 30:
-            warnings.append(
-                f"val_positives={val_positives} (<30): доверительный интервал AUC "
-                f"порядка ±0.15, число не отличимо от случайного"
-            )
+
         if metrics.get("acc_beats_baseline") is not None and metrics["acc_beats_baseline"] <= 0.02:
             warnings.append(
-                f"val_acc не превышает долю большинства ({base_rate:.2%}) — "
+                f"val_acc не превышает долю большинства в валидации ({val_majority:.2%}) — "
                 f"метрика ничего не измеряет, смотрите AUC"
+            )
+
+        # Сдвиг доли позитивов между train и validation (двухвыборочный z-тест).
+        if len(ytr) and len(yte):
+            pooled = (train_positives + val_positives) / (len(ytr) + len(yte))
+            se = math.sqrt(pooled * (1 - pooled) * (1 / len(ytr) + 1 / len(yte))) if 0 < pooled < 1 else 0.0
+            z = (val_rate - train_rate) / se if se > 0 else 0.0
+            metrics["positive_rate_shift_z"] = round(z, 2)
+            if abs(z) >= 2.58:      # p < 0.01
+                warnings.append(
+                    f"доля позитивов сменилась: train {train_rate:.1%} → validation {val_rate:.1%} "
+                    f"(z={z:.1f}). Логика входа/выхода или режим рынка изменились — "
+                    f"оценка на таком срезе на будущее не переносится"
+                )
+
+        if int(wf.get("wf_oos_positives", 0) or 0) < 30:
+            warnings.append(
+                f"walk-forward: в объединённой OOS-выборке {int(wf.get('wf_oos_positives', 0) or 0)} "
+                f"позитивов (<30) — AUC статистически нечитаем"
+            )
+        ci = wf.get("wf_auc_ci95")
+        if ci and ci[0] <= 0.5:
+            warnings.append(
+                f"walk-forward AUC={wf.get('wf_auc')}, 95% ДИ [{ci[0]}, {ci[1]}] включает 0.5 — "
+                f"сигнал неотличим от монетки"
             )
         metrics["warnings"] = warnings
 
-        # финальная модель — на ВСЕХ данных (после валидации)
-        model = _make().fit(Xa, ya)
+        # Финальная модель обучается на ВСЕХ данных (Xa, ya).
+        model = _build_estimator().fit(Xa, ya)
 
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             import joblib
-            joblib.dump(model, self.model_path)
+            # Атомарно: параллельный predict() не должен встретить недописанный pkl.
+            tmp_model = self.model_path.with_name(self.model_path.name + ".tmp")
+            joblib.dump(model, tmp_model)
+            os.replace(tmp_model, self.model_path)
         except Exception as exc:
             return {"status": "save_failed", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -313,31 +518,44 @@ class MetaLabeler:
             "label_kind": label_kind,
             "label_min_r": float(getattr(settings, "ML_LABEL_MIN_R", 0.3)),
             "features": FEATURE_NAMES,
-            # (#ml-rework-2026-07-28) Версия контракта фич. Модель, обученная на
-            # другом наборе, несовместима и по длине вектора, и по смыслу —
-            # предсказывать по ней молча нельзя.
             "feature_version": FEATURE_VERSION,
-            # Что и почему выброшено из датасета. Без этого «samples: 120»
-            # выглядит как потеря данных, хотя это отсев исходов от логики,
-            # которой больше нет.
             "rows_total": len(raw_rows),
             "dropped": dropped,
             "train_window_days": float(getattr(settings, "ML_TRAIN_WINDOW_DAYS", 45)),
             "metrics": metrics,
-            "model": "LogisticRegression+StandardScaler",
+            # Фактическая модель: калиброванный (Платт, cv=3) пайплайн «скейлер + RF».
+            "model": "CalibratedClassifierCV(StandardScaler+RandomForest, sigmoid, cv=3)",
         }
         try:
-            self.meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp_meta = self.meta_path.with_name(self.meta_path.name + ".tmp")
+            tmp_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp_meta, self.meta_path)
         except Exception:
             pass
         self._model = model
+        try:
+            self._model_mtime = self.model_path.stat().st_mtime_ns
+        except OSError:
+            self._model_mtime = None
         return {"status": "trained", **meta}
 
     # ── предсказание (fail-open) ──────────────────────────────────────────────
     def _ensure_model(self):
+        # (#stale-model-2026-10-10) Экземпляр кэшировал модель навсегда. Хаб держит
+        # синглтон MetaLabeler, а ретрейн (POST /ml/train, суточный цикл) обучает
+        # СВОЙ экземпляр и пишет pkl на диск — синглтон продолжал предсказывать по
+        # старой модели до перезапуска процесса. Теперь модель, загруженная с диска,
+        # перечитывается, когда mtime файла изменился (один stat на вызов).
+        try:
+            current = self.model_path.stat().st_mtime_ns if self.model_path.exists() else None
+        except OSError:
+            current = None
         if self._model is not None:
-            return self._model
-        if not self.model_path.exists():
+            if self._model_mtime is None or current is None or current == self._model_mtime:
+                return self._model
+            self._model = None
+            self._model_mtime = None
+        if current is None:
             return None
 
         # (#ml-rework-2026-07-28) Модель, обученная на прежнем наборе фич,
@@ -356,8 +574,10 @@ class MetaLabeler:
         try:
             import joblib
             self._model = joblib.load(self.model_path)
+            self._model_mtime = current
         except Exception:
             self._model = None
+            self._model_mtime = None
         return self._model
 
     def predict(self, candidate: dict) -> float | None:
@@ -380,8 +600,10 @@ class MetaLabeler:
         сигнал). Работает уже на малой выборке (честно, с оговоркой). Включает
         стакан (OBI/CVD/спред/стенки), RR, режим — отвечает «несёт ли стакан
         сигнал для НАШИХ сетапов» там, где он реально есть."""
-        label_kind = str(getattr(settings, "ML_LABEL_KIND", "is_win"))
-        rows = self._load_rows()
+        label_kind = str(getattr(settings, "ML_LABEL_KIND", "beats_costs"))
+        # Те же фильтры, что и при обучении: фантомные филлы с положительной меткой
+        # там, где рынок дал минус, искажали бы single-feature AUC так же, как обучение.
+        rows, _dropped = self._usable_rows(self._load_rows())
         X, y = self._xy(rows, label_kind)
         n = len(y)
         if n < 20 or len(set(y)) < 2:

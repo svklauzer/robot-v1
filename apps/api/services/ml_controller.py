@@ -21,77 +21,103 @@ _PASSTHROUGH = {"mode": "off", "ml_score": None, "action": "passthrough",
                 "allow": True, "size_multiplier": 1.0, "reason": "ml_off"}
 
 
+def resolve_effective_mode(configured: str, metrics: dict | None) -> tuple[str, str | None]:
+    """(эффективный режим, причина понижения | None).
+
+    advisory / full_auto сохраняются, только если ВСЕ условия выполнены:
+      1. есть валидационная метрика val_auc;
+      2. val_auc >= ML_MIN_AUC_FOR_AUTO;
+      3. events_per_feature >= 3;
+      4. метрика не помечена обучением как ненадёжная (auc_is_reliable is not False);
+      5. если посчитан walk-forward — нижняя граница 95% ДИ его AUC > 0.5.
+    Иначе — shadow. off / shadow возвращаются как есть. Повышение — только вручную.
+    """
+    mode = str(configured or "off").lower().strip()
+    if mode not in ("advisory", "full_auto"):
+        return mode, None
+    if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
+        return mode, None
+
+    m = metrics or {}
+    auc_raw = m.get("val_auc")
+    if auc_raw is None:
+        return "shadow", ("нет валидационной метрики (val_auc) — качество модели не доказано, "
+                          "полномочия отозваны до shadow")
+    try:
+        auc = float(auc_raw)
+    except (TypeError, ValueError):
+        return "shadow", f"val_auc={auc_raw!r} не число — полномочия отозваны до shadow"
+
+    min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
+    reasons: list[str] = []
+    if auc < min_auc:
+        reasons.append(f"val_auc={auc:.4f} < {min_auc}")
+    try:
+        epv = float(m.get("events_per_feature") or 0.0)
+    except (TypeError, ValueError):
+        epv = 0.0
+    if epv < 3.0:
+        reasons.append(f"events_per_feature={epv} < 3.0")
+    if m.get("auc_is_reliable") is False:
+        reasons.append(
+            f"обучение пометило метрику НЕНАДЁЖНОЙ (events_per_feature={m.get('events_per_feature')}, "
+            f"val_positives={m.get('val_positives')}, wf_oos_positives={m.get('wf_oos_positives')})"
+        )
+    ci = m.get("wf_auc_ci95")
+    if isinstance(ci, (list, tuple)) and len(ci) == 2 and ci[0] is not None:
+        try:
+            if float(ci[0]) <= 0.5:
+                reasons.append(f"нижняя граница 95% ДИ walk-forward AUC = {ci[0]} ≤ 0.5")
+        except (TypeError, ValueError):
+            pass
+    if reasons:
+        return "shadow", "; ".join(reasons) + " — полномочия отозваны до shadow"
+    return mode, None
+
+
 class MLController:
     def __init__(self):
         self._labeler = None
 
+    def _metrics_block(self) -> dict | None:
+        """Блок metrics последнего обучения. None — прочитать не удалось."""
+        try:
+            labeler = self._get_labeler()
+            st = labeler.status() if labeler else {}
+            return st.get("metrics") or {}
+        except Exception:  # noqa: BLE001 — сбой чтения = нет доказанного качества
+            return None
+
     def _mode(self) -> str:
         """Эффективный режим с АВТО-ДЕГРАДАЦИЕЙ по качеству модели.
 
-        (#ml-auto-demote-2026-07-27) Модель имеет право влиять на деньги только
-        пока доказывает качество. Ретрейн 16.07 дал val AUC 0.5067 — монетку, —
-        и переключение в shadow пришлось делать руками. Это неправильно: провал
-        качества обязан отзывать полномочия САМ.
+        (#ml-auto-demote-2026-07-27) Модель влияет на деньги, только пока доказывает
+        качество; провал качества отзывает полномочия сам.
 
-        Правило: full_auto/advisory требуют val AUC >= ML_MIN_AUC_FOR_AUTO.
-        Ниже — режим автоматически понижается до shadow (score виден рядом с
-        сигналами, на сделки не влияет). Обратное повышение — только вручную:
-        модель возвращает полномочия, доказав качество на ретрейне, а не
-        случайным скачком метрики.
+        (#authority-2026-10-10) Решение вынесено в resolve_effective_mode() — её же
+        использует хаб. Раньше копий было две, и в контроллере проверка «метрика
+        ненадёжна» (#ml-unreliable-auc-2026-08-21) стояла ПОСЛЕ безусловного
+        `return mode` и не выполнялась никогда, а в хабе её не было вовсе.
 
-        Fail-open сохранён: если метрику прочитать не удалось, режим не трогаем —
-        ML не должен ломать торговлю из-за проблемы с чтением файла.
+        Понижение до shadow безопасно для торговли (shadow ничего не блокирует), так
+        что «метрику прочитать не удалось» = понижение: fail-open означает «ML не
+        мешает сделкам», а не «ML сохраняет право блокировать без доказанного качества».
         """
-        mode = str(getattr(settings, "ML_MODE", "off")).lower().strip()
-        if mode not in ("advisory", "full_auto"):
-            return mode
-        if not bool(getattr(settings, "ML_AUTO_DEMOTE_ENABLED", True)):
-            return mode
-
-        auc = self._val_auc()
-        if auc is None:
-            return mode
-        min_auc = float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55))
-        if auc < min_auc:
-            self._last_demote_reason = (
-                f"val_auc={auc:.4f} < {min_auc} — модель не подтверждает качество, "
-                f"полномочия отозваны до shadow"
-            )
-            return "shadow"
-
-        # (#ml-unreliable-auc-2026-08-21) Порога по AUC НЕДОСТАТОЧНО. Ретрейн
-        # 21.08 дал val_auc 0.6612 — выше порога 0.55 — при 13 положительных в
-        # валидации и 2.17 события на признак. Обучение само пометило метрику
-        # `auc_is_reliable=false`: доверительный интервал ±0.15, то есть 0.66
-        # неотличим от монетки. Переобученная модель на малой выборке даёт
-        # ЗАВЫШЕННЫЙ AUC — ровно тот случай, когда старый гейт пропускал бы её
-        # к деньгам. Полномочия требуют не «красивого числа», а числа, которому
-        # можно верить.
-        reliable = self._metric("auc_is_reliable")
-        if reliable is False:
-            epv = self._metric("events_per_feature")
-            vpos = self._metric("val_positives")
-            self._last_demote_reason = (
-                f"val_auc={auc:.4f} формально выше {min_auc}, но обучение пометило "
-                f"метрику НЕНАДЁЖНОЙ (events_per_feature={epv}, val_positives={vpos}) — "
-                f"переобучение по построению, полномочия отозваны до shadow"
-            )
-            return "shadow"
+        configured = str(getattr(settings, "ML_MODE", "off")).lower().strip()
+        mode, reason = resolve_effective_mode(configured, self._metrics_block())
+        self._last_demote_reason = reason
         return mode
 
     def _metric(self, key: str):
         """Значение из блока metrics последнего обучения. None — нет метрики."""
         try:
             labeler = self._get_labeler()
-            meta = getattr(labeler, "metadata", None)
-            if callable(meta):
-                meta = meta()
-            if not isinstance(meta, dict):
-                return None
-            metrics = meta.get("metrics")
-            if isinstance(metrics, dict) and key in metrics:
+            # СИНХРОНИЗАЦИЯ: Исправляем обращение к несуществующему методу metadata() -> используем status()
+            st = labeler.status() if labeler else {}
+            metrics = st.get("metrics") or {}
+            if key in metrics:
                 return metrics.get(key)
-            return meta.get(key)
+            return st.get(key)
         except Exception:  # noqa: BLE001 — метрика не критична, fail-open
             return None
 
@@ -99,14 +125,10 @@ class MLController:
         """Валидационный AUC последнего обучения. None — метрики нет (fail-open)."""
         try:
             labeler = self._get_labeler()
-            meta = getattr(labeler, "metadata", None)
-            if callable(meta):
-                meta = meta()
-            if not isinstance(meta, dict):
-                return None
-            for key in ("val_auc", "auc_val", "validation_auc", "auc"):
-                if meta.get(key) is not None:
-                    return float(meta[key])
+            st = labeler.status() if labeler else {}
+            metrics = st.get("metrics") or {}
+            if metrics.get("val_auc") is not None:
+                return float(metrics["val_auc"])
         except Exception:  # noqa: BLE001 — метрика не критична
             return None
         return None
