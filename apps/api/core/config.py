@@ -1412,7 +1412,7 @@ class Settings(BaseSettings):
     OB_POSITION_WALL_RESCUE_MAX_ADVERSE_OBI: float = 0.60   # 0.35
     OB_POSITION_CVD_ENTRY_BLOCK_RATIO: float = 0.70         # 0.35 → нужен явный поток против
     OB_POSITION_CVD_MIN_TRADES: int = 25
-    OB_POSITION_CVD_THIN_RATIO: float = 1.0      # тонкая выборка режет только при 100% против
+    OB_POSITION_CVD_THIN_RATIO: float = 0.98     # тонкая выборка режет только при 100% против
     # (#cvd-noise-2026-07-28) 3 → 15. На трёх сделках CVD тоже вырождается в
     # ±1.000 и блокирует по шуму. Порог выше скальпового (8) намеренно: у
     # позиционного входа горизонт часовой, и 60-секундное окно ленты для него —
