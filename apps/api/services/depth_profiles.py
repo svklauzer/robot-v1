@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from core.config import settings
 
-# Профили ведения, к которым привязана реакция на стакан.
-SCALP_REGIMES = ("scalp", "range")
+# Профили ведения, к которым привязана реакция на стакан. Убираем "range", чтобы он не душился скальперским спредом 0.08%
+SCALP_REGIMES = ("scalp")
 
 
 def profile_for(regime: str | None, trade_mode: str | None = None) -> str:
