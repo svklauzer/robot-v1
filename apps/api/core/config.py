@@ -820,7 +820,7 @@ class Settings(BaseSettings):
     # записи в отчёт. Причина, по которой её тогда включили обратно, — дыра в
     # фиксации тренда; она закрыта штатно ярусом TREND_CAPTURE_BAND, а не
     # реанимацией ветки, которую уже признали вредной.
-    FAILED_SETUP_EXIT_TREND_ENABLED: bool = True
+    FAILED_SETUP_EXIT_TREND_ENABLED: bool = False
 
     # =========================
     # БЕЗУБЫТОК-ЗАМОК (#1/#2)
@@ -1005,12 +1005,12 @@ class Settings(BaseSettings):
     # но дали ВСЮ прибыль (+20). Победителей резали на ~60% MFE (capture ~40%).
     # Старт трейла/фиксации позже → раннеры доезжают к TP2; мелкие плюсы (0.45–1.3)
     # держит безубыток-замок, не давая откатиться в минус.
-    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 0.35
+    ADAPTIVE_TRAIL_DRAWDOWN_PCT: float = 1.30
 
     # Adaptive MFE capture experiment: earlier before-TP1 profit lock when
     # fresh paper data shows positive->negative giveback.
     MFE_CAPTURE_ENABLED: bool = True
-    MFE_CAPTURE_START_PCT: float = 0.9   # 1.30→0.90 (изм. 17.07.2026)
+    MFE_CAPTURE_START_PCT: float = 1.30   # 1.30→0.90 (изм. 17.07.2026)
     MFE_CAPTURE_DRAWDOWN_PCT: float = 0.30
     MFE_CAPTURE_PROTECT_SHARE: float = 0.40
 
@@ -1094,7 +1094,7 @@ class Settings(BaseSettings):
     # локальном ADX/ATR-expansion — TP2 приближается к границе диапазона.
     # ТОЛЬКО приближает TP2 к границе, никогда не отдаляет его дальше
     # исходного RANGE_TP2_RESISTANCE_BUFFER.
-    RANGE_TP2_DYNAMIC_ENABLED: bool = False
+    RANGE_TP2_DYNAMIC_ENABLED: bool = True
     RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
     RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
     RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
