@@ -13,8 +13,22 @@ from services.ml_controller import MLController
 
 
 def _controller(auc):
+    """Контроллер с подменённым блоком metrics последнего обучения.
+
+    (#authority-2026-10-10) Режим решает resolve_effective_mode() по ВСЕМУ блоку
+    метрик, а не по одному val_auc: для сохранения полномочий нужны ещё
+    events_per_feature >= 3, надёжность оценки и ДИ walk-forward выше 0.5.
+    auc=None — метрики нет вовсе.
+    """
     c = MLController()
-    c._val_auc = lambda: auc          # noqa: SLF001 — подменяем источник метрики
+    metrics = {} if auc is None else {
+        "val_auc": auc,
+        "events_per_feature": 12.0,
+        "auc_is_reliable": True,
+        "wf_auc_ci95": [0.55, 0.70],
+    }
+    c._metrics_block = lambda: metrics   # noqa: SLF001 — подменяем источник метрик
+    c._val_auc = lambda: auc             # noqa: SLF001
     return c
 
 
@@ -40,10 +54,14 @@ def test_threshold_is_the_boundary(monkeypatch):
     assert _controller(thr - 0.001)._mode() == "shadow"
 
 
-def test_missing_metric_does_not_change_mode(monkeypatch):
-    """Fail-open: проблема с чтением метрики не должна ломать торговлю."""
+def test_missing_metric_revokes_authority(monkeypatch):
+    """Нет метрики — качество не доказано, полномочия отозваны до shadow.
+
+    Fail-open означает «ML не мешает сделкам»: shadow ничего не блокирует. Право
+    блокировать и менять размер без доказанного качества модель не получает.
+    """
     monkeypatch.setattr(settings, "ML_MODE", "full_auto")
-    assert _controller(None)._mode() == "full_auto"
+    assert _controller(None)._mode() == "shadow"
 
 
 def test_shadow_and_off_are_untouched(monkeypatch):

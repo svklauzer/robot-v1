@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from core.config import settings
 from services.ml_features import (
     FEATURE_NAMES,
@@ -114,7 +116,7 @@ def test_dead_regime_features_are_gone():
 
 def test_decisive_features_are_present():
     """То, вокруг чего крутился весь разбор дня, в векторе не было вовсе."""
-    for name in ("stop_distance_pct", "notional_usdt", "rr_asymmetry", "hour_of_day"):
+    for name in ("stop_distance_pct", "rr_asymmetry", "hour_sin", "hour_cos"):
         assert name in FEATURE_NAMES, f"фича {name} решает исход, но не собиралась"
 
 
@@ -125,7 +127,7 @@ def test_feature_vector_matches_the_contract_length():
         "net_rr_tp1": 0.8, "net_rr_tp2": 2.6,
         "stop_price": 99.0, "required_margin": 250.0,
         "entry_zone": {"from": 99.7, "to": 100.3},
-        "regime": "crt", "opened_at": "2026-07-28T14:00:00+00:00",
+        "regime": "crt", "trade_mode": "crt", "opened_at": "2026-07-28T14:00:00+00:00",
         "entry_depth": {"spread_pct": 0.02, "obi": 0.3, "cvd_trades": 20, "cvd_ratio": 0.4},
     }
     vec = row_to_features(row)
@@ -135,7 +137,9 @@ def test_feature_vector_matches_the_contract_length():
 
     idx = {n: i for i, n in enumerate(FEATURE_NAMES)}
     assert vec[idx["stop_distance_pct"]] > 0, "дистанция стопа не посчиталась"
-    assert vec[idx["hour_of_day"]] == 14.0
+    import math
+    assert vec[idx["hour_sin"]] == pytest.approx(math.sin(2 * math.pi * 14 / 24))
+    assert vec[idx["hour_cos"]] == pytest.approx(math.cos(2 * math.pi * 14 / 24))
     assert vec[idx["is_crt"]] == 1.0
     assert vec[idx["rr_asymmetry"]] > 1.0, "TP2 дальше TP1 — асимметрия > 1"
 
@@ -160,9 +164,10 @@ def test_robot_loop_forwards_stop_and_size_to_ml_controller():
     call_end = src.index("})", call_start)
     call_src = src[call_start:call_end]
 
-    for token in ('"stop_price": plan.stop_price',
-                  '"required_margin": plan.required_margin',
-                  '"lifecycle": {"entry_price": plan.entry_price}'):
+    # Важны ключи, а не форма выражения справа (plan.x или локальная float(x)).
+    # rationale/trade_mode — из них берутся is_scalp/is_crt (паритет train/serve).
+    for token in ('"stop_price":', '"required_margin":', '"lifecycle": {"entry_price":',
+                  '"rationale":', '"trade_mode":'):
         assert token in call_src, f"{token!r} must be forwarded to ml_controller"
 
 
