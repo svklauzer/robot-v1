@@ -1623,16 +1623,16 @@ class SignalLifecycleManager:
             net_pnl = round(float(net_pnl or 0.0) + partial_net, 6)
             if partial_cost is not None:
                 total_cost = round(float(total_cost or 0.0) + partial_cost, 6)
-            # Консистентность фронта: result_pct закрытия считался по ОСТАТКУ
-            # позиции и противоречил бы суммарному net (Result% мал, Net велик).
-            # Пересчитываем % от исходной маржи сделки — та же семантика, что
-            # net_pnl_pct у CostEngine (net / base_margin).
-            try:
-                base_margin = float(signal.required_margin or (signal.plan_json or {}).get("required_margin") or 0.0)
-                if base_margin > 0 and net_pnl is not None:
-                    result_pct = round(float(net_pnl) / base_margin * 100.0, 4)
-            except Exception:
-                pass
+
+        # (#result-units-2026-10-17) result_pct — % НОМИНАЛА (как mfe_pct, traj и
+        # инвариант closed_net_pnl == notional*result_pct/100), НЕ % маржи: от маржи он
+        # ×плечо и ломал phantom_fill / exit_replay / capture / ML. Считаем по итогу
+        # сделки (net_pnl уже с частями) при любом исходе close_result.
+        if net_pnl is not None:
+            from services.result_units import pct_of_notional
+            _pct = pct_of_notional(net_pnl, signal)
+            if _pct is not None:
+                result_pct = _pct
 
         signal.status = "closed"
         signal.result_pct = result_pct

@@ -56,12 +56,13 @@ def is_sensitive(name: str) -> bool:
 # стоят раньше общих.
 _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Тренд / KAMA (ТЗ)", ("TZ_", "KAMA_", "TREND_")),
-    ("Движки входа", ("ENABLE_", "RANGE_", "SCALP_", "CRT_", "REVERSAL_")),
+    ("Движки входа", ("ENABLE_", "RANGE_", "SCALP_", "CRT_", "REVERSAL_",
+                       "REGIME_CHOP_", "REGIME_TREND_")),
     # (#ui-audit-2026-09-03) POST_TP1_ добавлен явно: защита прибыли между TP1 и
     # TP2 — это ВЫХОД, а по префиксу "POST_" она уезжала в «Прочее», где
     # торговый порог выглядит как случайная инфраструктурная переменная.
     ("Выходы", ("EXIT_", "BREAKEVEN_", "MFE_", "TP1_", "TP2_", "TP_", "POST_TP1_",
-                "PROTECTIVE_", "FAILED_SETUP_")),
+                "PROTECTIVE_", "FAILED_SETUP_", "MIN_POST_TP1_")),
     # (#grade-axis-2026-09-04) GRADE_ — это про размер ставки, а не про качество
     # сигнала: флаг разрешает сайзинг по грейду, ось которого измерена
     # антипредсказательной. В «Прочем» предохранитель выглядит как техническая

@@ -199,7 +199,8 @@ def test_ml_trade_logger_backfills_unlogged_closed_signals(tmp_path):
         assert result["logged"] == 1
         assert result["skipped"] == 0
         assert second["logged"] == 0
-        assert second["skipped"] == 1
+        assert second["skipped"] == 0
+        assert second["checked"] == 0  # уже записанные в выборку не попадают
         assert len(rows) == 1
         assert rows[0]["symbol"] == "TON/USDT"
         assert rows[0]["closed_reason"] == "failed_setup_exit"
