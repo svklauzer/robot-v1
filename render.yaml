@@ -432,7 +432,7 @@ services:
       - key: SCALP_BREAKEVEN_ARM_PCT
         value: "0.30" # Взводить BE-замок при достижении 0.3% прибыли
       - key: SCALP_BREAKEVEN_GIVEBACK_SHARE
-        value: "0.20" # Отдавать не более 20% от пика MFE (фиксировать чистый профит)
+        value: "0.40" # Отдавать не более 40% от пика MFE (фиксировать чистый профит)
       - key: SCALP_TIME_STOP_MIN     
         value: "45.0"   # Жесткий тайм-стоп: если не пошло за 45 минут.
 
