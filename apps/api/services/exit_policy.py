@@ -273,6 +273,25 @@ class ExitPolicyService:
 
         # Расчет базовых экономических параметров
         net_safe_pct, fee_source, fee_rate = self._net_safe_profit_pct(symbol=symbol, market_type=market_type)
+        # (#restore-defs-2026-10-19) Определения ниже удалил коммит d19e89a (22.09.2026) при переписывании
+        # блока безубытка, а использования в теле функции остались -> NameError в manage_loop.
+        stop_distance_pct = (
+            abs(entry_price - float(stop_price)) / entry_price * 100
+            if stop_price is not None and float(stop_price) > 0
+            else None
+        )
+        thr, threshold_source = self._get_thresholds(stop_distance_pct, self._net_safe_floor_pct(fee_rate))
+        min_protective_exit_pct = float(getattr(settings, "MIN_PROTECTIVE_EXIT_PCT", 1.20))
+        min_protective_net_usdt = float(getattr(settings, "MIN_PROTECTIVE_NET_USDT", 1.50))
+        protective_drawdown_share = float(settings.PROTECTIVE_DRAWDOWN_SHARE)
+        adaptive_drawdown_pct = float(settings.ADAPTIVE_TRAIL_DRAWDOWN_PCT)
+        min_age_sec = float(getattr(settings, "FAILED_SETUP_MIN_AGE_SEC", 300))
+        age_ok = signal_age_sec is not None and float(signal_age_sec) >= min_age_sec
+        tp1_dist_pct = (
+            abs(float(tp1_price) - entry_price) / entry_price * 100
+            if tp1_price is not None and float(tp1_price) > 0
+            else None
+        )
         be_enabled = bool(getattr(settings, "BREAKEVEN_LOCK_ENABLED", True))
         be_arm = float(getattr(settings, "BREAKEVEN_LOCK_ARM_PCT", 0.35))
         be_floor = float(getattr(settings, "BREAKEVEN_LOCK_FLOOR_PCT", 0.18))
