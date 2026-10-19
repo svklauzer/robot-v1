@@ -299,7 +299,15 @@ class ExitPolicyService:
 
         # К КРИТИЧЕСКИЙ ПРАВИЛО ЗАЩИТЫ КАПИТАЛА (Выносим BE_LOCK ПЕРЕД индикаторами ТЗ)
         # Если сделка была в хорошем плюсе, но откатила к безубытку — КРОЕМ ОДИНАКОВО для тренда и скальпа!
-        if be_enabled and mfe >= be_arm:
+        # (#be-rescue-not-in-tz-2026-10-19) В TZ-ветке порядок приоритета другой:
+        # структурный выход ТЗ -> бэкстоп отдачи (с гейтом MIN_PROTECTIVE_NET_USDT).
+        # Ранний замок пробивал и структуру (tz_kama), и net-гейт (ADA #464).
+        tz_path_active = (
+            bool(getattr(settings, "TZ_TREND_EXIT_ONLY", False))
+            and str(trade_mode or "").lower() in ("trend", "trend_up", "trend_down", "ride")
+            and isinstance(tz_context, dict)
+        )
+        if be_enabled and not tz_path_active and mfe >= be_arm:
             if current_pct <= be_floor or current_pct <= be_hard_floor:
                 return ExitDecision(
                     exit=True,

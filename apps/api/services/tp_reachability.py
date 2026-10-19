@@ -103,6 +103,7 @@ _VOLUNTARY_REASONS: frozenset[str] = frozenset({
     "wide_stop_tp2_guard", "breakeven_lock", "scalp_breakeven_lock",
     "scalp_flow_exit", "scalp_time_stop", "range_time_stop",
     "failed_setup_exit", "low_grade_capital_release",
+    "post_tp1_atr_trailing_stop",
     "manual_close", "manual_cancel", "manual_profit_close", "manual_loss_close",
 })
 
