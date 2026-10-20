@@ -443,9 +443,9 @@ services:
       - key: RANGE_MIN_SETUP_SCORE   
         value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
       - key: RANGE_ENTRY_RSI_MIN     
-        value: "20.0"   # Расширен диапазон RSI (вход при глубоком перепроданности)
+        value: "35.0"
       - key: RANGE_ENTRY_RSI_MAX     
-        value: "65.0"   # Расширен диапазон RSI (вход ближе к верхней границе)
+        value: "55.0"
       - key: RANGE_STOP_ATR_MULT     
         value: "1.2"    # Короткий стоп по ATR (быстрый выход при пробое ренджа)
 
