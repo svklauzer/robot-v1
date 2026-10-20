@@ -297,7 +297,7 @@ services:
       - key: TZ_STOP_LOSS_ATR_MULT
         value: "4.0"
       - key: TZ_EXIT_ADX_FADE
-        value: "6.0"       
+        value: "5.0"       
       - key: TZ_HARD_STOP_LOSS_PCT
         value: "5"
       
