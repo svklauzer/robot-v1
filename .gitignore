@@ -68,3 +68,4 @@ out/
 __pycache__/
 *.pyc
 *.bak-*
+project_structure.txt
