@@ -1,5 +1,7 @@
 import json
 import math
+import random
+import statistics
 import threading
 from pathlib import Path
 from collections import defaultdict
@@ -55,6 +57,47 @@ def sanitize_float(value, default=0.0) -> float:
         return f
     except (TypeError, ValueError):
         return default
+
+def _split_diff(nets: list[float], flags: list[bool], block: int = 20,
+                n_boot: int = 500, seed: int = 42) -> dict | None:
+    """Разница среднего net: flags=True ("верх") минус остальные, с 95% CI.
+
+    (#economic-criterion-2026-10-21) nets — в хронологическом порядке (порядок файла);
+    bootstrap блочный (блок `block` сделок подряд): соседние сделки коррелируют.
+    None — одна из сторон короче 5 сделок, судить не о чем.
+    """
+    top = [v for v, f in zip(nets, flags) if f]
+    bot = [v for v, f in zip(nets, flags) if not f]
+    if len(top) < 5 or len(bot) < 5:
+        return None
+    est = sum(top) / len(top) - sum(bot) / len(bot)
+    m = len(nets)
+    nb = max(1, -(-m // block))
+    rng = random.Random(seed)
+    boots: list[float] = []
+    for _ in range(n_boot):
+        idx: list[int] = []
+        for _b in range(nb):
+            s = rng.randrange(0, max(m - block, 0) + 1)
+            idx.extend(range(s, min(s + block, m)))
+        idx = idx[:m]
+        h = [nets[i] for i in idx if flags[i]]
+        lo = [nets[i] for i in idx if not flags[i]]
+        if h and lo:
+            boots.append(sum(h) / len(h) - sum(lo) / len(lo))
+    ci = None
+    if len(boots) >= 50:
+        boots.sort()
+        ci = [round(boots[int(0.025 * len(boots))], 4),
+              round(boots[max(int(0.975 * len(boots)) - 1, 0)], 4)]
+    return {
+        "top_n": len(top), "bottom_n": len(bot),
+        "top_mean_net": round(sum(top) / len(top), 4),
+        "bottom_mean_net": round(sum(bot) / len(bot), 4),
+        "diff_mean_net": round(est, 4),
+        "ci95": ci,
+    }
+
 
 class MLOutcomeStatsService:
     """
@@ -558,13 +601,49 @@ class MLOutcomeStatsService:
         # Оценка выгоды гейта (реальные USDT: taken_net - total_net)
         threshold_impact = self._threshold_impact(y_true, y_pred, nets, threshold)
 
+        # ── экономический критерий (#economic-criterion-2026-10-21) ────────────────
+        # Сумма net отрезанных (ml_gate_benefit_usdt) положительна у ЛЮБОЙ убыточной книги:
+        # фильтр, убирающий сделки, "улучшает" итог без всякого края. Честный вопрос:
+        # у отрезанных средний net хуже, чем у оставленных, и разница не в пределах шума?
+        # Порог не подбирается: верх/низ делит медиана score.
+        med = statistics.median(y_pred)
+        econ = _split_diff(nets, [s >= med for s in y_pred])
+        economic = (
+            {"split": "median_score", "median_score": round(med, 4), **econ}
+            if econ else {"split": "median_score", "median_score": round(med, 4), "insufficient": True}
+        )
+        thr_diff = _split_diff(nets, [s >= threshold for s in y_pred])
+        if thr_diff:
+            threshold_impact.update({
+                "taken_mean_net_usdt": thr_diff["top_mean_net"],
+                "skipped_mean_net_usdt": thr_diff["bottom_mean_net"],
+                "diff_mean_net_usdt": thr_diff["diff_mean_net"],
+                "diff_ci95": thr_diff["ci95"],
+            })
+        econ_ok = bool(econ and econ["ci95"] and econ["ci95"][0] > 0)
+
+        # AUC по третям выборки (деление без параметров): виден дрейф версий модели.
+        by_third = []
+        third = max(len(y_pred) // 3, 1)
+        bounds = ((0, third), (third, 2 * third), (2 * third, len(y_pred)))
+        for k, (a, b) in enumerate(bounds):
+            idx = [i for i in range(a, b) if train_labels[i] is not None]
+            yt = [train_labels[i] for i in idx]
+            by_third.append({
+                "part": ("старые", "средние", "новые")[k],
+                "n": len(idx),
+                "auc_vs_train_label": (
+                    self._safe_auc(yt, [y_pred[i] for i in idx]) if len(set(yt)) >= 2 else None
+                ),
+            })
+
         # Вердикт — по AUC против цели обучения; если строк с меткой мало,
         # откатываемся на is_win-AUC, но помечаем источник.
         verdict_auc = live_auc_vs_train_label if live_auc_vs_train_label is not None else live_auc
         verdict_source = "train_label" if live_auc_vs_train_label is not None and len(labeled_idx) >= 20 else "is_win_fallback"
         verdict = "insufficient_sample"
         if len(closed_with_score) >= 20 and (verdict_source == "is_win_fallback" or len(labeled_idx) >= 20):
-            if verdict_auc >= 0.60:
+            if verdict_auc >= 0.60 and econ_ok:
                 verdict = "edge_visible"
             elif verdict_auc >= 0.52:
                 verdict = "weak_signal"
@@ -582,6 +661,8 @@ class MLOutcomeStatsService:
             "threshold": threshold,
             "buckets": buckets,
             "threshold_impact": threshold_impact,
+            "economic": economic,
+            "by_third": by_third,
             "verdict": verdict,
             "verdict_source": verdict_source,
         }
