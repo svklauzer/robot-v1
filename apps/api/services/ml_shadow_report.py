@@ -16,6 +16,8 @@
 даёт ml_score=null и в выборку не попадает. Никаких внешних зависимостей.
 """
 import json
+import random
+import statistics
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -51,6 +53,47 @@ def _parse_plan_json(plan_raw: Any) -> dict:
         except (json.JSONDecodeError, ValueError):
             return {}
     return {}
+
+
+def _split_diff(nets: list[float], flags: list[bool], block: int = 20,
+                n_boot: int = 500, seed: int = 42) -> dict | None:
+    """Разница среднего net: flags=True ("верх") минус остальные, с 95% CI.
+
+    (#economic-criterion-2026-10-21) nets — в ХРОНОЛОГИЧЕСКОМ порядке; bootstrap
+    блочный (блок `block` сделок подряд), потому что соседние сделки коррелируют.
+    None — одна из сторон короче 5 сделок, судить не о чем.
+    """
+    top = [v for v, f in zip(nets, flags) if f]
+    bot = [v for v, f in zip(nets, flags) if not f]
+    if len(top) < 5 or len(bot) < 5:
+        return None
+    est = sum(top) / len(top) - sum(bot) / len(bot)
+    m = len(nets)
+    nb = max(1, -(-m // block))
+    rng = random.Random(seed)
+    boots: list[float] = []
+    for _ in range(n_boot):
+        idx: list[int] = []
+        for _b in range(nb):
+            s = rng.randrange(0, max(m - block, 0) + 1)
+            idx.extend(range(s, min(s + block, m)))
+        idx = idx[:m]
+        h = [nets[i] for i in idx if flags[i]]
+        l = [nets[i] for i in idx if not flags[i]]
+        if h and l:
+            boots.append(sum(h) / len(h) - sum(l) / len(l))
+    ci = None
+    if len(boots) >= 50:
+        boots.sort()
+        ci = [round(boots[int(0.025 * len(boots))], 4),
+              round(boots[max(int(0.975 * len(boots)) - 1, 0)], 4)]
+    return {
+        "top_n": len(top), "bottom_n": len(bot),
+        "top_mean_net": round(sum(top) / len(top), 4),
+        "bottom_mean_net": round(sum(bot) / len(bot), 4),
+        "diff_mean_net": round(est, 4),
+        "ci95": ci,
+    }
 
 
 def build(db: Session, limit: int = 2000) -> dict[str, Any]:
@@ -174,6 +217,42 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "ml_gate_benefit_usdt": round(taken_net - total_net, 4),
     }
 
+    # ── экономический критерий (#economic-criterion-2026-10-21) ────────────────
+    # Сумма net отрезанных сделок (ml_gate_benefit_usdt) положительна у ЛЮБОЙ
+    # убыточной книги: фильтр, убирающий сделки, "улучшает" итог без всякого края.
+    # Честный вопрос другой: у отрезанных сделок средний net ХУЖЕ, чем у оставленных,
+    # и разница не в пределах шума? Порог тут не подбирается: верх/низ делит медиана.
+    chrono = sorted(rows, key=lambda r: r["id"])
+    nets_chrono = [r["net"] for r in chrono]
+    med = statistics.median(r["score"] for r in chrono)
+    econ = _split_diff(nets_chrono, [r["score"] >= med for r in chrono])
+    economic = {
+        "split": "median_score", "median_score": round(med, 4), **(econ or {}),
+    } if econ else {"split": "median_score", "median_score": round(med, 4), "insufficient": True}
+    thr_diff = _split_diff(nets_chrono, [r["score"] >= thr for r in chrono])
+    if thr_diff:
+        threshold_impact.update({
+            "taken_mean_net_usdt": thr_diff["top_mean_net"],
+            "skipped_mean_net_usdt": thr_diff["bottom_mean_net"],
+            "diff_mean_net_usdt": thr_diff["diff_mean_net"],
+            "diff_ci95": thr_diff["ci95"],
+        })
+    econ_ok = bool(econ and econ["ci95"] and econ["ci95"][0] > 0)
+
+    # AUC по третям выборки: деление без параметров, показывает дрейф версий модели.
+    by_third = []
+    third = max(len(chrono) // 3, 1)
+    for k, (a, b) in enumerate(((0, third), (third, 2 * third), (2 * third, len(chrono)))):
+        part = [r for r in chrono[a:b] if r["train_label"] is not None]
+        by_third.append({
+            "part": ("старые", "средние", "новые")[k],
+            "n": len(part),
+            "auc_vs_train_label": _auc(
+                [r["score"] for r in part if r["train_label"] == 1],
+                [r["score"] for r in part if r["train_label"] == 0],
+            ),
+        })
+
     base_winrate = round(len(wins) / n * 100, 1)
     taken_wr = threshold_impact["taken_winrate_pct"]
 
@@ -185,7 +264,7 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
     verdict_source = "train_label" if auc_train_label is not None else "is_win_fallback"
     if n < 30 or len(labeled) < 30:
         verdict = "insufficient_sample"
-    elif verdict_auc is not None and verdict_auc >= 0.58 and (taken_wr or 0) > base_winrate and threshold_impact["ml_gate_benefit_usdt"] > 0:
+    elif verdict_auc is not None and verdict_auc >= 0.58 and (taken_wr or 0) > base_winrate and econ_ok:
         verdict = "edge_visible"
     elif verdict_auc is not None and verdict_auc >= 0.53:
         verdict = "weak_signal"
@@ -210,6 +289,8 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "threshold": thr,
         "buckets": buckets,
         "threshold_impact": threshold_impact,
+        "economic": economic,
+        "by_third": by_third,
         "verdict": verdict,
         "verdict_source": verdict_source,
         "note": (

@@ -326,8 +326,34 @@ export default function MLPage() {
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
                 <Row k="Взято" v={`${shadow.threshold_impact?.taken_count} (wr ${shadow.threshold_impact?.taken_winrate_pct ?? "—"}%)`} />
                 <Row k="Отрезано" v={`${shadow.threshold_impact?.skipped_count} (wr ${shadow.threshold_impact?.skipped_winrate_pct ?? "—"}%)`} />
-                <Row k="Выгода гейта" v={`${shadow.threshold_impact?.ml_gate_benefit_usdt} USDT`} highlight={(shadow.threshold_impact?.ml_gate_benefit_usdt ?? 0) > 0} />
+                <Row k="Net на сделку: взято / отрезано" v={`${shadow.threshold_impact?.taken_mean_net_usdt ?? "—"} / ${shadow.threshold_impact?.skipped_mean_net_usdt ?? "—"}`} />
+                <Row k="Разница, USDT (95% CI)" v={shadow.threshold_impact?.diff_ci95 ? `${shadow.threshold_impact.diff_mean_net_usdt} [${shadow.threshold_impact.diff_ci95[0]}; ${shadow.threshold_impact.diff_ci95[1]}]` : "мало данных"} highlight={(shadow.threshold_impact?.diff_ci95?.[0] ?? -1) > 0} />
+                <Row k="Сумма net отрезанных" v={`${shadow.threshold_impact?.skipped_net_usdt} USDT`} />
               </div>
+            </div>
+
+            {/* (#economic-criterion-2026-10-21) Сумма net отрезанных положительна у любой убыточной
+                книги, поэтому здесь — сравнение верха и низа по score и интервал разницы. */}
+            <div className="rounded-xl border border-cyan-900/50 bg-black/30 p-3 text-xs">
+              <div className="mb-1 font-semibold text-cyan-200">Верхняя половина score против нижней (net на сделку)</div>
+              {shadow.economic?.insufficient ? (
+                <div className="text-cyan-100/60">Мало сделок для сравнения.</div>
+              ) : (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
+                  <Row k={`Верх (n=${shadow.economic?.top_n})`} v={shadow.economic?.top_mean_net ?? "—"} />
+                  <Row k={`Низ (n=${shadow.economic?.bottom_n})`} v={shadow.economic?.bottom_mean_net ?? "—"} />
+                  <Row k="Разница (95% CI)" v={shadow.economic?.ci95 ? `${shadow.economic.diff_mean_net} [${shadow.economic.ci95[0]}; ${shadow.economic.ci95[1]}]` : "—"} highlight={(shadow.economic?.ci95?.[0] ?? -1) > 0} />
+                </div>
+              )}
+              <p className="mt-2 text-[11px] text-cyan-100/40">
+                Зелёное только если нижняя граница интервала выше нуля. Делит медиана score, порог не подбирается.
+              </p>
+              {Array.isArray(shadow.by_third) && shadow.by_third.length > 0 && (
+                <div className="mt-2 text-cyan-100/70">
+                  AUC по третям выборки (старые → новые):{" "}
+                  {shadow.by_third.map((p: any) => `${p.part}: ${p.auc_vs_train_label ?? "—"} (n=${p.n})`).join(" · ")}
+                </div>
+              )}
             </div>
           </div>
         ) : (
