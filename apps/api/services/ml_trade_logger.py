@@ -211,6 +211,9 @@ class MLTradeLogger:
             "ml_score": ml_data.get("ml_score"),
             "ml_mode": ml_data.get("mode"),
             "ml_action": ml_data.get("action"),
+            # (#model-version-2026-10-22) Какая версия модели считала score на входе.
+            "ml_model_trained_at": ml_data.get("model_trained_at"),
+            "ml_feature_version": ml_data.get("feature_version"),
 
             "lifecycle": {
                 "entry_price": lifecycle.get("entry_price"),

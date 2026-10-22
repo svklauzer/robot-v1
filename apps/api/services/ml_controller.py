@@ -174,6 +174,23 @@ class MLController:
                 self._labeler = None
         return self._labeler
 
+    def _model_version(self) -> dict:
+        """Версия модели, посчитавшей score (#model-version-2026-10-22).
+
+        Пишется в plan.ml и дальше в trade_outcomes.jsonl: без неё живой AUC смешивает
+        версии модели. Любой сбой -> None-поля, на ответ контроллера не влияет.
+        """
+        try:
+            labeler = self._get_labeler()
+            st = labeler.status() if labeler else {}
+            fv = st.get("feature_version")
+            if fv is None:
+                from services.ml_features import FEATURE_VERSION
+                fv = FEATURE_VERSION
+            return {"model_trained_at": st.get("trained_at"), "feature_version": fv}
+        except Exception:  # noqa: BLE001 — версия не критична
+            return {"model_trained_at": None, "feature_version": None}
+
     def evaluate_candidate(self, candidate: dict) -> dict:
         """candidate: dict с признаками (confidence/grade/side/regime/net_rr_*/
         entry_depth). Возвращает решение контроллера (всегда безопасное)."""
@@ -193,21 +210,22 @@ class MLController:
             return {"mode": mode, "ml_score": None, "action": "passthrough",
                     "allow": True, "size_multiplier": 1.0, "reason": "ml_not_ready"}
 
+        ver = self._model_version()
         if mode == "shadow":
-            return {"mode": "shadow", "ml_score": round(ml_score, 4), "action": "log_only",
+            return {**ver, "mode": "shadow", "ml_score": round(ml_score, 4), "action": "log_only",
                     "allow": True, "size_multiplier": 1.0, "reason": "shadow_logged"}
 
         if mode == "advisory":
             min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
             recommend = "take" if ml_score >= min_score else "skip"
-            return {"mode": "advisory", "ml_score": round(ml_score, 4), "action": "advise",
+            return {**ver, "mode": "advisory", "ml_score": round(ml_score, 4), "action": "advise",
                     "allow": True, "size_multiplier": 1.0, "recommend": recommend,
                     "reason": f"advisory_{recommend}"}
 
         if mode == "full_auto":
             min_score = float(getattr(settings, "ML_MIN_SCORE_TO_TRADE", 0.45))
             if ml_score < min_score:
-                return {"mode": "full_auto", "ml_score": round(ml_score, 4), "action": "block",
+                return {**ver, "mode": "full_auto", "ml_score": round(ml_score, 4), "action": "block",
                         "allow": False, "size_multiplier": 0.0,
                         "reason": f"ml_score_below_min:{ml_score:.3f}<{min_score}"}
             # размер в guardrails: линейно от ml_score, кэп [min,max]
@@ -217,7 +235,7 @@ class MLController:
             span = max(0.85 - min_score, 1e-6)
             frac = max(0.0, min(1.0, (ml_score - min_score) / span))
             size_mult = round(s_min + (s_max - s_min) * frac, 3)
-            return {"mode": "full_auto", "ml_score": round(ml_score, 4), "action": "size",
+            return {**ver, "mode": "full_auto", "ml_score": round(ml_score, 4), "action": "size",
                     "allow": True, "size_multiplier": size_mult,
                     "reason": f"ml_score_ok:{ml_score:.3f}"}
 
