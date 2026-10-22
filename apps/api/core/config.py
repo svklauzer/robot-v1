@@ -670,7 +670,7 @@ class Settings(BaseSettings):
     # одно up-движение по 4 шортам). Лимит одновременных однонаправленных позиций
     # в кластере. CORR_CLUSTER_SYMBOLS пусто → весь портфель = один кластер.
     CORR_CLUSTER_ENABLED: bool = True
-    CORR_CLUSTER_MAX_SAME_DIR: int = 5
+    CORR_CLUSTER_MAX_SAME_DIR: int = 11
     # (#engine-slots-2026-08-03) Лимит направления считается ВНУТРИ движка.
     # Замер 03.08: на медвежьем рынке trend_down дал 60% ленты решений и занимал
     # оба шортовых слота первым; CRT блокировался `cluster_direction_cap` в 24
