@@ -25,6 +25,7 @@ from services.trade_plan import TradePlanBuilder
 from services.market_intelligence import MarketIntelligenceEngine
 from services.exposure_guard import ExposureGuard
 from services import trend_trigger, tz_entry_shadow, tp_reachability, momentum_gate
+from services.trend_resume import TrendResumeTracker
 from services.regime_expectancy_sizer import RegimeExpectancySizer
 from services.setup_reach import SetupReachService, apply_geometry as apply_setup_geometry
 from services.symbol_performance_guard import SymbolPerformanceGuard
@@ -91,6 +92,9 @@ class RobotLoop:
         # после перезапуска запись означала бы разрешение входа по событию,
         # которого никто не видел.
         self.impulse_latch = ImpulseLatch()
+        # (#trend-resume-2026-10-23) Наблюдатель «откат к EMA20 1h и возобновление».
+        # Только тень: пишет снимок в plan, вход не меняет. История в памяти.
+        self.trend_resume = TrendResumeTracker()
         # (#scan-visibility-2026-09-05) Вторая ось молчания ленты. Первая —
         # цикл не сделал шаг (её пишет skip_reporter). Эта — шаг сделан, но ни
         # один символ не дошёл до одобрения: тогда все выходы идут через
@@ -212,6 +216,10 @@ class RobotLoop:
             if result is None:
                 _scan_skips[symbol] = "no_analysis"
                 continue
+
+            # (#trend-resume-2026-10-23) Положение цены относительно EMA20 1h запоминается
+            # на КАЖДОМ скане, в том числе при hold: иначе в истории будут дыры.
+            self.trend_resume.observe(symbol, getattr(result, "timeframes", None))
 
             if result.action == "hold":
                 _scan_skips[symbol] = f"hold:{getattr(result, 'reason', '') or 'no_reason'}"
@@ -1472,6 +1480,8 @@ class RobotLoop:
                     # разница, из-за которой ведро A наполнялось.
                     "confidence": _conf_details or confidence_calibration(result).as_dict(),
                     "trend_trigger": _trigger.as_dict(),
+                    # (#trend-resume-2026-10-23) Тень: было ли возобновление после отката.
+                    "trend_resume": self.trend_resume.snapshot(symbol, result.action),
                     # (#tz-shadow-2026-08-03) Условия входа по ТЗ — ADX, Stoch RSI,
                     # OBV. Режим задаётся TZ_MODE; при enforce блокируют только
                     # беспороговые условия и только на достаточной выборке.
