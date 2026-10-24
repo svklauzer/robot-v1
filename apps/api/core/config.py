@@ -404,7 +404,7 @@ class Settings(BaseSettings):
     # текущей цене только когда сделка ОТДАЛА большую часть значимого MFE И
     # скатилась в район net_safe — не при любом откате от пика.
     TZ_MFE_GIVEBACK_BACKSTOP_ENABLED: bool = True
-    TZ_MFE_GIVEBACK_MIN_MFE_PCT: float = 0.5
+    TZ_MFE_GIVEBACK_MIN_MFE_PCT: float = 1.5 # было до 24.10.2026 - 0.5 >  1.5 1. Защищать 0.5% прибыли на крипте нет смысла — вас сожрут комиссии (taker fees на выход) и проскальзывание.
     TZ_MFE_GIVEBACK_SHARE: float = 0.75
     # Выход ТОЛЬКО по приборам, стоп-ордера нет. Основание — замер:
     #   107 стопов из 342 сделок, −223.76 USDT, НИ ОДНОЙ прибыльной (76% всего
