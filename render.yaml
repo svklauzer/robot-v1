@@ -300,6 +300,10 @@ services:
         value: "6.0"       
       - key: TZ_HARD_STOP_LOSS_PCT
         value: "5"
+
+      - key: TZ_EXIT_ADX_PEAK_MIN
+        value: "28.0"
+
       
       # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
       # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
