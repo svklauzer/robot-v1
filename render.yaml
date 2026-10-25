@@ -133,6 +133,10 @@ services:
         value: "true"
       - key: OB_MARKET_TYPE
         value: "swap"
+      # (#market-data-swap-2026-10-25) Свечи и тикер — со СВОПА, как исполнение и
+      # стакан: BTC/USDT в ccxt это спот. Откат — значение "spot", без деплоя кода.
+      - key: MARKET_DATA_TYPE
+        value: "swap"
       - key: ENABLE_SMART_LEVERAGE
         value: "false"
       # (#grade-axis-2026-09-04) Предохранитель сайзинга по грейду. Ось измерена

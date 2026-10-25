@@ -3,6 +3,11 @@ import pandas as pd
 from services.exchange_factory import get_exchange_client, resolve_exchange_name
 
 from core.config import settings
+from core.logging import get_logger, log_event
+
+logger = get_logger(__name__)
+_SWAP_MISSING: set[str] = set()   # символы без свопа: предупреждаем один раз
+_SOURCE_LOGGED = False
 
 
 class MarketDataService:
@@ -14,10 +19,49 @@ class MarketDataService:
         # показывала неверный источник данных при активной OKX.
         self.exchange_name = resolve_exchange_name(exchange)
 
+    # (#market-data-swap-2026-10-25) Рынок данных. ccxt: BTC/USDT — спот,
+    # BTC/USDT:USDT — своп. Торгуем и стоп-контролируем на свопе, значит и
+    # свечи/цена должны быть оттуда. Только OKX; прочее — спот как раньше.
+    def _data_market(self) -> str:
+        if self.exchange_name != "okx":
+            return "spot"
+        value = str(getattr(settings, "MARKET_DATA_TYPE", "spot") or "spot").lower().strip()
+        return "swap" if value == "swap" else "spot"
+
+    def _data_symbol(self, symbol: str) -> str:
+        if self._data_market() != "swap" or ":" in symbol:
+            return symbol
+        from services.market_routing import _swap_symbol
+
+        return _swap_symbol(symbol)
+
+    def _call(self, method: str, symbol: str, *args, **kwargs):
+        global _SOURCE_LOGGED
+        if not _SOURCE_LOGGED:
+            _SOURCE_LOGGED = True
+            log_event(logger, 20, "market_data_source", exchange=self.exchange_name,
+                      data_market=self._data_market())
+        fn = getattr(self.client, method)
+        data_symbol = self._data_symbol(symbol)
+        if data_symbol == symbol:
+            return fn(symbol, *args, **kwargs)
+        try:
+            return fn(data_symbol, *args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            # Откат на спот ТОЛЬКО если у символа нет свопа. Сетевые и прочие
+            # ошибки не маскируем спотом: это снова смешало бы два инструмента.
+            if type(exc).__name__ != "BadSymbol" and "does not have market symbol" not in str(exc):
+                raise
+            if symbol not in _SWAP_MISSING:
+                _SWAP_MISSING.add(symbol)
+                log_event(logger, 30, "market_data_swap_missing", symbol=symbol,
+                          data_symbol=data_symbol, fallback="spot")
+            return fn(symbol, *args, **kwargs)
+
     def snapshot(self, symbol: str) -> dict:
         try:
-            ticker = self.client.fetch_ticker(symbol)
-            ohlcv = self.client.fetch_ohlcv(symbol, "5m", 200)
+            ticker = self._call("fetch_ticker", symbol)
+            ohlcv = self._call("fetch_ohlcv", symbol, "5m", 200)
 
             df = pd.DataFrame(
                 ohlcv,
@@ -31,6 +75,7 @@ class MarketDataService:
                 "ask": ticker.get("ask"),
                 "ohlcv": df,
                 "source": self.exchange_name,
+                "data_market": self._data_market(),
             }
 
         except Exception as e:
@@ -43,13 +88,14 @@ class MarketDataService:
         Используется health/connectivity-проверками, где нужны лишь bid/ask/last.
         Один HTTP-вызов вместо двух → корректный замер реальной задержки.
         """
-        ticker = self.client.fetch_ticker(symbol)
+        ticker = self._call("fetch_ticker", symbol)
         return {
             "symbol": symbol,
             "last": ticker.get("last"),
             "bid": ticker.get("bid"),
             "ask": ticker.get("ask"),
             "source": self.exchange_name,
+            "data_market": self._data_market(),
         }
 
     def mock_snapshot(self, symbol: str) -> dict:
@@ -102,11 +148,7 @@ class MarketDataService:
 
     def ohlcv(self, symbol: str, timeframe: str = "5m", limit: int = 200):
         try:
-            data = self.client.fetch_ohlcv(
-                symbol,
-                timeframe=timeframe,
-                limit=limit,
-            )
+            data = self._call("fetch_ohlcv", symbol, timeframe=timeframe, limit=limit)
 
             df = pd.DataFrame(
                 data,
