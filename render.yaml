@@ -242,7 +242,7 @@ services:
       - key: TZ_ADX_MIN
         value: "20.0"
       - key: TZ_STOCH_ZONE
-        value: "20.0"
+        value: "35.0"
       - key: TZ_MODE
         value: enforce
       # (#tz-enforce-adx-rising-2026-09-03) Добавлено adx_rising — беспороговое
