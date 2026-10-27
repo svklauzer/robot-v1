@@ -356,13 +356,13 @@ services:
       # Breakeven Lock (Фиксация прибыли)
       # Для микро-скальпа до TP1 замок BE вреден, так как зазор внутри шума
       - key: BREAKEVEN_LOCK_ENABLED
-        value: "false"
+        value: "true"
       # Взводим замок фиксации только когда прошли 0.70% движения
       - key: BREAKEVEN_LOCK_ARM_PCT
-        value: "0.35"
+        value: "1.20"
       # Ставим пол фиксации на 0.25%, чтобы гарантированно защитить прибыль с учетом комиссий
       - key: BREAKEVEN_LOCK_FLOOR_PCT
-        value: "0.25"
+        value: "0.70"
       - key: BREAKEVEN_LOCK_HARD_FLOOR_PCT
         value: "-0.10"
       - key: BREAKEVEN_LOCK_COST_BUFFER_PCT
