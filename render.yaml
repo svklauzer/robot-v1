@@ -207,7 +207,7 @@ services:
       - key: CORR_CLUSTER_PER_ENGINE
         value: "true"
       - key: CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR
-        value: "5"
+        value: "15"
       - key: REENTRY_COOLDOWN_PER_ENGINE
         value: "true"
       
