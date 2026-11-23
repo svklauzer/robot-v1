@@ -166,7 +166,7 @@ class MLIntelligenceHub:
         }
         return decision
 
-     def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
+    def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
         # (#ml-ensemble-heuristic-swap-2026-11-24) Прежняя логика при
         # auc_is_reliable=False обнуляла вес модели и ставила 0.70 на
         # outcome_stats (winrate ПО ГРЕЙДУ) + 0.30 на эвристику. Ось грейда
@@ -177,13 +177,15 @@ class MLIntelligenceHub:
         # Тень обязана логировать ИМЕННО модель, даже ненадёжную: иначе
         # когорта для её оценки не наберётся никогда. Полномочия на деньги
         # отдельно гейтит resolve_effective_mode — там и место для строгости.
+        if not predictions:
+            return 0.5, {}
         if "meta_labeler" in predictions:
             weights = {"meta_labeler": 1.0}
         elif "scorer" in predictions:
             weights = {"scorer": 1.0}      # fallback, помечается в model_version
         else:
             weights = {k: 1.0 / len(predictions) for k in predictions}
-        total = sum(weights.values())
+        total = sum(weights.values()) or 1.0
         score = sum(predictions[k] * w for k, w in weights.items()) / total
         return score, {k: round(w / total, 3) for k, w in weights.items()}
 
