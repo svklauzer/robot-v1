@@ -178,7 +178,9 @@ class Settings(BaseSettings):
     # чинится она там. Эта ось остаётся доступной как страховочный рельс против
     # будущей деградации режима, но включать её нужно осознанно и не вместо
     # разбора причины. Подробности — в services/regime_expectancy_sizer.py.
-    REGIME_EXP_SIZING_ENABLED: bool = False
+    # 24.11: дивергенция режимов значима (crt −0.472, trend_up −0.342, reversal +0.169) — рельс наконец имеет сигнал. 
+    # MIN_MULT 0.15 наблюдательный, режимы НЕ выключаются    
+    REGIME_EXP_SIZING_ENABLED: bool = True
     # Наблюдательный размер для режима с отрицательным ожиданием. НЕ ноль: при
     # нуле режим перестаёт давать закрытия, ожидание замерзает, и восстановиться
     # он уже не сможет никогда.
@@ -248,7 +250,19 @@ class Settings(BaseSettings):
     # проверяться должно новой выборкой. Разбор — в services/trend_trigger.py.
     TREND_TRIGGER_ENABLED: bool = True
     TREND_TRIGGER_TF: str = "15m"
-    TREND_MAX_EXTENSION_ATR: float = 3.5
+    # # 24.11: ноябрь ext>2 −0.677/tr; бакет 3.5–4.5 пуст (порог 4.5 не связывал)
+    TREND_MAX_EXTENSION_ATR: float = 2.5
+    # (#reversal-min-ext-2026-11-24) НИЖНЯЯ граница extension. Верхний порог
+    # смотрел только «цена улетела от опоры», но не «цена ещё ПРОТИВ тренда»:
+    # extension < 0 = откат не завершён, возобновления нет — вход ловит нож.
+    # Ноябрь: extension<0 — 24 сделки, −24.29 USDT (−1.01/сделку), худший бакет
+    # движка; extension 0–2 — −0.15/сделку. Правило требует, чтобы цена была
+    # на верной стороне EMA20, то есть чтобы откат уже сменился возобновлением.
+    # Флаг отдельный, потому что 0.0 — РАБОЧЕЕ значение порога, а не «выключено»:
+    # выключение делается флагом, а не подстановкой отрицательного числа.
+    TREND_MIN_EXTENSION_ENABLED: bool = True
+    TREND_MIN_EXTENSION_ATR: float = 0.0
+    
     # shadow — считать и писать в план, вход НЕ блокировать.
     # enforce — блокировать вход при extension > TREND_MAX_EXTENSION_ATR.
     #
@@ -270,9 +284,23 @@ class Settings(BaseSettings):
     # Stoch RSI, ни OBV до этой правки не считались, распределений нет.
     TZ_TREND_TF: str = "1h"
     TZ_ENTRY_TF: str = "15m"
-    TZ_ADX_MIN: float = 20.0        # СНИЖЕНО с 23 до 15 (14.08.2026): телеметрия показала, что ADX 16-19 — норма для 1h/15m
+    TZ_ADX_MIN: float = 18.0        # # 24.11: ноябрь ADX<18 — 42 сделки −19.41 (−0.46/tr); бакет 18–20 +0.64/tr не режем
     TZ_STOCH_ZONE: float = 35.0     # лонг: %K <= 35; шорт: %K >= 65
-
+    # (#reversal-di-floor-2026-11-24) ВЕЛИЧИНА разности DI, а не только знак.
+    # Условие `di` в tz_entry_shadow проверяло `di_spread <= 0`, то есть DI +7
+    # «по стороне сделки» проходил как подтверждённое направление. Замер по
+    # свежей ноябрьской когорте (API /signals, 193 трендовых шорта):
+    #   DI 0–10   40 сделок  −17.21 USDT  −0.43/сделку  win 45%
+    #   DI 10–15  40 сделок   −8.09 USDT  −0.20/сделку  win 58%
+    #   DI 15–25  53 сделки   +9.85 USDT  +0.19/сделку  win 68%
+    #   DI 25+    60 сделок  +34.21 USDT  +0.57/сделку  win 73%
+    # Перелом знака на 15: ниже — не тренд, а шум разворота. Ровно эти входы
+    # 21–22.11 шортили зарождающийся аптренд (ADX 15–21, DI 7–10, MFE≈0.01–0.31%,
+    # все stop_loss). Симметрично для лонга и шорта. 0 = выключено.
+    # ТРЕБУЕТ патча tz_entry_shadow: код "di_weak" → семейство "di" (уже вооружено
+    # в TZ_ENFORCE_CONDITIONS), иначе условие считается, но ничего не блокирует.
+    TZ_DI_SPREAD_MIN: float = 15.0
+    
     # (#tz-enforce-2026-08-03) Ввод условий в бой — с двумя предохранителями.
     # Первый замер: ADX по трендовым сетапам 16.1 / 18.0 / 19.4 при пороге 23.
     # НИ ОДИН не дошёл до порога. Enforce на 23 — это не «стать разборчивее»,
@@ -322,14 +350,30 @@ class Settings(BaseSettings):
     # ВНИМАНИЕ: боевое значение приходит из Render env и ПЕРЕКРЫВАЕТ этот дефолт —
     # менять надо в обоих местах (render.yaml + Render Dashboard), иначе правка
     # не доедет до прода.
-    TZ_ENFORCE_CONDITIONS: str = "kama,di,obv,adx,adx_rising,stoch"
+    # # 24.11: stoch возвращён в тень — ноябрь stochOK n=6 −0.258/tr против stochFAIL −0.169/tr: enforcing 
+    # режет частоту без выигрыша. adx вооружён (порог 18)    
+    TZ_ENFORCE_CONDITIONS: str = "kama,di,obv,adx,adx_rising"
 
     # (#momentum-late-2026-09-12) Вход, когда импульс 15m уже смотрит по тренду
     # (up+bullish, down+bearish): 79 сделок −43.4 USDT против +5.8 на 60
     # нейтральных, разрыв в обеих половинах 45 дней и в обе стороны. shadow —
-    # вердикт в план, enforce — такой вход не открывается. Решает владелец.
-    MOMENTUM_GATE_MODE: str = "shadow"
-
+    # вердикт в план, enforce — такой вход не открывается. Решает владелец.# 24.11: вооружён вместе с 
+    # BLOCK_OPPOSED (см. ниже) — блокирует контр-импульс, не продолжение
+    MOMENTUM_GATE_MODE: str = "enforce"
+    # (#momentum-opposed-2026-11-24) Гейт импульса развёрнут на КОНТР-сторону.
+    # Прежняя премиса (#momentum-late-2026-09-12, 79 сделок −43.4) блокировала
+    # ALIGNED — импульс ПО тренду. Свежая когорта её перевернула:
+    #   trend_down + bearish (продолжение)   октябрь  +0.44 R/сделку
+    #   trend_down + bullish (контр-импульс) ноябрь   −0.54 USDT/сделку
+    #   long + bullish за ноябрь = 0 сделок — молодой аптренд не покупался вовсе
+    # OPPOSED = импульс ПРОТИВ стороны сделки (шорт при bullish 15m) — это и есть
+    # «продаём в разворот», ради чего гейт и нужен. ALIGNED оставляем в тени:
+    # продолжение зарабатывает, и 16 блокировок momentum_aligned_late_entry
+    # держали именно прибыльные шорты падающей недели.
+    # Оба поведения — флаги: откат к прежней логике без деплоя кода.
+    MOMENTUM_GATE_BLOCK_OPPOSED: bool = True
+    MOMENTUM_GATE_BLOCK_ALIGNED: bool = False
+    
     # (# tp-reachability-2026-08-03, переписан 24.08.2026) Достижимость цели:
     # план против факта. TP_REACH_MODE: shadow | enforce. В enforce не берём
     # сделки, чья награда сбывается реже, чем требует заявленный ими RR.
@@ -339,7 +383,7 @@ class Settings(BaseSettings):
     # её промахом, гейт входа учится на решениях контура выхода — 04.09 это
     # дало ETH `0% < 27%` при нулевой частоте на 21 сделке и полный замок.
     # Ужесточить гейт эта оценка не может: путь к ней ведёт только из отказа.
-    TP_REACH_CENSOR_ADJUST_ENABLED: bool = True
+    TP_REACH_CENSOR_ADJUST_ENABLED: bool = False # 24.11: синхрон с render (решение владельца)    
     # Сколько ПОЛНЫХ наблюдений (дошли до цели + умерли от рынка) нужно, чтобы
     # вообще говорить о частоте. Отбрасывая цензурированные, мы уменьшаем
     # выборку — на трёх точках частота это не частота.
@@ -392,7 +436,7 @@ class Settings(BaseSettings):
     # СНИЖЕНО с 50 до 35: телеметрия показала, что ADX редко достигает 50 на наших
     # таймфреймах (1h/15m). Порог 35 — это зона умеренного тренда, выход из неё
     # уже означает ослабление движения.
-    TZ_EXIT_ADX_PEAK_MIN: float = 35.0
+    TZ_EXIT_ADX_PEAK_MIN: float = 28.0 # 24.11: синхрон с render
     # УВЕЛИЧЕНО с 4.0 до 6.0: более устойчиво к шуму, меньше преждевременных выходов.
     TZ_EXIT_ADX_FADE: float = 6.0
     # (#tz-mfe-giveback-backstop-2026-09-02) Структурные условия (kama/adx/obv)
@@ -429,7 +473,7 @@ class Settings(BaseSettings):
     # ПОЛ дистанции до KAMA. Цена может стоять почти на линии, дистанция уйдёт
     # в 0.05%, и qty = risk / 0.0005 раздует позицию в разы. 0.30 = net_safe для
     # swap: ближе этого «риск» всё равно съедается издержками.
-    TZ_STOP_MIN_DIST_PCT: float = 0.30
+    TZ_STOP_MIN_DIST_PCT: float = 0.40 # 24.11: синхрон с render
     # =========================
     # Dynamic ATR Stops & Exits (#dynamic-atr-stops-2026-08-07)
     # Единая адаптивная логика для всех движков. Стопы и пороги выхода
@@ -442,7 +486,7 @@ class Settings(BaseSettings):
 
     # Аварийный жесткий стоп (% от цены входа) - защита от краха/сквиза
     # Срабатывает независимо от KAMA/ADX/OBV, если цена ушла против нас на X%
-    TZ_HARD_STOP_LOSS_PCT: float = 2.5  # Максимальная потеря от входа в %
+    TZ_HARD_STOP_LOSS_PCT: float = 3.0  # Максимальная потеря от входа в % # 24.11: синхрон с render (было 5): 5% при плече 10× = 50% маржи
     
     # Множители для динамических порогов exit_policy (заменяют жесткие %)
     # Пороги будут: max(ATR * mult, net_safe_floor)
@@ -681,7 +725,7 @@ class Settings(BaseSettings):
     # осталась в пределах дневного лимита: 5 × RISK_PER_TRADE_PCT(1.0) = 5%
     # эквити против MAX_DAILY_LOSS_PCT=6. Совпадает с ANTI_DRAIN_MAX_OPEN_POSITIONS.
     # Запас в один стоп: портфель целиком в убытке не закрывает день.
-    CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR: int = 5
+    CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR: int = 3 # 24.11: 21–22.11 все шорты ушли в минус разом (−5.48 / −17.21) — портфельный потолок направления
     # Карантин после стопа — за повтор СВОЕГО сетапа. Тренд-продолжение и свип
     # CRT это разные гипотезы; запрещать проверку одной из-за провала другой
     # на том же символе нечем обосновать.
@@ -702,7 +746,7 @@ class Settings(BaseSettings):
     # =========================
     # TRADE ENGINE
     # =========================
-    TRADING_MODE: str = "paper_signal"
+    TRADING_MODE: str = "paper_trade" # 24.11: синхрон с render
     MARKET_TYPE: str = "spot"
     ENABLE_LIVE_ORDERS: bool = False
     LIVE_SHADOW_MAX_ENTRY_DRIFT_PCT: float = 0.35
@@ -783,7 +827,7 @@ class Settings(BaseSettings):
     # mean-reversion) → авто-переключение на cross (см. grid_effective_margin_mode).
     GRID_MARGIN_ISOLATED_MAX_LEV: float = 1.0
 
-    ENABLE_FUTURES: bool = False
+    ENABLE_FUTURES: bool = True # 24.11: синхрон с render
     FUTURES_LEVERAGE: int = 10
     ALLOW_SHORTS: bool = True
     SIGNAL_PROFILE: str = "learning"
@@ -855,13 +899,15 @@ class Settings(BaseSettings):
     # MFE≥1.2) → сделка держалась до полного хард-стопа −4.5 вместо ~безубытка.
     # 0.45 ловит откатчиков в диапазоне 0.45–1.2%. Над-килла нет: выход всё равно
     # требует flow_against ИЛИ ухода за hard_floor (−0.35%), т.е. не по вику.
-    BREAKEVEN_LOCK_ARM_PCT: float = 0.45
+    # 24.11: синхрон с render; 
+    # breakeven_lock 20 сделок +3.58, 100% win (был −26.62 на arm 0.45)    
+    BREAKEVEN_LOCK_ARM_PCT: float = 1.20
     # Уровень результата (%), на котором фиксируемся после вооружения:
     # как только текущий профит откатил к этому полу — выходим тут, а не
     # ждём failed_setup_exit на -0.6/-0.9%.
     # (#leak-be-lock-2026-07-09) 0.10→0.15: пол должен покрывать round-trip издержки
     # swap (~0.12%) — фиксация на +0.10% давала около-нулевой/минусовой нетто.
-    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.18  # ПОДНЯТО с 0.10 — покрывает round-trip + буфер
+    BREAKEVEN_LOCK_FLOOR_PCT: float = 0.70  # ПОДНЯТО с 0.10 — покрывает round-trip + буфер # 24.11: синхрон с render
     # (#be-floor-cost-2026-07-25) Пол выше — ЭТО НИЖНЯЯ ГРАНИЦА КОНФИГА, а не
     # итоговый пол. Эффективный пол считается в exit_policy как
     # max(этот, round_trip_издержки + буфер ниже) — иначе «безубыток-замок»
@@ -981,9 +1027,9 @@ class Settings(BaseSettings):
     # а DI перепутаны — ни одно из трёх условий не выполняется.
     # Симметрично для лонгов и шортов.
     ANTI_CHOP_YOUNG_TREND_ENABLED: bool = True
-    ANTI_CHOP_YOUNG_ADX_MIN: float = 20.0        # ниже — это шум, а не тренд
-    ANTI_CHOP_YOUNG_ADX_RISE_MIN: float = 0.5    # ADX обязан РАСТИ, а не гаснуть
-    ANTI_CHOP_YOUNG_DI_SPREAD_MIN: float = 15.0  # направление подтверждено DI
+    ANTI_CHOP_YOUNG_ADX_MIN: float = 16.0        # 24.11: на РАННЕМ развороте ADX ещё низкий — порог 20 держал нас вне молодого тренда
+    ANTI_CHOP_YOUNG_ADX_RISE_MIN: float = 0.3   # 24.11: то же; 0.3 всё ещё отсекает численный шум (+0.02…+0.07)
+    ANTI_CHOP_YOUNG_DI_SPREAD_MIN: float = 10.0  # # 24.11: DI 10–15 на молодом тренде — норма; жёсткий входной DI-пол живёт в TZ_DI_SPREAD_MIN
 
     # (#htf-align) Выравнивание со старшим ТФ: не лонгуем против 4h-даунтренда,
     # не шортим против 4h-аптренда (price vs ema200 на HTF). Бьёт контртренд-входы.
@@ -1028,7 +1074,8 @@ class Settings(BaseSettings):
     # запуск в live НЕ затрагивается (ML ортогонален ENABLE_LIVE_ORDERS, fail-open).
     #   off | shadow | advisory | full_auto
     # =========================
-    ML_MODE: str = "advisory" # Модель начнет писать рекомендации "take" / "skip" в логи и ТГ
+    ML_MODE: str = "shadow" 
+    # при advisory - Модель начнет писать рекомендации "take" / "skip" в логи и ТГ
     # (#ml-rework-2026-07-28) Метка обучения. БЫЛО "is_win" — та же ловушка,
     # что и win-rate: модель училась максимизировать ЧИСЛО побед, тогда как наш
     # собственный замер даёт 67% побед при payoff 0.11, то есть убыточную
@@ -1038,15 +1085,59 @@ class Settings(BaseSettings):
     # beats_costs: сделка вернула хотя бы ML_LABEL_MIN_R риска. Вопрос к
     # фильтру входов не «будет ли плюс», а «оправдает ли сделка риск и
     # издержки».
-    ML_LABEL_KIND: str = "beats_costs"     # beats_costs | is_win | hit_tp2
+    ML_LABEL_KIND: str = "net_r"     # beats_costs | is_win | hit_tp2 # 24.11: экономическая метка, см. блок #ml-audit выше
     # Порог в единицах риска (net_pnl / |net_pnl_stop|). 0.3 выбран как минимум,
     # заметно превышающий round-trip: при среднем стопе −0.82% и издержках
     # ~0.20% сделка на 0.3R уже окупает оборот с запасом.
     ML_LABEL_MIN_R: float = 0.3
+    # (#ml-audit-2026-11-24) Аудит живого контура. /ml/shadow-report на 870
+    # закрытых: live_auc 0.4564, live_auc_vs_train_label 0.4976, вердикт
+    # "no_edge_yet" — при val_auc 0.8484 и wf_auc 0.747. Офлайн-метрика не
+    # переносилась в бой по трём причинам, и каждая закрывается своим ключом:
+    #   1) набор фич без драйверов PnL (regime/DI/ADX/momentum/extension), зато
+    #      с антипредсказательным confidence → FEATURE_VERSION=6 в ml_features.py
+    #      (константа модуля, не настройка: версию нельзя менять из env, иначе
+    #      вектор разойдётся с обученной моделью молча);
+    #   2) обучение на фичах ФИЛЛА закрытой сделки, а скор — на фичах кандидата
+    #      (середина зоны, филла ещё нет) → ML_TRAIN_ON_LOGGED_FEATURES и
+    #      ML_ENTRY_PRICE_BASIS ниже;
+    #   3) метка beats_costs 0.3R награждает частоту мелких плюсов, а платит хвост
+    #      (tp2_trail_giveback +8.27/сделку) → ML_LABEL_KIND=net_r.
+    # Экономический сплит подтверждал инверсию: верхняя половина скора давала
+    # −0.3442/сделку против −0.1696 у нижней (diff −0.1746, ДИ включает 0).
+    # Bucket 0.00–0.30 — winrate 57.8% (лучший), 0.70+ — 37.7% (худший).
+    ML_LABEL_NET_R_MIN: float = 1.0        # net_r: позитив = чистый ход >= 1R
+    # Обучение на ТОМ ЖЕ векторе, что видел live-скор (plan.ml.features).
+    # Устраняет рассинхрон train/serve — главную причину разрыва wf 0.747 → live 0.498.
+    # Старые строки без лога (или другой версии) честно пересчитываются из строки.
+    ML_TRAIN_ON_LOGGED_FEATURES: bool = True
+    # База цены входа для стоп-дистанции: ЕДИНАЯ для train и live.
+    # zone_mid — середина зоны, как на входе; fill — фактический филл закрытой
+    # сделки (прежнее поведение, рассинхрон). Вход лимитный (ENTRY_ORDER_TYPE=limit),
+    # поэтому филл и середина зоны расходятся, и стоп-дистанция вместе с ними.
+    ML_ENTRY_PRICE_BASIS: str = "zone_mid"   # zone_mid | fill
+    # (#ml-drift-2026-11-24) Дрейф был объявлен, но не реализован: /ml/status
+    # показывал drift_status.implemented=false при positive_rate_shift_z=2.28.
+    # Теперь baseline (квантили train-фич) пишется при обучении, PSI считается
+    # по скользящему окну live-векторов, превышение понижает режим до shadow.
+    ML_DRIFT_ENABLED: bool = True
+    ML_DRIFT_PSI_MAX: float = 0.25
+    # Порог предупреждения о смене доли позитивов был 2.58 (p<0.01) — замер
+    # z=2.28 его не пробивал и молчал. 2.0 ≈ p<0.05: сдвиг обязан быть виден.
+    ML_POSITIVE_SHIFT_Z_WARN: float = 2.0
+    # Полномочия advisory/full_auto — только по ЖИВОЙ метрике, не по wf AUC.
+    # Иначе модель с wf 0.747 и live 0.498 получает право блокировать сделки.
+    # live_auc=None (мало scored-строк текущей версии) = полномочия не выданы.
+    ML_PROMOTION_MIN_LIVE_AUC: float = 0.55
+    ML_PROMOTION_MIN_ECON_DIFF: float = 0.0
+    
     # Окно обучения. Exit-политика менялась несколько раз за месяц, и метка —
     # это исход ПОД ТОГДАШНЮЮ логику ведения. Старая строка отвечает на другой
     # вопрос; смешивать эпохи в одной выборке нельзя.
-    ML_TRAIN_WINDOW_DAYS: float = 45.0
+    # 24.11: синхрон с боевым значением (жило только в Dashboard). 
+    # Компромисс: 45 дней не набирают ML_MIN_TRAIN_SAMPLES после фильтров; смешение эпох exit гасится too_old + net_r
+
+    ML_TRAIN_WINDOW_DAYS: float = 65.0
     ML_MIN_TRAIN_SAMPLES: int = 200        # меньше — модель не обучается (честно)
     ML_MIN_SCORE_TO_TRADE: float = 0.50    # full_auto/advisory: ниже — skip/block
     # (#ml-auto-demote-2026-07-27) Модель влияет на деньги только пока доказывает
@@ -1083,10 +1174,10 @@ class Settings(BaseSettings):
     # движок работает и в Render env стоит True. Держать в коде False —
     # значит иметь конфиг, который не описывает систему.
     ENABLE_RANGE_STRATEGY: bool = True
-    RANGE_MIN_WIDTH_PCT: float = 1.8        # мин. ширина коридора (нужно куда ехать после комиссий)
-    RANGE_SUPPORT_ZONE: float = 0.30        # входим, если цена в нижних 30% диапазона (0=поддержка)
-    RANGE_ENTRY_RSI_MIN: float = 25.0       # зона разворота у поддержки
-    RANGE_ENTRY_RSI_MAX: float = 52.0
+    RANGE_MIN_WIDTH_PCT: float = 1.2        # мин. ширина коридора (нужно куда ехать после комиссий) # 24.11: движок должен работать — узкий коридор при коротком стопе экономически валиден
+    RANGE_SUPPORT_ZONE: float = 0.20        # входим, если цена в нижних 20% диапазона (0=поддержка) # 24.11: вход ближе к краю = больше хода до mid при том же стопе    
+    RANGE_ENTRY_RSI_MIN: float = 20.0       # зона разворота у поддержки # 24.11: синхрон с render
+    RANGE_ENTRY_RSI_MAX: float = 65.0 # 24.11: синхрон с render    
     RANGE_MIN_TP1_NET_PCT: float = 0.8      # мин. чистый ход до TP1 после round-trip комиссий (%)
     RANGE_TP2_RESISTANCE_BUFFER: float = 0.10  # TP2 = на 10% ниже верхней границы
     # (#range-tp2-dynamic-2026-08-27) Буфер TP2 (доля ширины диапазона, на
@@ -1098,8 +1189,8 @@ class Settings(BaseSettings):
     RANGE_TP2_DYNAMIC_MIN_BUFFER: float = 0.0   # 0 = TP2 на самой границе диапазона
     RANGE_TP2_DYNAMIC_ADX_BASE: float = 15.0    # range обычно ниже трендового порога 23
     RANGE_TP2_DYNAMIC_ADX_SPAN: float = 15.0
-    RANGE_STOP_ATR_MULT: float = 2.5        # стоп = поддержка − 0.5·ATR
-    RANGE_MIN_SETUP_SCORE: float = 60.0
+    RANGE_STOP_ATR_MULT: float = 0.6 # 24.11: стоп 2.39% при MFE 0.62% и tp1reach 0% — стоп в 4 раза дальше типичного хода
+    RANGE_MIN_SETUP_SCORE: float = 60.0 
     # Range-шорт от верхней границы коридора (требует futures-исполнения).
     RANGE_ALLOW_SHORT: bool = True
     # (#audit-2026-08-27) Раньше читался через strategy_profiles._b(..., True)
@@ -1149,7 +1240,7 @@ class Settings(BaseSettings):
     CRT_TARGETS_MODE: str = "extended"
     CRT_REQUIRE_PREMIUM_DISCOUNT: bool = True
     CRT_STOP_BUFFER_PCT: float = 0.05      # буфер за хвостом C2 (доля диапазона)
-    CRT_TP2_RR: float = 2.0                # R:R для TP2 (1:2)
+    CRT_TP2_RR: float = 2.5                # 24.11: синхрон с render; dynamic только расширяет вверх
     # (#crt-tp2-dynamic-2026-08-27) Зеркало TREND_TP2_DYNAMIC_* без KAMA-члена
     # (CRT её не считает). Работает ТОЛЬКО когда CRT_TARGETS_MODE=extended —
     # в режиме "range" TP2 структурный (CRH/CRL), rr в нём не участвует.
@@ -1170,10 +1261,12 @@ class Settings(BaseSettings):
     # (#5) Минимальный RR для TP1: если ликвидность (CRL/CRH) ближе 1R, TP1
     # тянется к 1R. Иначе gross RR_tp1 ~1.06 после комиссий проседает до ~0.43
     # и downstream блокирует CRT каждый цикл (blocked_low_net_rr_tp1).
-    CRT_MIN_RR_TP1: float = 1.0
-    CRT_ALLOW_LONG: bool = True
+    # 24.11: синхрон с render. Подтяжка TP1 к 1R уводит цель ДАЛЬШЕ при tp1reach 26.9% и 
+    # capture −59.9%; экономику держит CRT_MIN_TP1_NET_PCT
+    CRT_MIN_RR_TP1: float = 0.30 
+    CRT_ALLOW_LONG: bool = True 
     CRT_ALLOW_SHORT: bool = True
-    CRT_MIN_SETUP_SCORE: float = 55.0
+    CRT_MIN_SETUP_SCORE: float = 60.0 # 24.11: синхрон с render (было 55): fvg-подтверждение возвращено, планка 60 держит частоту
     # (#leak-B) Фейдить вход не только по ярлыку тренда (часто "mixed"/"flat"),
     # но и по моментуму HTF/MTF: long не берём при bearish/oversold, short — при
     # bullish/overheated. Лечит контртрендовые crt_bull_sweep лонги в медвежьей
@@ -1212,13 +1305,13 @@ class Settings(BaseSettings):
     # 08.08: SCALP_TARGET_PCT=0.8% превышает медианный MFE (0.39-0.60%) в 1.3-2x,
     # что блокирует все скальп-сигналы по TP_REACH гейту. Цель снижена до 0.5%
     # для соответствия реальной волатильности крипты на 5m.
-    SCALP_TARGET_PCT: float = 0.5              # TP1 (net target, %) - снижено с 0.8%
+    SCALP_TARGET_PCT: float = 0.30            # 24.11: /analytics/mfe-mae avg_mfe 0.2984%, tp1reach 11% — цель 0.4–0.5% недостижима в 2 раза
     SCALP_TP2_MULT: float = 2.0               # TP2 = target * mult (увеличено для компенсации)
-    SCALP_STOP_BUFFER_ATR: float = 1.0         # стоп за микро-экстремумом (в ATR) - увеличено с 0.5
+    SCALP_STOP_BUFFER_ATR: float = 0.5  # 24.11: стоп 0.43% при медианном MFE 0.20% — геометрия перевёрнута; буфер 0.5 сближает стоп с целью
     SCALP_MIN_OBI: float = 0.10              # подтверждение потоком (OBI)
     SCALP_ENG_MIN_TP1_NET_PCT: float = 0.3     # мин. net TP1 после комиссий, %
     SCALP_ENG_ALLOW_SHORT: bool = True
-    SCALP_MIN_SETUP_SCORE: float = 50.0
+    SCALP_MIN_SETUP_SCORE: float = 65.0        # 24.11: синхрон с render
     SCALP_MAX_SPREAD_PCT: float = 0.06         # дороже — скальп не входит
     SCALP_REQUIRE_DEPTH: bool = True           # без живого стакана не торгует
     # (#scalp-htf-veto-2026-07-10) Микро-скальп по принципу живёт на 5m и HTF не
@@ -1260,8 +1353,8 @@ class Settings(BaseSettings):
     # TP1 ≈$1.35, TP2 ≈$2.3). Прежние $-флоры (TP1 0.5 / TP2 1.0) рубили КАЖДЫЙ скальп
     # (tp1_net_pnl_below_min_usdt). Софт: TP1 0.20, TP2 0.55 — реальный гейт это
     # net_rr_tp2 (runner платит >1.10× стопа). Как у тренда: судим по TP2, не по TP1.
-    SCALP_MIN_NET_PNL_TP1_USDT: float = 0.20           # санити, не гейт
-    SCALP_MIN_NET_PNL_TP2_USDT: float = 0.55           # санити, не гейт
+    SCALP_MIN_NET_PNL_TP1_USDT: float = 0.10           # санити, не гейт # 24.11: синхрон с render
+    SCALP_MIN_NET_PNL_TP2_USDT: float = 0.30           # санити, не гейт # 24.11: синхрон с render
     SCALP_MIN_NET_RR_TP2: float = 1.10                 # РЕАЛЬНЫЙ гейт экономики скальпа
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_USDT: float = 0.0  # абсолютный edge-флор anti-drain
     SCALP_ANTI_DRAIN_MIN_EDGE_AFTER_COSTS_PCT: float = 0.0   # тот же флор долей номинала
@@ -1286,8 +1379,8 @@ class Settings(BaseSettings):
     # arm 0.3 / giveback 0.4 / time_stop 45 → +0.64% total против −0.74% факта
     # (все 0.5/0.6-варианты в минусе). Плюс телеметрия: positive_then_negative 57–62%
     # — замок вооружался слишком поздно и отдавал слишком много пика.
-    SCALP_BREAKEVEN_ARM_PCT: float = 0.45         # MFE %, с которого включается замок
-    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.25  # выходим, отдав эту долю пика MFE
+    SCALP_BREAKEVEN_ARM_PCT: float = 0.30         # 24.11: синхрон с render; scalp_breakeven_lock 13 сделок +10.69, 100% win
+    SCALP_BREAKEVEN_GIVEBACK_SHARE: float = 0.40  # выходим, отдав эту долю пика MFE # 24.11: синхрон с render
     # (#geometry-arm-2026-07-09) Замок масштабируется ГЕОМЕТРИЕЙ сделки: эффективный
     # arm = max(SCALP_BREAKEVEN_ARM_PCT, TP1_dist × эта доля). Микро-скальп (TP1
     # ~0.8-1%) живёт на абсолютных 0.3%; range-вход (TP1 ~2%) вооружается от ~0.6%.
@@ -1365,13 +1458,13 @@ class Settings(BaseSettings):
     # Не HFT: используем устойчивые дисбалансы стакана как ПОДТВЕРЖДЕНИЕ входов
     # (spread-гейт + OBI + стенки) и ускоритель скальп-выхода (CVD). За флагом;
     # если WS молчит — анализатор уходит в pass-through, торговля как обычно.
-    ENABLE_ORDERBOOK_ENGINE: bool = False
+    ENABLE_ORDERBOOK_ENGINE: bool = True # 24.11: синхрон с боевой реальностью (render=true)
     # Книга должна быть от ТОГО ЖЕ инструмента, которым торгуем: спот и перпетуал
     # — разные книги с разной ликвидностью и разной лентой сделок. При
     # ENABLE_FUTURES_EXECUTION=true сюда нужен swap, иначе OBI/CVD/стенки и
     # перенос входа в entry_zone описывают чужой инструмент.
     # Пустой OB_WS_URL → эндпоинт берётся по OB_MARKET_TYPE (см. orderbook_feed).
-    OB_MARKET_TYPE: str = "spot"
+    OB_MARKET_TYPE: str = "swap" # 24.11: синхрон с render
     # (#market-data-swap-2026-10-25) Рынок, с которого берутся СВЕЧИ и ТИКЕР
     # (MarketDataService): индикаторы, цена входа и paper-выходы. Исполнение,
     # стакан и стопы идут по своп-контрактам, а символ BTC/USDT в ccxt — это СПОТ,
@@ -1379,7 +1472,7 @@ class Settings(BaseSettings):
     # spot — прежнее поведение (дефолт, ничего не меняет); swap — BTC/USDT →
     # BTC/USDT:USDT. Только для OKX; символ без свопа откатывается на спот с
     # предупреждением в логе. Любое другое значение читается как spot.
-    MARKET_DATA_TYPE: str = "spot"
+    MARKET_DATA_TYPE: str = "swap" # 24.11: синхрон с render
     # Дать механизму пинг-понга OKX больше времени на стабилизацию сетевого лага
     OB_WS_READ_TIMEOUT_SEC: float = 60.0 
     # (#depth-venue-2026-09-07) Чью книгу слушать. Пусто → биржа, на которой
@@ -1474,7 +1567,7 @@ class Settings(BaseSettings):
     # =========================
     # Перевод основной стратегии на futures (открывает шорты + плечо).
     # Включать ТОЛЬКО на доказанном edge (net PnL > 0 на paper).
-    ENABLE_FUTURES_EXECUTION: bool = False
+    ENABLE_FUTURES_EXECUTION: bool = True # 24.11: синхрон с render
     # Динамическое плечо по conviction (грейд × сила тренда × волатильность).
     # OFF → плечо всегда 1.0 (без эффекта).
     ENABLE_SMART_LEVERAGE: bool = False
@@ -1538,7 +1631,8 @@ class Settings(BaseSettings):
     # =========================
     # SYMBOL PERFORMANCE GUARD
     # =========================
-    SYMBOL_PERF_LOOKBACK: int = 10
+    # 24.11: BUG — lookback=10 < BLOCK_MIN_HISTORY=12: closed_count<=10, block-ветка мертва математически. HYPE −32.94/28 сделок проходил как ok
+    SYMBOL_PERF_LOOKBACK: int = 30
     # (#no-noise-guard-2026-07-27) 3 → 12 и 5 → 20. При min_history=3 гвард делал
     # вывод о символе по ОДНОЙ-ДВУМ сделкам: после единственного стопа резал
     # размер на 35%, а symbol_policy поднимал требуемую confidence на +5 — из-за
@@ -1673,7 +1767,7 @@ class Settings(BaseSettings):
     # станет неполным (новый контур, потребляющий маржу), его надо вернуть в
     # false, и production_blockers() снова закроет live.
     UNIFIED_MARGIN_ACCOUNTING: bool = True
-    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 5
+    ANTI_DRAIN_MAX_OPEN_POSITIONS: int = 6 # 24.11: 20.11 было 38 шортов за день — одна коррелированная ставка; 6 слотов на 4 движка
     ANTI_DRAIN_MAX_ACTIVE_PER_SYMBOL: int = 1
     # Limited-live допускает максимум четыре плановых стопа по 0.25% за день.
     ANTI_DRAIN_MAX_DAILY_LOSS_PCT: float = 6.0
@@ -1746,7 +1840,7 @@ class Settings(BaseSettings):
     # то есть предохранителя не было вовсе. - что ЗА БРЕД??? никто нормальный не ограничивает кол-во сделок??
     # ограничивать нужно кол-во убыточных сделок и не допускать убыточные сделки!! 
     MAX_TRADES_PER_DAY: int = 100
-    MAX_DRAWDOWN_PCT: float = 15.0
+    MAX_DRAWDOWN_PCT: float = 12.0 # 24.11: агрессия с тормозом
     # MAX_OPEN_POSITIONS удалён: его читал только RiskEngine.allow(), который в
     # боевом цикле не вызывался (мёртвый код). Реальный потолок числа позиций —
     # ANTI_DRAIN_MAX_OPEN_POSITIONS (anti_drain_guard). RiskEngine тоже удалён.
@@ -1797,7 +1891,12 @@ class Settings(BaseSettings):
     # ML off/нет score → чистый грейд (fail-open). История: #grade-ml-2026-07-06
     # игнорировал грейд при живом score (тогда грейды слипались в B); после
     # рекалибровки порогов (#grade-fix-2026-07-06) ось снова информативна.
-    ML_SIZE_ALLOC_ENABLED: bool = True
+    # (#ml-shadow-size-leak-2026-11-24) В shadow ML не имеет права трогать размер: 
+    # ось читает ml_score независимо от режима и при score<0.45 ужимала сделку до 0.5. 
+    # Замер: bucket 0.00–0.30 winrate 57.8% (лучший) — ужимали прибыльное ведро. 
+    # Возврат в true только вместе с advisory/full_auto после live-гейта
+    
+    ML_SIZE_ALLOC_ENABLED: bool = False 
     ML_SIZE_FULL_MIN_SCORE: float = 0.45   # >= → ML-ось не режет (мультипликатор 1.0)
     ML_SIZE_LOW_MULT: float = 0.5          # < → ML-ось ужимает до этой доли
 
@@ -1981,8 +2080,9 @@ class Settings(BaseSettings):
 
     # (#9) Снижено 1.5→0.5: TP1 — частичная де-риск точка на близкой структуре,
     # его $-награда мала by design. Реальная награда и её гейт — на TP2.
-    MIN_NET_PNL_TP1_USDT: float = 1.5
-    MIN_NET_PNL_TP2_USDT: float = 3.5 # 29.08.2026 ,было 3.5
+    
+    MIN_NET_PNL_TP1_USDT: float = 0.5 # 24.11: синхрон с render
+    MIN_NET_PNL_TP2_USDT: float = 2.5 # 29.08.2026 ,было 3.5 # 24.11: синхрон с render
 
     # (#7) Штраф за вход против краткосрочного перегрева: не покупаем вершину
     # (long при 1m/5m overheated) и не шортим дно (short при 1m/5m oversold).
@@ -2165,7 +2265,8 @@ class Settings(BaseSettings):
     # пересечения TP1, считается касанием): 0.75 → +2.6, 0.9 → +6.2,
     # 1.0 → +9.3. Правило выбора, согласованное с владельцем 11.09: уровень с
     # лучшей пессимистичной оценкой — 1.0.
-    POST_TP1_LOCK_FRAC: float = 0.0
+    # 24.11: синхрон с prod. 720ч: 103 post_tp1_lock_stop +167.60; 0/56 дошли до TP2, missed_profit 0 — замок не режет раннеров    
+    POST_TP1_LOCK_FRAC: float = 1.0
 
     # (#tp1-partial-2026-07-09) Гейт ОЖИДАЕМОЙ экономики: раз на TP1 реализуется
     # половина, «награда» сделки = share·netTP1 + (1−share)·netTP2. Требуем, чтобы
@@ -2244,8 +2345,10 @@ class Settings(BaseSettings):
     # Радар (watch_long / watch_short). Третья копия того же перекоса: было 50
     # для лонга против 47 для шорта. Наблюдение не ведёт к сделке напрямую, но
     # кормит витрину и ленту решений — смещённая картина мира тоже вводит в
-    # заблуждение.
-    RADAR_WATCH_MIN_TOTAL_SCORE: float = 50.0
+    # заблуждение. 
+    # 24.11: reversal_long — единственный режим с +ожиданием (E_R +0.169, tp1reach 60%), 
+    # аналитика помечает его gate_blocks_but_regime_is_profitable. Больше эскалаций watch→reversal
+    RADAR_WATCH_MIN_TOTAL_SCORE: float = 45.0 
 
     # (#no-limbo-2026-07-28) Сильный сетап одобряется по общей оценке, даже если
     # недобрал по частному критерию. Раньше между одобрением и отказом лежала
