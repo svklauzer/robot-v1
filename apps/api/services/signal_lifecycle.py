@@ -770,7 +770,8 @@ class SignalLifecycleManager:
                 # Проверяем, включен ли режим динамического дыхания ATR
                 use_atr = bool(getattr(settings, "TZ_USE_DYNAMIC_ATR_STOPS", False))
                 _lifecycle_ctx = (signal.plan_json or {}).get("lifecycle") or {}
-                _live_atr = float(self._tz_context(signal, _lifecycle_ctx).get("atr", 0.0) if use_atr else 0.0)
+                _tz_ctx = self._tz_context(signal, _lifecycle_ctx) if use_atr else None
+                _live_atr = float((_tz_ctx or {}).get("atr") or 0.0)
 
                 if use_atr and _live_atr > 0:
                     # КРИТИЧЕСКИЙ ФИКС: Вместо удушения в безубыток, ставим стоп остатка на расстоянии ATR * 1.0 от TP1
