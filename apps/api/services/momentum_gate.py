@@ -1,32 +1,34 @@
-"""Вход, когда импульс уже смотрит по тренду (#momentum-late-2026-09-12).
+"""Вход против импульса 15m — ошибочная сторона разворота (#momentum-reversal-2026-11-23).
 
-Разбор стопов 12.09 по причинам входа трендового движка. Причина собирается
-как `mtf_trend_<up|down>_<импульс 15m>_<объём>_structure_confirmed`, импульс —
-`_momentum_state` на 15m: bullish (RSI > 52 и гистограмма MACD > 0), bearish —
-зеркально, overheated/oversold — края RSI, иначе neutral.
+Исходная версия (#momentum-late-2026-09-12) блокировала ALIGNED-импульс
+(up+bullish, down+bearish) по замеру 12.09. Свежая когорта (ноябрь, API)
+премису перевернула:
 
-    импульс по тренду (up+bullish, down+bearish)   79 сделок  стопов 46%  −43.4 USDT
-    нейтральный                                     60 сделок  стопов 30%   +5.8 USDT
+    trend_down + bearish (продолжение)  октябрь  +0.44 R/сделку  -> НЕ режем
+    trend_down + bullish (контр-импульс) ноябрь  −0.54 USDT/сделку -> режем
+    long + bullish за ноябрь = 0 сделок (система не покупает молодой аптренд)
 
-Разрыв держится в обеих половинах по времени (ранняя: −16.3 против +0.1,
-поздняя: −27.1 против +5.7) и в обе стороны (лонги −21.7, шорты −21.6). Это та
-же картина, что «входы приходятся на конец хода»: бычий импульс на 15m в
-восходящем тренде — ход уже случился. При этом оценка уверенности за такой
-импульс ДОПЛАЧИВАЕТ (momentum_score 70 против 45 у нейтрального) — та же
-ловушка, что с грейдом A.
+Поэтому гейт развёрнут: блокируем OPPOSED (импульс ПРОТИВ стороны сделки),
+а ALIGNED оставляем в тени. Оба поведения — флаги, откат без деплоя кода.
 
-Режим `MOMENTUM_GATE_MODE`: off | shadow | enforce. В shadow вердикт пишется в
-план сделки и ничего не блокирует; в enforce такой вход не открывается. Решение
-о включении — за владельцем, по данным тени.
+Причина входа собирается как `mtf_trend_<up|down>_<импульс 15m>_<объём>_structure_confirmed`.
+Режим `MOMENTUM_GATE_MODE`: off | shadow | enforce.
 """
 from __future__ import annotations
 
 from core.config import settings
 
-# Импульс, совпадающий с направлением тренда: ход уже идёт.
+# Импульс по направлению тренда: ход уже идёт (продолжение).
 _ALIGNED = {
     "up": frozenset({"bullish", "overheated"}),
     "down": frozenset({"bearish", "oversold"}),
+}
+
+# Импульс ПРОТИВ стороны сделки: ошибочная сторона разворота.
+# шорт при бычьем 15m = продаём молодой аптренд; лонг при медвежьем = ловим нож.
+_OPPOSED = {
+    "up": frozenset({"bearish", "oversold"}),
+    "down": frozenset({"bullish", "overheated"}),
 }
 
 
@@ -47,13 +49,19 @@ def evaluate(reason: str | None) -> dict | None:
         return None
     direction, momentum = tokens[2], tokens[3]
     aligned = momentum in _ALIGNED[direction]
+    opposed = momentum in _OPPOSED[direction]
+
+    block_aligned = bool(getattr(settings, "MOMENTUM_GATE_BLOCK_ALIGNED", False))
+    block_opposed = bool(getattr(settings, "MOMENTUM_GATE_BLOCK_OPPOSED", True))
+    would_block = (block_aligned and aligned) or (block_opposed and opposed)
+
     return {
         "mode": current,
         "direction": direction,
         "momentum": momentum,
         "aligned": aligned,
-        # Вердикт гейта независимо от режима — чтобы тень можно было сравнить
-        # с исходами, не повторяя логику гейта по памяти.
-        "would_block": aligned,
-        "blocks": current == "enforce" and aligned,
+        "opposed": opposed,
+        # Вердикт независимо от режима — тень сравнивается с исходами по нему.
+        "would_block": would_block,
+        "blocks": current == "enforce" and would_block,
     }
