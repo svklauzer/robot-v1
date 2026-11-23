@@ -172,6 +172,38 @@ def evaluate(contexts, *, regime: str, side: str) -> TrendTrigger:
     mode = str(getattr(settings, "TREND_TRIGGER_MODE", "shadow")).lower().strip()
     enforcing = mode == "enforce"
 
+    # (#reversal-min-ext-2026-11-24) НИЖНЯЯ граница extension — вторая половина
+    # перехода «состояние → событие», названная в докстринге модуля ограничением.
+    # Верхний порог ловит «цена улетела от опоры», но не «цена ещё ПРОТИВ тренда»:
+    # extension < 0 означает, что откат не завершён и возобновления не было —
+    # вход ловит нож, а не продолжает движение.
+    #
+    # Замер по свежей ноябрьской когорте (API /signals, трендовые входы):
+    #   extension < 0    24 сделки  −24.29 USDT  −1.01/сделку  ← худший бакет
+    #   extension 0–2   139 сделок  −21.44 USDT  −0.15/сделку
+    #   extension > 2    15 сделок  −10.15 USDT  −0.68/сделку
+    #
+    # Полное подтверждение возобновления требует истории баров между сканами
+    # (см. «Ограничение» в докстринге). Здесь — его часть, считаемая из текущего
+    # среза: цена обязана быть на ВЕРНОЙ стороне EMA20 по направлению сделки.
+    #
+    # Флаг отдельный, потому что 0.0 — РАБОЧЕЕ значение порога, а не «выключено»:
+    # выключение делается флагом, а не подстановкой отрицательного числа.
+    # Тень пишет вердикт в план (reason *_shadow), вход не блокирует — как и
+    # верхний порог, чтобы правило можно было проверить на новой выборке.
+    min_ext_enabled = bool(getattr(settings, "TREND_MIN_EXTENSION_ENABLED", False))
+    min_ext = float(getattr(settings, "TREND_MIN_EXTENSION_ATR", 0.0))
+    under_limit = min_ext_enabled and extension < min_ext
+    if under_limit:
+        return TrendTrigger(
+            allowed=not enforcing,
+            reason="below_ema20_not_resumed" if enforcing else "below_ema20_not_resumed_shadow",
+            extension_atr=round(extension, 4),
+            max_extension_atr=limit,
+            regime=regime_value,
+            side=side_value,
+        )
+
     if over_limit:
         return TrendTrigger(
             allowed=not enforcing,
