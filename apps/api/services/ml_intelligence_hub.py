@@ -276,6 +276,14 @@ class MLIntelligenceHub:
                                    "win_rate": st.get("win_rate"), "label_kind": st.get("label_kind")})
                 last_attempt = st.get("last_attempt")
                 m = st.get("metrics") or {}
+                # (#ml-card-binding-metrics-2026-11-24) Карточка показывала
+                # events_per_feature (по ВСЕМ данным) и val_auc, а полномочия
+                # решает train_events_per_feature и wf_auc. Показываем оба:
+                # «9 из 10» на экране при связывающих 6.85 — это ввод в заблуждение.
+                for k in ("train_events_per_feature", "train_positives",
+                          "wf_auc", "wf_auc_ci95", "wf_oos_positives",
+                          "live_n", "live_auc", "live_econ_diff"):
+                    metrics[k] = m.get(k)            
                 for k in metrics:
                     if k in m:
                         metrics[k] = m[k]
