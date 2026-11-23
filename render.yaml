@@ -226,7 +226,7 @@ services:
       - key: ML_LABEL_KIND
         value: "net_r"
       - key: ML_LABEL_NET_R_MIN
-        value: "1.0"
+        value: "0.5"
       - key: ML_TRAIN_ON_LOGGED_FEATURES
         value: "true"
       - key: ML_ENTRY_…0"
