@@ -215,7 +215,9 @@ services:
       # Активируем искусственный интеллект на управление деньгами
       - key: ML_MODE
         value: "shadow"
-      # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
+      # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок 
+      # 24.11: в shadow порог НЕ блокирует — только рекомендация в логе.
+      # Гейт оживает в advisory/full_auto, и только после live_auc>=0.55.
       - key: ML_MIN_SCORE_TO_TRADE
         value: "0.50"
 
@@ -225,23 +227,25 @@ services:
       # векторе входа, дрейф реализован, полномочия только по live-метрике.
       - key: ML_LABEL_KIND
         value: "net_r"
+      # 0.5R вместо 1.0: при 1.0 positives=66 на 20 фич (EPV 3.3) — модель
+      # переобучена по построению. 0.5R включает модальных lock-победителей
+      # (0.65–0.75R) и поднимает EPV до читаемого.
       - key: ML_LABEL_NET_R_MIN
         value: "0.5"
       - key: ML_TRAIN_ON_LOGGED_FEATURES
         value: "true"
-      - key: ML_ENTRY_…0"
+      - key: ML_ENTRY_PRICE_BASIS
+        value: "zone_mid"
+      - key: ML_DRIFT_ENABLED
+        value: "true"
+      - key: ML_DRIFT_PSI_MAX
+        value: "0.25"
+      - key: ML_POSITIVE_SHIFT_Z_WARN
+        value: "2.0"
       - key: ML_PROMOTION_MIN_LIVE_AUC
         value: "0.55"
       - key: ML_PROMOTION_MIN_ECON_DIFF
         value: "0.0"
-      # В shadow ML не трогает размер: ось ужимала score<0.45 до 0.5, а это
-      # ведро с winrate 57.8% (лучшее). Тень обязана быть тенью.
-      - key: ML_SIZE_ALLOC_ENABLED
-        value: "false"
-      # Окно обучения жило только в Dashboard — объявляем, чтобы блюпринт не
-      # откатил его молча при следующем sync.
-      - key: ML_TRAIN_WINDOW_DAYS
-        value: "65"
 
         
       - key: REGIME_EXP_SIZING_ENABLED
@@ -266,7 +270,7 @@ services:
       - key: TREND_MAX_EXTENSION_ATR
         value: "2.5"
       - key: TZ_ADX_MIN
-        value: "16.0"
+        value: "18.0"
       - key: TZ_STOCH_ZONE
         value: "35.0"
       - key: TZ_MODE
@@ -340,7 +344,18 @@ services:
       # Причина не в движках, а в четырёх фильтрах: DI без величины, ADX-порог
       # не вооружён, momentum-гейт стоял наоборот, обход молодого тренда тугой.
 
-      # Величина DI, а н…alue: "0.0"
+      # Величина DI, а не только знак. Ноябрь: DI<15 −0.31/tr (80 сделок)
+      # против DI>=15 +0.39/tr (113). Требует патча tz_entry_shadow: код
+      # "di_weak" → семейство "di" (уже вооружено в TZ_ENFORCE_CONDITIONS).
+      - key: TZ_DI_SPREAD_MIN
+        value: "15"
+      # Цена ещё против тренда (extension<0) = откат не завершён, «ловля ножа».
+      # Ноябрь: ext<0 −1.01/tr (24 сделки). Требует патча trend_trigger.
+      # Флаг отдельный: 0.0 — рабочее значение порога, а не «выключено».
+      - key: TREND_MIN_EXTENSION_ENABLED
+        value: "true"
+      - key: TREND_MIN_EXTENSION_ATR
+        value: "0.0"
       # Гейт импульса ловит КОНТР-сторону: шорт при bullish 15m = продажа в
       # молодой аптренд (−0.54/tr). Продолжение (down+bearish, +0.44R) не режем.
       - key: MOMENTUM_GATE_BLOCK_OPPOSED
@@ -484,6 +499,7 @@ services:
         value: "0.30" # Взводить BE-замок при достижении 0.3% прибыли
       - key: SCALP_BREAKEVEN_GIVEBACK_SHARE
         value: "0.40" # Отдавать не более 40% от пика MFE (фиксировать чистый профит)
+      # 24.11: значение применяется ТОЛЬКО при SCALP_TIME_STOP_ENABLED=true.
       - key: SCALP_TIME_STOP_MIN     
         value: "45.0"   # Жесткий тайм-стоп: если не пошло за 45 минут.
 
@@ -517,7 +533,7 @@ services:
       - key: RANGE_MIN_WIDTH_PCT
         value: "1.2"
       - key: RANGE_SUPPORT_ZONE
-        value: "0.20"
+        value: "0.35"
 
 
       # 4. Повышаем порог минимального профита, чтобы гейт отсекал центовый мусор
@@ -649,7 +665,7 @@ services:
       # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
       # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
-        value: "100"
+        value: "6"
       - key: MAX_DRAWDOWN_PCT
         value: "12"
 
