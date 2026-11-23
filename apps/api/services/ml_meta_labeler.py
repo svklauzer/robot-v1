@@ -41,8 +41,11 @@ def _build_estimator():
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
     rf = RandomForestClassifier(
-        n_estimators=300, max_depth=5, min_samples_leaf=2,
-        class_weight="balanced_subsample", max_features="log2",
+        n_estimators=400,
+        max_depth=3,            # было 5
+        min_samples_leaf=8,     # было 2 — лист не должен запоминать 2 сделки
+        class_weight="balanced_subsample",
+        max_features="sqrt",
         random_state=42, n_jobs=1,
     )
     pipeline = Pipeline([("scaler", StandardScaler()), ("clf", rf)])
