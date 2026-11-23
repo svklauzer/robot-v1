@@ -140,7 +140,8 @@ class MLIntelligenceHub:
         ensemble_score, weights = self._ensemble_predictions(predictions)
         uncertainty = self._calculate_uncertainty(predictions)
         decision = self._make_decision(ensemble_score, mode, uncertainty, weights, explanations)
-        decision.model_version = "meta_v6" if "meta_labeler" in predictions else "heuristic_fallback"
+        decision.model_version = ("meta_v6" if "meta_labeler" in predictions
+                                  else "heuristic_fallback")
         decision.ensemble_weights = weights
         decision.feature_contributions = self._merge_explanations(explanations)
         decision.uncertainty = uncertainty
@@ -165,17 +166,26 @@ class MLIntelligenceHub:
         }
         return decision
 
-    def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
-        # (#ml-audit) валидированная модель — единственный авторитет; иначе fallback.
+     def _ensemble_predictions(self, predictions: dict[str, float]) -> tuple[float, dict[str, float]]:
+        # (#ml-ensemble-heuristic-swap-2026-11-24) Прежняя логика при
+        # auc_is_reliable=False обнуляла вес модели и ставила 0.70 на
+        # outcome_stats (winrate ПО ГРЕЙДУ) + 0.30 на эвристику. Ось грейда
+        # измерена антипредсказательной (GRADE_AXIS_VALIDATED=false), поэтому
+        # в ml_score уходил заведомо плохой прогноз — и shadow-когорта, по
+        # которой мы собирались мерить живой край модели, измеряла эвристику.
+        #
+        # Тень обязана логировать ИМЕННО модель, даже ненадёжную: иначе
+        # когорта для её оценки не наберётся никогда. Полномочия на деньги
+        # отдельно гейтит resolve_effective_mode — там и место для строгости.
         if "meta_labeler" in predictions:
             weights = {"meta_labeler": 1.0}
         elif "scorer" in predictions:
-            weights = {"scorer": 1.0}
+            weights = {"scorer": 1.0}      # fallback, помечается в model_version
         else:
             weights = {k: 1.0 / len(predictions) for k in predictions}
         total = sum(weights.values())
-        score = sum(predictions[k] * w for k, w in weights.items()) / total if total else 0.5
-        return score, {k: round(w / total, 3) for k, w in weights.items()} if total else {}
+        score = sum(predictions[k] * w for k, w in weights.items()) / total
+        return score, {k: round(w / total, 3) for k, w in weights.items()}
 
     def _calculate_uncertainty(self, predictions: dict[str, float]) -> float:
         if len(predictions) < 2:
