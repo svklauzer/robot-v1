@@ -164,6 +164,15 @@ class MLController:
             return {**feat_log, "mode": mode, "ml_score": None, "action": "passthrough",
                     "allow": True, "size_multiplier": 1.0, "reason": "ml_not_ready"}
         ver = self._model_version()
+        # (#ml-audit) Вектор, который ВИДЕЛ скор. Без него logged_features()
+        # всегда None, обучение пересчитывает фичи из филла закрытой сделки,
+        # а скор считался от середины зоны — рассинхрон train/serve.
+        try:
+            from services.ml_features import features_dict
+            ver = {**ver, "features": features_dict(candidate)}
+        except Exception:  # noqa: BLE001 — лог не на крит-пути
+            pass
+
         base = {**ver, **feat_log, "ml_score": round(ml_score, 4)}
         if mode == "shadow":
             return {**base, "mode": "shadow", "action": "log_only", "allow": True,
