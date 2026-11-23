@@ -77,6 +77,8 @@ CONDITION_FAMILY = {
     "price_below_kama": "kama",
     "price_above_kama": "kama",
     "adx_below_min": "adx",
+    "di_against_side": "di",
+    "di_weak": "di",
     # (#tz-enforce-adx-rising-2026-09-03) «ADX растёт» вынесен в СОБСТВЕННОЕ
     # семейство и больше не делит его с `adx_below_min`. Это два разных по
     # природе условия, и склеенные они были невключаемы:
@@ -219,6 +221,10 @@ def evaluate(timeframes, *, regime: str, side: str) -> TZShadow:
     di_spread = (plus_di - minus_di) if is_long else (minus_di - plus_di)
     if di_spread <= 0:
         failed.append(f"di_against_side:{di_spread:.1f}")
+    else:
+        di_min = float(getattr(settings, "TZ_DI_SPREAD_MIN", 0.0))
+        if di_min > 0 and di_spread < di_min:
+            failed.append(f"di_weak:{di_spread:.1f}<{di_min:.0f}")
 
     # 3. Точка входа: цена в откате, а не в растяжении. Полноценное
     #    пересечение %K/%D требует предыдущего бара — его в срезе нет,
