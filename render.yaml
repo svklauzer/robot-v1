@@ -207,7 +207,7 @@ services:
       - key: CORR_CLUSTER_PER_ENGINE
         value: "true"
       - key: CORR_CLUSTER_PORTFOLIO_MAX_SAME_DIR
-        value: "15"
+        value: "3"
       - key: REENTRY_COOLDOWN_PER_ENGINE
         value: "true"
       
@@ -218,8 +218,34 @@ services:
       # Повышаем планку допуска. Всё, что ниже 0.50 по скору модели — жесткий блок ордера
       - key: ML_MIN_SCORE_TO_TRADE
         value: "0.50"
-      - key: REGIME_EXP_SIZING_ENABLED
+
+      # ── ML v6 (#ml-audit-2026-11-24) ──────────────────────────────────────
+      # live_auc 0.4564 / live_auc_vs_train_label 0.4976 при val_auc 0.8484 —
+      # офлайн-метрика не переносилась в бой. Метка экономическая, обучение на
+      # векторе входа, дрейф реализован, полномочия только по live-метрике.
+      - key: ML_LABEL_KIND
+        value: "net_r"
+      - key: ML_LABEL_NET_R_MIN
+        value: "1.0"
+      - key: ML_TRAIN_ON_LOGGED_FEATURES
+        value: "true"
+      - key: ML_ENTRY_…0"
+      - key: ML_PROMOTION_MIN_LIVE_AUC
+        value: "0.55"
+      - key: ML_PROMOTION_MIN_ECON_DIFF
+        value: "0.0"
+      # В shadow ML не трогает размер: ось ужимала score<0.45 до 0.5, а это
+      # ведро с winrate 57.8% (лучшее). Тень обязана быть тенью.
+      - key: ML_SIZE_ALLOC_ENABLED
         value: "false"
+      # Окно обучения жило только в Dashboard — объявляем, чтобы блюпринт не
+      # откатил его молча при следующем sync.
+      - key: ML_TRAIN_WINDOW_DAYS
+        value: "65"
+
+        
+      - key: REGIME_EXP_SIZING_ENABLED
+        value: "true"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
         value: "false"
       - key: DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE
@@ -238,9 +264,9 @@ services:
       - key: TREND_TRIGGER_MODE
         value: "enforce"
       - key: TREND_MAX_EXTENSION_ATR
-        value: "4.5"
+        value: "2.5"
       - key: TZ_ADX_MIN
-        value: "20.0"
+        value: "16.0"
       - key: TZ_STOCH_ZONE
         value: "35.0"
       - key: TZ_MODE
@@ -251,7 +277,7 @@ services:
       # всех крупных стопов 01–03.09: 11 сделок с провалом этого условия дали
       # −9.74 USDT, 4 без провала — +8.90.
       - key: TZ_ENFORCE_CONDITIONS
-        value: kama,di,obv,adx_rising
+        value: kama,di,obv,adx,adx_rising
       - key: TZ_ENFORCE_MIN_SAMPLE
         value: "0"
 
@@ -263,11 +289,11 @@ services:
       - key: ANTI_CHOP_YOUNG_TREND_ENABLED
         value: "true"
       - key: ANTI_CHOP_YOUNG_ADX_MIN
-        value: "20.0"
+        value: "16.0"
       - key: ANTI_CHOP_YOUNG_ADX_RISE_MIN
-        value: "0.5"
+        value: "0.3"
       - key: ANTI_CHOP_YOUNG_DI_SPREAD_MIN
-        value: "15.0"
+        value: "10.0"
 
       # ── Видимость и управление простоем цикла ─────────────────────────────
       # (#loop-skip-visibility-2026-09-04) Причина, по которой цикл не торгует,
@@ -303,11 +329,28 @@ services:
       - key: TZ_EXIT_ADX_FADE
         value: "6.0"       
       - key: TZ_HARD_STOP_LOSS_PCT
-        value: "5"
+        value: "3"
 
       - key: TZ_EXIT_ADX_PEAK_MIN
         value: "28.0"
+      # ── РАЗВОРОТ РЫНКА (#reversal-2026-11-24) ─────────────────────────────
+      # Система тормозила на разворотах: неделю рынок падал (19–20.11 шорты
+      # +42.52 и +46.37), затем притормозил и зародился аптренд — а мы продолжали
+      # продавать (21.11 −5.48, 22.11 −17.21, все stop_loss с MFE 0.01–0.31%).
+      # Причина не в движках, а в четырёх фильтрах: DI без величины, ADX-порог
+      # не вооружён, momentum-гейт стоял наоборот, обход молодого тренда тугой.
 
+      # Величина DI, а н…alue: "0.0"
+      # Гейт импульса ловит КОНТР-сторону: шорт при bullish 15m = продажа в
+      # молодой аптренд (−0.54/tr). Продолжение (down+bearish, +0.44R) не режем.
+      - key: MOMENTUM_GATE_BLOCK_OPPOSED
+        value: "true"
+      - key: MOMENTUM_GATE_BLOCK_ALIGNED
+        value: "false"
+      # Больше эскалаций watch→reversal: единственный режим с +ожиданием
+      # (E_R +0.169), аналитика: gate_blocks_but_regime_is_profitable.
+      - key: RADAR_WATCH_MIN_TOTAL_SCORE
+        value: "45"
       
       # ── TP2 как ЭТАП, а не потолок (#progressive-tp2-2026-09-03) ──────────
       # Раньше достижение TP2 закрывало позицию целиком по цене ровно tp2:
@@ -334,7 +377,7 @@ services:
       # Выключен 11.09 вместе с включением POST_TP1_LOCK_FRAC: на 103 сделках
       # −1.1 п.п. против факта (режет бегунов к TP2 на обычном откате).
       - key: POST_TP1_TRAIL_ENABLED
-        value: "false"
+        value: "true"
       - key: POST_TP1_TRAIL_MIN_MFE_PCT
         value: "0.60"
       - key: POST_TP1_TRAIL_GIVEBACK_SHARE
@@ -413,9 +456,9 @@ services:
       - key: CRT_MIN_RR_TP1          
         value: "0.30"   # Еще сильнее снижен RR для мгновенной фиксации первой цели
       - key: CRT_MIN_SETUP_SCORE     
-        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
+        value: "60.0"   # Робот перестанет брать зашумленные сетапы со score 35-55
       - key: CRT_REQUIRE_CISD        
-        value: "false"  # Отключено жесткое подтверждение
+        value: "true"  # Dключено жесткое подтверждение
       - key: CRT_STOP_BUFFER_PCT     
         value: "0.05"   # Плотный стоп для увеличения объема позиции
       - key: CRT_TP2_RR              
@@ -427,7 +470,7 @@ services:
         value: "1.10"   # Вход даже при минимальном математическом ожидании
       # 1. Возвращаем нормальную геометрию скальпа (цель 0.6%, а не 0.25%)
       - key: SCALP_TARGET_PCT
-        value: "0.40" # Снизить до 0.4%, чтобы бот целился в реальную медиану волатильности
+        value: "0.30" # Снизить до 0.3%, чтобы бот целился в реальную медиану волатильности
       - key: SCALP_MIN_NET_PNL_TP1_USDT
         value: "0.10" # Убрать завышенные требования к долларовой прибыли на микро-сделках
       - key: SCALP_MIN_NET_PNL_TP2_USDT
@@ -444,24 +487,47 @@ services:
       - key: SCALP_TIME_STOP_MIN     
         value: "45.0"   # Жесткий тайм-стоп: если не пошло за 45 минут.
 
+      # ── ГЕОМЕТРИЯ SCALP/RANGE (движки НЕ отключаем) ───────────────────────
+      # scalp: avg_mfe 0.2984% при цели 0.4% → tp1reach 11%. Цель 0.30% и
+      # буфер стопа 0.5 ATR сближают стоп с целью (был 0.43% при MFE 0.20%).
+      - key: SCALP_STOP_BUFFER_ATR
+        value: "0.5"
+      # Тайм-стоп объявлен ЯВНО: ключ был только в config (False), а
+      # SCALP_TIME_STOP_MIN=45 ниже без него — мёртвая настройка. Включаем
+      # только после замера: 43 закрытия по нему дали −19.79 (−0.46/tr).
+      - key: SCALP_TIME_STOP_ENABLED
+        value: "false"
+
+
       # ── RANGE ENGINE (Переведен из консервативного в агрессивный) ───────
       # 3. Запрещаем RANGE-стратегии собирать 0.2% движения. Минимум 0.8%, иначе комиссии сожрут всё
       - key: RANGE_MIN_TP1_NET_PCT
         value: "0.80"
       - key: RANGE_MIN_SETUP_SCORE   
-        value: "65.0"   # Робот перестанет брать зашумленные сетапы со score 35-40
+        value: "60.0"   # Робот перестанет брать зашумленные сетапы со score 35-55
       - key: RANGE_ENTRY_RSI_MIN     
         value: "20.0"   # Расширен диапазон RSI (вход при глубоком перепроданности)
       - key: RANGE_ENTRY_RSI_MAX     
         value: "65.0"   # Расширен диапазон RSI (вход ближе к верхней границе)
       - key: RANGE_STOP_ATR_MULT     
-        value: "1.2"    # Короткий стоп по ATR (быстрый выход при пробое ренджа)
+        value: "0.6"    # Короткий стоп по ATR (быстрый выход при пробое ренджа)
+
+      # range: стоп 2.39% при MFE 0.62% и tp1reach 0%. Короткий стоп + узкий
+      # коридор + вход ближе к краю делают движок экономически валидным.
+      - key: RANGE_MIN_WIDTH_PCT
+        value: "1.2"
+      - key: RANGE_SUPPORT_ZONE
+        value: "0.20"
+
 
       # 4. Повышаем порог минимального профита, чтобы гейт отсекал центовый мусор
       - key: MIN_NET_PNL_TP1_USDT
         value: "0.50"
       - key: MIN_NET_PNL_TP2_USDT
         value: "2.50"
+
+
+
 
       # ── GRID ENGINE (Защита от слива) ─────────────────────────────────────
       # Сетка выключена для направленного live-ramp: усреднение в тренде —
@@ -571,7 +637,7 @@ services:
       - key: LIVE_EXCHANGE_STOP_BUFFER_PCT
         value: "0.5"
       - key: ANTI_DRAIN_MAX_OPEN_POSITIONS
-        value: "15"
+        value: "6"
       - key: MAX_ACTIVE_SIGNALS
         value: "100"
       - key: MAX_TRADES_PER_DAY
@@ -579,13 +645,13 @@ services:
       # Дневной стоп limited-live: четыре плановых стопа по 0.25% и никаких
       # новых входов до следующего окна наблюдения.
       - key: MAX_DAILY_LOSS_PCT
-        value: "100"
+        value: "6"
       # Anti-drain лимит совпадает с общим, чтобы не было скрытого более
       # строгого выключателя.
       - key: ANTI_DRAIN_MAX_DAILY_LOSS_PCT
         value: "100"
       - key: MAX_DRAWDOWN_PCT
-        value: "15"
+        value: "12"
 
       # (#mss-is-not-a-confirmation-2026-09-20) Чем подтверждается вход CRT.
       # "fvg" — только FVG; MSS остаётся бонусом к оценке, но входить по нему
@@ -593,7 +659,7 @@ services:
       # худший бакет «только MSS» — −1.72% на номинал против −0.14% у сделок
       # с одним FVG.
       - key: CRT_LTF_CONFIRM
-        value: "both"
+        value: "fvg"
 
       # ── Symbol guard ──────────────────────────────────────────────────────
       - key: SYMBOL_PERF_BLOCK_MAX_WINRATE
@@ -605,7 +671,7 @@ services:
       - key: SYMBOL_PERF_COOLDOWN_FAILED_SETUPS
         value: "2"
       - key: SYMBOL_PERF_LOOKBACK
-        value: "10"
+        value: "30"
       # (#symbol-gate-inverted-2026-09-20) Окно суждения о символе. При сутках
       # гейт был слеп: 1-3 сделки на символ против MIN_HISTORY=12, замер 20.09
       # дал blocked 0 / reduced 0 / ok 10, а HYPE с двумя стопами и −9.89 USDT
