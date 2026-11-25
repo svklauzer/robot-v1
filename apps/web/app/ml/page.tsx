@@ -29,6 +29,11 @@ const SHADOW_VERDICT: Record<string, { label: string; cls: string }> = {
   weak_signal: { label: "слабый сигнал", cls: "bg-yellow-500 text-black" },
   no_edge_yet: { label: "пока нет края", cls: "bg-slate-600 text-white" },
   insufficient_sample: { label: "мало выборки", cls: "bg-slate-700 text-white" },
+  // (#ml-shadow-version-2026-11-24) Вердикты сегментации по версии модели.
+  // Без ключей в карте фолбэк показывает сырую строку серым — и «ждём когорту»
+  // выглядит как поломка, а не как честное отсутствие данных.
+  waiting_for_current_cohort: { label: "ждём когорту текущей версии", cls: "bg-slate-700 text-white" },
+  cohort_accumulating:        { label: "когорта набирается",            cls: "bg-amber-500/20 text-amber-300" },  
 };
 
 export default function MLPage() {
@@ -283,6 +288,10 @@ export default function MLPage() {
           <div className="mt-3 space-y-4">
             <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
               <Row k="Закрытых со score" v={shadow.scored_closed} />
+              <Row k="Когорта текущей версии"
+                   v={shadow.cohort ? `${shadow.cohort.current_n} / ${shadow.cohort.needed_for_verdict}` : "—"} />
+              <Row k="Версия фич когорты" v={shadow.cohort?.current_version} />
+              <Row k="Legacy (справочно)" v={shadow.cohort?.legacy_n} />              
               <Row
                 k={`AUC vs ${shadow.train_label_kind || "train label"}`}
                 v={shadow.live_auc_vs_train_label ?? "—"}
