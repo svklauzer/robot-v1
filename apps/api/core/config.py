@@ -2249,7 +2249,7 @@ class Settings(BaseSettings):
     # бегунов к TP2; гейт нетто считал выход по полу издержек и на остатке
     # ~100–125 USDT не пропускал его вовсе (#476, #483, #495, #497), а
     # сработав, книжил +0.30% вместо рынка (#487: рынок 0.83%).
-    POST_TP1_TRAIL_ENABLED: bool = True
+    POST_TP1_TRAIL_ENABLED: bool = False
     POST_TP1_TRAIL_MIN_MFE_PCT: float = 0.60     # ниже — движение слишком мелкое
     POST_TP1_TRAIL_GIVEBACK_SHARE: float = 0.40  # отдал столько от MFE → фиксируем
 

@@ -401,7 +401,7 @@ services:
       # Выключен 11.09 вместе с включением POST_TP1_LOCK_FRAC: на 103 сделках
       # −1.1 п.п. против факта (режет бегунов к TP2 на обычном откате).
       - key: POST_TP1_TRAIL_ENABLED
-        value: "true"
+        value: "false"
       - key: POST_TP1_TRAIL_MIN_MFE_PCT
         value: "0.60"
       - key: POST_TP1_TRAIL_GIVEBACK_SHARE
