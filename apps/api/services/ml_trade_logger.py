@@ -214,6 +214,11 @@ class MLTradeLogger:
             # (#model-version-2026-10-22) Какая версия модели считала score на входе.
             "ml_model_trained_at": ml_data.get("model_trained_at"),
             "ml_feature_version": ml_data.get("feature_version"),
+            # (#ml-logged-flat-2026-11-25) Вектор, который ВИДЕЛ скор. Без него
+            # обучение пересчитывает фичи из филла закрытой сделки, а скор считался
+            # от середины зоны — рассинхрон train/serve не закрывается, сколько
+            # когорты ни копи. Версия уже писалась, вектор — нет.
+            "ml_features": (ml or {}).get("features"),            
 
             "lifecycle": {
                 "entry_price": lifecycle.get("entry_price"),

@@ -157,15 +157,30 @@ def row_to_features(row: dict) -> list[float]:
 
 
 def logged_features(row: dict) -> list[float] | None:
-    """Вектор, сохранённый live-скором на входе (plan.ml.features). None если нет/старый."""
+    """Вектор, сохранённый live-скором на входе. None если нет/старый.
+
+    (#ml-logged-flat-2026-11-25) Датасет trade_outcomes.jsonl ПЛОСКИЙ: логгер
+    пишет ml_score/ml_mode/ml_feature_version на верхнем уровне, а не plan.ml.
+    Поиск только в plan.ml/ml не находил вектор НИКОГДА — feature_source
+    показывал logged=0 при живом логировании в БД, и рассинхрон train/serve
+    оставался открытым, хотя контроллер вектор писал. Читаем оба источника.
+    """
     if not bool(getattr(settings, "ML_TRAIN_ON_LOGGED_FEATURES", True)):
         return None
     ml = _plan(row).get("ml") or row.get("ml") or {}
     if not isinstance(ml, dict):
+        ml = {}
+    fv = row.get("ml_feature_version")
+    vec = row.get("ml_features")
+    if fv is None:
+        fv = ml.get("feature_version")
+    if vec is None:
+        vec = ml.get("features")
+    try:
+        if fv is None or int(fv) != FEATURE_VERSION:
+            return None
+    except (TypeError, ValueError):
         return None
-    if int(ml.get("feature_version") or 0) != FEATURE_VERSION:
-        return None
-    vec = ml.get("features")
     if isinstance(vec, dict):
         return [float(vec.get(k, 0.0)) for k in FEATURE_NAMES]
     if isinstance(vec, list) and len(vec) == len(FEATURE_NAMES):
