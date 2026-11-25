@@ -28,12 +28,20 @@ def resolve_effective_mode(configured: str, metrics: dict | None) -> tuple[str, 
         return "shadow", f"val_auc={auc_raw!r} не число — до shadow"
     if auc < float(getattr(settings, "ML_MIN_AUC_FOR_AUTO", 0.55)):
         reasons.append(f"val_auc={auc:.4f} ниже порога")
+    # (#ml-gate-binding-epv-2026-11-24) Полномочия обязан решать ТО ЖЕ число,
+    # что и auc_is_reliable в обучении: train_events_per_feature (позитивы
+    # ОБУЧАЮЩЕГО сплита / фичи). Прежний гейт брал events_per_feature по ВСЕМ
+    # данным с порогом 3.0 — на экране «9 из 10», а связывающее 6.85, и порог
+    # 3.0 пропускал модель, которую обучение уже признало ненадёжной.
+    raw_epv = m.get("train_events_per_feature")
+    if raw_epv is None:
+        raw_epv = m.get("events_per_feature")
     try:
-        epv = float(m.get("events_per_feature") or 0.0)
+        epv = float(raw_epv or 0.0)
     except (TypeError, ValueError):
         epv = 0.0
-    if epv < 3.0:
-        reasons.append(f"events_per_feature={epv} < 3.0")
+    if epv < 10.0:
+        reasons.append(f"train_events_per_feature={epv} < 10")
     if m.get("auc_is_reliable") is False:
         reasons.append("обучение пометило метрику НЕНАДЁЖНОЙ")
     ci = m.get("wf_auc_ci95")

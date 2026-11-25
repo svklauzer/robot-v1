@@ -358,8 +358,16 @@ class MetaLabeler:
         meta = {
             "trained_at": datetime.now(timezone.utc).isoformat(),
             "samples": n, "positives": int(ya.sum()), "win_rate": round(float(ya.mean()) * 100, 2),
-            "label_kind": label_kind, "label_min_r": float(getattr(settings, "ML_LABEL_MIN_R", 0.3)),
+            "label_kind": label_kind, 
+            # (#ml-label-report-2026-11-24) При net_r порог живёт в ML_LABEL_NET_R_MIN,
+            # а репортился ML_LABEL_MIN_R (0.3) — параметр ДРУГОЙ метки. В отчёте
+            # стояло 0.3 при работающих 0.5: воронку positives нельзя было сверить
+            # с порогом, которым она посчитана.
+            "label_min_r": (float(getattr(settings, "ML_LABEL_NET_R_MIN", 1.0))
+                            if label_kind == "net_r"
+                            else float(getattr(settings, "ML_LABEL_MIN_R", 0.3))),
             "features": FEATURE_NAMES, "feature_version": FEATURE_VERSION,
+            "feature_source": getattr(self, "_label_report", {}),
             "rows_total": len(raw_rows), "dropped": dropped,
             "train_window_days": float(getattr(settings, "ML_TRAIN_WINDOW_DAYS", 45)),
             "metrics": metrics,

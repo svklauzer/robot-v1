@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from models.signal import Signal
-from services.ml_features import row_to_label, total_net_pnl
+from services.ml_features import FEATURE_VERSION, row_to_label, total_net_pnl
 from services.ml_outcome_stats import _rank_auc
 
 
@@ -148,7 +148,45 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "score": score, "win": 1 if net > 0 else 0, "net": net,
             "train_label": train_label,
             "ml_mode": (ml or {}).get("mode"),
+            "feature_version": (ml or {}).get("feature_version"),
         })
+
+        
+    # (#ml-shadow-version-2026-11-24) Отчёт смешивал скоры ВСЕХ версий модели.
+    # 879 закрытых, из них текущей версии — единицы; смена порога метки
+    # (1.0R → 0.5R) меняла AUC при НЕИЗМЕННЫХ скорах, и это читалось как
+    # «модель стала лучше». Мерим только текущую версию; legacy остаётся
+    # справочно отдельным блоком, чтобы ничего не прятать.
+    MIN_COHORT = 100
+
+    def _fv(r: dict):
+        try:
+            return int(r.get("feature_version"))
+        except (TypeError, ValueError):
+            return None
+
+    current = [r for r in rows if _fv(r) == FEATURE_VERSION]
+    legacy = [r for r in rows if _fv(r) != FEATURE_VERSION]
+    legacy_labeled = [r for r in legacy if r["train_label"] is not None]
+    cohort = {
+        "current_version": FEATURE_VERSION,
+        "current_n": len(current),
+        "legacy_n": len(legacy),
+        "needed_for_verdict": MIN_COHORT,
+        "basis": "current_version" if current else "legacy_mixture",
+        "legacy_reference": {
+            "n": len(legacy),
+            "labeled": len(legacy_labeled),
+            "auc_vs_train_label": _auc(
+                [r["score"] for r in legacy_labeled if r["train_label"] == 1],
+                [r["score"] for r in legacy_labeled if r["train_label"] == 0],
+            ),
+        },
+    }
+    # Есть хоть одна строка текущей версии — судим ТОЛЬКО по ней.
+    # Дальше всё (n, buckets, economic, by_third) считается от rows автоматически.
+    if current:
+        rows = current
 
     n = len(rows)
     if n == 0:
@@ -157,6 +195,9 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "ml_mode": mode,
             "scored_closed": 0,
             "threshold": thr,
+            "verdict": verdict,
+            "verdict_source": verdict_source,
+            "cohort": cohort,
             "message": (
                 "Нет закрытых сделок с ml_score. Включи ML_MODE=shadow (env) после "
                 "обучения модели и дождись закрытий — тогда здесь появится прогноз vs факт."
@@ -262,8 +303,15 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
     # откатываемся на is_win-AUC, но помечаем это в ответе.
     verdict_auc = auc_train_label if auc_train_label is not None else auc
     verdict_source = "train_label" if auc_train_label is not None else "is_win_fallback"
-    if n < 30 or len(labeled) < 30:
+    if cohort["basis"] != "current_version":
+        verdict = "waiting_for_current_cohort"
+        verdict_source = "legacy_mixture"
+    elif n < 30 or len(labeled) < 30:
         verdict = "insufficient_sample"
+    elif n < MIN_COHORT:
+        # когорта текущей версии набирается: AUC уже считается, но вердикт
+        # на 30–99 сделках — это гадание, а не измерение
+        verdict = "cohort_accumulating"
     elif verdict_auc is not None and verdict_auc >= 0.58 and (taken_wr or 0) > base_winrate and econ_ok:
         verdict = "edge_visible"
     elif verdict_auc is not None and verdict_auc >= 0.53:
@@ -293,6 +341,9 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "by_third": by_third,
         "verdict": verdict,
         "verdict_source": verdict_source,
+        "verdict": verdict,
+        "verdict_source": verdict_source,
+        "cohort": cohort,
         "note": (
             "live_auc_vs_train_label>0.55 и монотонные train_label_winrate_pct по бакетам "
             "= модель видит сигнал в том, чему её реально учили. live_auc (против is_win) "
@@ -300,4 +351,4 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "с live_auc_vs_train_label. avoided_net>0 = порог отрезал бы убыточные. "
             "Выборка мала (<30) → не доверять. Это shadow — на сделки НЕ влияет."
         ),
-    }
+    }

@@ -13,14 +13,20 @@ from core.config import settings
 from services.close_reasons import reached_tp2
 
 CVD_MIN_TRADES: int = 10
-FEATURE_VERSION: int = 6
+FEATURE_VERSION: int = 7   # (#ml-prune-2026-11-24) 20 → 13 фич: train_epv 6.85 → 10.5
 FEATURE_NAMES: list[str] = [
-    "stop_distance_pct", "log_stop_distance",
-    "net_rr_tp1", "rr_asymmetry",
-    "spread_pct", "cvd_ratio",
-    "hour_sin", "hour_cos",
-    "is_trend_up", "is_trend_down", "is_range", "is_reversal", "is_scalp", "is_crt",
-    "di_spread", "adx14", "adx_delta", "momentum_ord", "extension_atr",
+    "stop_distance_pct",
+    "net_rr_tp1",
+    "rr_asymmetry",
+    "spread_pct",
+    "cvd_ratio",
+    "is_trend_up",
+    "is_trend_down",
+    "is_scalp",
+    "di_spread",
+    "adx14",
+    "adx_delta",
+    "extension_atr",
     "is_long",
 ]
 _MOM_ORD = {"bullish": 1.0, "overheated": 1.5, "neutral": 0.0, "bearish": -1.0, "oversold": -1.5}

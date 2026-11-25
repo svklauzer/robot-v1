@@ -247,6 +247,15 @@ services:
       - key: ML_PROMOTION_MIN_ECON_DIFF
         value: "0.0"
 
+      # В shadow ML не трогает размер: ось ужимала score<0.45 до 0.5, а это
+      # ведро с лучшим winrate. Тень обязана быть тенью. Возврат в true —
+      # только вместе с advisory/full_auto после live-гейта.
+      - key: ML_SIZE_ALLOC_ENABLED
+        value: "false"
+      # Окно обучения: 45 дней не набирают ML_MIN_TRAIN_SAMPLES после фильтров.
+      # Компромисс осознан; смешение эпох exit гасится too_old + net_r.
+      - key: ML_TRAIN_WINDOW_DAYS
+        value: "65"
         
       - key: REGIME_EXP_SIZING_ENABLED
         value: "true"
@@ -531,7 +540,7 @@ services:
       # range: стоп 2.39% при MFE 0.62% и tp1reach 0%. Короткий стоп + узкий
       # коридор + вход ближе к краю делают движок экономически валидным.
       - key: RANGE_MIN_WIDTH_PCT
-        value: "1.2"
+        value: "1.8"
       - key: RANGE_SUPPORT_ZONE
         value: "0.35"
 
