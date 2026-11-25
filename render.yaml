@@ -20,7 +20,7 @@ services:
     healthCheckPath: /health   # Render ждёт 200 здесь перед маршрутизацией
 
     # Alembic миграции запускаются до каждого деплоя.
-    preDeployCommand: sh -c "python -m compileall -q /app -x '.*/(tests|storage)/.*' && sh migrate.sh"
+    preDeployCommand: sh migrate.sh
 
     # Persistent disk — хранит trade_outcomes.jsonl между деплоями
     disk:
