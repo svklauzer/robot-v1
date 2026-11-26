@@ -1272,19 +1272,24 @@ class RobotLoop:
                 "required_margin": float(plan.required_margin or 0.0),
                 "lifecycle": {"entry_price": float(entry_price)},
                 "rationale": f"intelligence_{result.reason}",
-                "trade_mode": "scalp" if _ml_regime in ("range", "scalp") else "trend",
-                # (#ml-serve-parity-2026-11-26) Без этих трёх полей 6 из 13 фич
+                "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
+                # (#ml-serve-parity-2026-11-26) Без этих трёх полей 5 из 13 фич
                 # v7 на входе — константа 0: entry_zone даёт midpoint для
                 # stop_distance_pct (режим zone_mid не читает lifecycle),
                 # tz_shadow — di_spread/adx14/adx_delta, trend_trigger —
-                # extension_atr. Обучение видит их в jsonl.gates, скор не видел.
+                # extension_atr. Обучение видит их в jsonl.gates, скор не видел
+                # вовсе — модель училась на одном векторе, применяла другой.
                 "entry_zone": {"from": float(entry_from), "to": float(entry_to)},
                 # Вердикты берём только если они про ТЕКУЩИЙ режим: после
                 # cascade-fallback result подменён на range/crt, а _tz/_trigger
                 # остались от трендового кандидата.
                 "tz_shadow": (
                     _tz.as_dict()
-                    if str(getattr(_tz, "regime", "")) == _ml_regime else None
+                    if str(getattr(_tz, "regime", "")) == str(result.regime or "") else None
+                ),
+                "trend_trigger": (
+                    _trigger.as_dict()
+                    if str(getattr(_trigger, "regime", "")) == str(result.regime or "") else None
                 ),
                 "trend_trigger": (
                     _trigger.as_dict()
