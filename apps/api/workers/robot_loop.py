@@ -1240,24 +1240,39 @@ class RobotLoop:
                 except Exception:
                     _ml_depth = {}
 
-                ml_eval = self.ml_controller.evaluate_candidate({
-                    "confidence": effective_confidence,
-                    "grade": grade,
-                    "side": result.action,
-                    "regime": result.regime,
-                    "net_rr_tp1": plan.net_rr_tp1,
-                    "net_rr_tp2": plan.net_rr_tp2,
-                    "entry_depth": _ml_depth,
-                    # Фикс: берем чистые локальные переменные float, которые инициализированы выше
-                    "stop_price": float(stop),
-                    "required_margin": float(plan.required_margin or 0.0),
-                    "lifecycle": {"entry_price": float(entry_price)},
-                    # (#ml-serve-parity-2026-10-17) Признаки is_scalp/is_crt модель берёт из
-                    # rationale и trade_mode (как в trade_outcomes.jsonl). Без них на живом
-                    # предсказании оба были константой 0. Значения — те же, что пишутся в сигнал.
-                    "rationale": f"intelligence_{result.reason}",
-                    "trade_mode": "scalp" if str(result.regime or "") in ("range", "scalp") else "trend",
-                })
+                    _ml_regime = str(result.regime or "")
+                    ml_eval = self.ml_controller.evaluate_candidate({
+                        "confidence": effective_confidence,
+                        "grade": grade,
+                        "side": result.action,
+                        "regime": result.regime,
+                        "net_rr_tp1": plan.net_rr_tp1,
+                        "net_rr_tp2": plan.net_rr_tp2,
+                        "entry_depth": _ml_depth,
+                        "stop_price": float(stop),
+                        "required_margin": float(plan.required_margin or 0.0),
+                        "lifecycle": {"entry_price": float(entry_price)},
+                        "rationale": f"intelligence_{result.reason}",
+                        "trade_mode": "scalp" if _ml_regime in ("range", "scalp") else "trend",
+                        # (#ml-serve-parity-2026-11-26) Три поля, без которых 6 из 13
+                        # фич v7 на входе были константой 0: entry_zone даёт midpoint
+                        # для stop_distance_pct (режим zone_mid не читает lifecycle),
+                        # tz_shadow — di_spread/adx14/adx_delta, trend_trigger —
+                        # extension_atr. Обучение видит их в jsonl.gates, скор не видел
+                        # вовсе — модель училась на одном векторе, применяла другой.
+                        "entry_zone": {"from": float(entry_from), "to": float(entry_to)},
+                        # Вердикты гейтов берём только если они про ТЕКУЩИЙ режим:
+                        # после cascade-fallback result подменён на range/crt, а _tz и
+                        # _trigger остались от трендового кандидата.
+                        "tz_shadow": (
+                            _tz.as_dict()
+                            if str(getattr(_tz, "regime", "")) == _ml_regime else None
+                        ),
+                        "trend_trigger": (
+                            _trigger.as_dict()
+                            if str(getattr(_trigger, "regime", "")) == _ml_regime else None
+                        ),
+                    })
             except Exception as exc:
                 # Вместо слепого pass пишем ошибку в логи, но защищаем цикл от падения (fail-open)
                 logger.error(f"[ROBOT_LOOP ML INTEGRATION ERROR] symbol={symbol}: {exc}", exc_info=True)
