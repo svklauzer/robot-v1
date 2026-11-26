@@ -1241,38 +1241,60 @@ class RobotLoop:
                     _ml_depth = {}
 
                     _ml_regime = str(result.regime or "")
-                    ml_eval = self.ml_controller.evaluate_candidate({
-                        "confidence": effective_confidence,
-                        "grade": grade,
-                        "side": result.action,
-                        "regime": result.regime,
-                        "net_rr_tp1": plan.net_rr_tp1,
-                        "net_rr_tp2": plan.net_rr_tp2,
-                        "entry_depth": _ml_depth,
-                        "stop_price": float(stop),
-                        "required_margin": float(plan.required_margin or 0.0),
-                        "lifecycle": {"entry_price": float(entry_price)},
-                        "rationale": f"intelligence_{result.reason}",
-                        "trade_mode": "scalp" if _ml_regime in ("range", "scalp") else "trend",
-                        # (#ml-serve-parity-2026-11-26) Три поля, без которых 6 из 13
-                        # фич v7 на входе были константой 0: entry_zone даёт midpoint
-                        # для stop_distance_pct (режим zone_mid не читает lifecycle),
-                        # tz_shadow — di_spread/adx14/adx_delta, trend_trigger —
-                        # extension_atr. Обучение видит их в jsonl.gates, скор не видел
-                        # вовсе — модель училась на одном векторе, применяла другой.
-                        "entry_zone": {"from": float(entry_from), "to": float(entry_to)},
-                        # Вердикты гейтов берём только если они про ТЕКУЩИЙ режим:
-                        # после cascade-fallback result подменён на range/crt, а _tz и
-                        # _trigger остались от трендового кандидата.
-                        "tz_shadow": (
-                            _tz.as_dict()
-                            if str(getattr(_tz, "regime", "")) == _ml_regime else None
-                        ),
-                        "trend_trigger": (
-                            _trigger.as_dict()
-                            if str(getattr(_trigger, "regime", "")) == _ml_regime else None
-                        ),
-                    })
+        ml_eval = {"mode": "off", "ml_score": None, "action": "passthrough",
+                   "allow": True, "size_multiplier": 1.0}
+        try:
+            _ml_depth = {}
+            try:
+                ob_snap = ORDERBOOK_STORE.snapshot(symbol)
+                if ob_snap:
+                    _ml_depth = OrderBookAnalyzer.analyze(
+                        ob_snap,
+                        levels=int(getattr(settings, "OB_DEPTH_LEVELS", 10)),
+                    ).as_dict()
+                    _ml_depth["exchange"] = ob_feed_exchange()
+            except Exception:
+                _ml_depth = {}
+            # (#ml-ml-call-outside-except-2026-11-26) Вызов ОБЯЗАН быть в теле
+            # внешнего try, а не в except внутреннего: там он выполнялся только
+            # при сбое стакана, а в нормальном пути ml_eval оставался дефолтом
+            # mode=off — скор не считался, вектор не логировался, logged=0.
+            _ml_regime = str(result.regime or "")
+            ml_eval = self.ml_controller.evaluate_candidate({
+                "confidence": effective_confidence,
+                "grade": grade,
+                "side": result.action,
+                "regime": result.regime,
+                "net_rr_tp1": plan.net_rr_tp1,
+                "net_rr_tp2": plan.net_rr_tp2,
+                "entry_depth": _ml_depth,
+                "stop_price": float(stop),
+                "required_margin": float(plan.required_margin or 0.0),
+                "lifecycle": {"entry_price": float(entry_price)},
+                "rationale": f"intelligence_{result.reason}",
+                "trade_mode": "scalp" if _ml_regime in ("range", "scalp") else "trend",
+                # (#ml-serve-parity-2026-11-26) Без этих трёх полей 6 из 13 фич
+                # v7 на входе — константа 0: entry_zone даёт midpoint для
+                # stop_distance_pct (режим zone_mid не читает lifecycle),
+                # tz_shadow — di_spread/adx14/adx_delta, trend_trigger —
+                # extension_atr. Обучение видит их в jsonl.gates, скор не видел.
+                "entry_zone": {"from": float(entry_from), "to": float(entry_to)},
+                # Вердикты берём только если они про ТЕКУЩИЙ режим: после
+                # cascade-fallback result подменён на range/crt, а _tz/_trigger
+                # остались от трендового кандидата.
+                "tz_shadow": (
+                    _tz.as_dict()
+                    if str(getattr(_tz, "regime", "")) == _ml_regime else None
+                ),
+                "trend_trigger": (
+                    _trigger.as_dict()
+                    if str(getattr(_trigger, "regime", "")) == _ml_regime else None
+                ),
+            })
+        except Exception as exc:
+            logger.error(f"[ROBOT_LOOP ML INTEGRATION ERROR] symbol={symbol}: {exc}", exc_info=True)
+            ml_eval = {"mode": "off", "ml_score": None, "action": "passthrough",
+                       "allow": True, "size_multiplier": 1.0}
             except Exception as exc:
                 # Вместо слепого pass пишем ошибку в логи, но защищаем цикл от падения (fail-open)
                 logger.error(f"[ROBOT_LOOP ML INTEGRATION ERROR] symbol={symbol}: {exc}", exc_info=True)
