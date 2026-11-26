@@ -258,7 +258,7 @@ services:
         value: "65"
         
       - key: REGIME_EXP_SIZING_ENABLED
-        value: "true"
+        value: "false"
       - key: DYNAMIC_MARGIN_FAIR_SHARE
         value: "false"
       - key: DYNAMIC_MARGIN_B_CAP_PCT_OF_FREE
