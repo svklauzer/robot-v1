@@ -260,7 +260,7 @@ class Settings(BaseSettings):
     # на верной стороне EMA20, то есть чтобы откат уже сменился возобновлением.
     # Флаг отдельный, потому что 0.0 — РАБОЧЕЕ значение порога, а не «выключено»:
     # выключение делается флагом, а не подстановкой отрицательного числа.
-    TREND_MIN_EXTENSION_ENABLED: bool = True
+    TREND_MIN_EXTENSION_ENABLED: bool = False
     TREND_MIN_EXTENSION_ATR: float = 0.0
     
     # shadow — считать и писать в план, вход НЕ блокировать.

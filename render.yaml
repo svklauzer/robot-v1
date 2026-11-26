@@ -362,7 +362,7 @@ services:
       # Ноябрь: ext<0 −1.01/tr (24 сделки). Требует патча trend_trigger.
       # Флаг отдельный: 0.0 — рабочее значение порога, а не «выключено».
       - key: TREND_MIN_EXTENSION_ENABLED
-        value: "true"
+        value: "false"
       - key: TREND_MIN_EXTENSION_ATR
         value: "0.0"
       # Гейт импульса ловит КОНТР-сторону: шорт при bullish 15m = продажа в
