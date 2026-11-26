@@ -218,7 +218,7 @@ class MLTradeLogger:
             # обучение пересчитывает фичи из филла закрытой сделки, а скор считался
             # от середины зоны — рассинхрон train/serve не закрывается, сколько
             # когорты ни копи. Версия уже писалась, вектор — нет.
-            "ml_features": (ml or {}).get("features"),            
+            "ml_features": ml_data.get("features"),            
 
             "lifecycle": {
                 "entry_price": lifecycle.get("entry_price"),
