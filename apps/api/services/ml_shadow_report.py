@@ -195,8 +195,8 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
             "ml_mode": mode,
             "scored_closed": 0,
             "threshold": thr,
-            "verdict": verdict,
-            "verdict_source": verdict_source,
+            "verdict": "no_shadow_data",
+            "verdict_source": None,
             "cohort": cohort,
             "message": (
                 "Нет закрытых сделок с ml_score. Включи ML_MODE=shadow (env) после "
@@ -339,8 +339,6 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
         "threshold_impact": threshold_impact,
         "economic": economic,
         "by_third": by_third,
-        "verdict": verdict,
-        "verdict_source": verdict_source,
         "verdict": verdict,
         "verdict_source": verdict_source,
         "cohort": cohort,

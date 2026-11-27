@@ -206,9 +206,6 @@ class MetaLabeler:
             fv = r.get("ml_feature_version")
             ml = (r.get("plan") or {}).get("ml") or {}
             fv = fv if fv is not None else ml.get("feature_version")
-            fv = r.get("ml_feature_version")
-            ml = (r.get("plan") or {}).get("ml") or {}
-            fv = fv if fv is not None else ml.get("feature_version")
             # (#ml-live-version) Строка БЕЗ версии — не наша модель. Смешивать
             # версии нельзя: live_auc обязан мерить ТЕКУЩУЮ модель, иначе он
             # усредняет десятки исторических и всегда даёт ~0.5.

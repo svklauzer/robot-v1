@@ -155,19 +155,18 @@ class MLController:
 
     def evaluate_candidate(self, candidate: dict) -> dict:
         mode = self._mode()
-        if mode == "off":
-            return dict(_PASSTHROUGH)
-        try:
-            labeler = self._get_labeler()
-            ml_score = labeler.predict(candidate) if labeler else None
-        except Exception:
-            ml_score = None
-        # (#ml-audit) логируем вектор на входе — на нём потом обучаемся.
         try:
             from services.ml_features import features_dict, FEATURE_VERSION
             feat_log = {"feature_version": FEATURE_VERSION, "features": features_dict(candidate)}
         except Exception:
             feat_log = {}
+        if mode == "off":
+            return {**_PASSTHROUGH, **feat_log}
+        try:
+            labeler = self._get_labeler()
+            ml_score = labeler.predict(candidate) if labeler else None
+        except Exception:
+            ml_score = None
         if ml_score is None:
             return {**feat_log, "mode": mode, "ml_score": None, "action": "passthrough",
                     "allow": True, "size_multiplier": 1.0, "reason": "ml_not_ready"}

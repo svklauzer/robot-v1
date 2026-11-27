@@ -1,0 +1,63 @@
+--- a/services/ml_shadow_report.py
++++ b/services/ml_shadow_report.py
+@@ -170,8 +170,8 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
+             "ml_mode": mode,
+             "scored_closed": 0,
+             "threshold": thr,
+-            "verdict": verdict,
+-            "verdict_source": verdict_source,
++            "verdict": "no_shadow_data",
++            "verdict_source": None,
+             "cohort": cohort,
+             "message": (
+                 "Нет закрытых сделок с ml_score. Включи ML_MODE=shadow (env) после "
+@@ -286,8 +286,6 @@ def build(db: Session, limit: int = 2000) -> dict[str, Any]:
+         "by_third": by_third,
+         "verdict": verdict,
+         "verdict_source": verdict_source,
+-        "verdict": verdict,
+-        "verdict_source": verdict_source,
+         "cohort": cohort,
+         "note": (
+             "live_auc_vs_train_label>0.55 и монотонные train_label_winrate_pct по бакетам "
+--- a/services/ml_meta_labeler.py
++++ b/services/ml_meta_labeler.py
+@@ -201,9 +201,6 @@ class MetaLabeler:
+             fv = r.get("ml_feature_version")
+             ml = (r.get("plan") or {}).get("ml") or {}
+             fv = fv if fv is not None else ml.get("feature_version")
+-            fv = r.get("ml_feature_version")
+-            ml = (r.get("plan") or {}).get("ml") or {}
+-            fv = fv if fv is not None else ml.get("feature_version")
+             # (#ml-live-version) Строка БЕЗ версии — не наша модель. Смешивать
+             # версии нельзя: live_auc обязан мерить ТЕКУЩУЮ модель, иначе он
+             # усредняет десятки исторических и всегда даёт ~0.5.
+--- a/services/ml_controller.py
++++ b/services/ml_controller.py
+@@ -143,14 +143,15 @@ class MLController:
+ 
+     def evaluate_candidate(self, candidate: dict) -> dict:
+         mode = self._mode()
++        # (#ml-audit) логируем вектор на входе всегда — на нём потом обучаемся.
++        try:
++            from services.ml_features import features_dict, FEATURE_VERSION
++            feat_log = {"feature_version": FEATURE_VERSION, "features": features_dict(candidate)}
++        except Exception:
++            feat_log = {}
+         if mode == "off":
+-            return dict(_PASSTHROUGH)
++            return {**_PASSTHROUGH, **feat_log}
+         try:
+             labeler = self._get_labeler()
+             ml_score = labeler.predict(candidate) if labeler else None
+         except Exception:
+             ml_score = None
+-        # (#ml-audit) логируем вектор на входе — на нём потом обучаемся.
+-        try:
+-            from services.ml_features import features_dict, FEATURE_VERSION
+-            feat_log = {"feature_version": FEATURE_VERSION, "features": features_dict(candidate)}
+-        except Exception:
+-            feat_log = {}
+         if ml_score is None:
+             return {**feat_log, "mode": mode, "ml_score": None, "action": "passthrough",
+                     "allow": True, "size_multiplier": 1.0, "reason": "ml_not_ready"}
