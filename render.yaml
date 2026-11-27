@@ -542,7 +542,7 @@ services:
       - key: RANGE_MIN_WIDTH_PCT
         value: "1.8"
       - key: RANGE_SUPPORT_ZONE
-        value: "0.35"
+        value: "0.20"
 
 
       # 4. Повышаем порог минимального профита, чтобы гейт отсекал центовый мусор
