@@ -389,8 +389,75 @@ class ExitPolicyService:
                                 ),
                             )
 
+                # (#tz-ladder-unreachable-2026-11-28) ЗАЩИТА ПРИБЫЛИ ВНУТРИ TZ-ПУТИ.
+                # Ниже стоит `return exit=False` с комментарием «прежние ярусы
+                # намеренно НЕ вызываются» — он писался, когда MIN_PROTECTIVE_EXIT_PCT
+                # был 1.80 и лестница резала в ноль. Порог с тех пор 0.40, но возврат
+                # остался, и для trade_mode=trend лестница НЕДОСТИЖИМА: за 466
+                # трендовых закрытий trend_capture_band сработал 3 раза, ride — 0,
+                # protective_* — 0 (все 3+1 — случаи, когда _tz_context вернул None).
+                # Замер ladder_leak: 82 сделки взвелись, пересекли уровень фиксации
+                # по траектории и доехали до стопа. Структурный приоритет ТЗ сохранён:
+                # блок идёт ПОСЛЕ verdict.exit и ПОСЛЕ backstop, то есть отвечает
+                # не на «жив ли тренд», а на «сколько прибыли уже отдано».
+                _ride_min = float(getattr(settings, "TREND_RIDE_MIN_MFE_TO_PROTECT_PCT", 0.8))
+                _ride_dd = float(getattr(settings, "TREND_RIDE_TRAIL_DRAWDOWN_PCT", 0.50))
+                if (
+                    bool(getattr(settings, "TREND_RIDE_ENABLED", True))
+                    and mfe >= _ride_min
+                    and drawdown_from_mfe >= mfe * _ride_dd
+                ):
+                    _prot = max(mfe * (1.0 - _ride_dd), net_safe_pct, min_protective_exit_pct)
+                    _est = self._estimated_net_usdt(_prot, position_notional_usdt, fee_rate=fee_rate)
+                    # Ниже пола — не держим вслепую, а пропускаем дальше: band или
+                    # backstop могут сработать на своём уровне.
+                    if _est is None or _est >= min_protective_net_usdt:
+                        _prot = self._achievable_pct(_prot, current_pct)
+                        return ExitDecision(
+                            exit=True,
+                            reason="trend_ride_trailing_stop",
+                            exit_price=round(self._price_from_result_pct(side, entry_price, _prot), 8),
+                            note=(
+                                f"tz_ride mfe={mfe:.4f} cur={current_pct:.4f} "
+                                f"dd={drawdown_from_mfe:.4f} prot={_prot:.4f}"
+                            ),
+                        )
+                if bool(getattr(settings, "TREND_CAPTURE_BAND_ENABLED", True)):
+                    _band_arm = float(getattr(settings, "TREND_CAPTURE_ARM_PCT", 0.25))
+                    _band_give = float(getattr(settings, "TREND_CAPTURE_GIVEBACK_SHARE", 0.25))
+                    if (
+                        _band_arm <= mfe < _ride_min
+                        and drawdown_from_mfe >= mfe * _band_give
+                    ):
+                        _band_pct = self._achievable_pct(mfe * (1.0 - _band_give), current_pct)
+                        _band_floor = max(
+                            net_safe_pct,
+                            float(getattr(settings, "TREND_CAPTURE_FLOOR_PCT", 0.30)),
+                        )
+                        if _band_pct >= _band_floor:
+                            _est = self._estimated_net_usdt(
+                                _band_pct, position_notional_usdt, fee_rate=fee_rate
+                            )
+                            if _est is None or _est >= min_protective_net_usdt:
+                                return ExitDecision(
+                                    exit=True,
+                                    reason="trend_capture_band",
+                                    exit_price=round(
+                                        self._price_from_result_pct(side, entry_price, _band_pct), 8
+                                    ),
+                                    note=(
+                                        f"tz_band mfe={mfe:.4f} cur={current_pct:.4f} "
+                                        f"dd={drawdown_from_mfe:.4f} prot={_band_pct:.4f} "
+                                        f"arm={_band_arm} give={_band_give} ride_min={_ride_min}"
+                                    ),
+                                )
                 # Тренд цел — держим. Прежние ярусы намеренно НЕ вызываются:
                 # именно они давали capture 7.08% при среднем ходе 0.816%.
+                # (#tz-ladder-unreachable-2026-11-28) «Прежние ярусы» относилось к
+                # лестнице с MIN_PROTECTIVE_EXIT_PCT=1.80. Выше добавлены ride/band
+                # с полом 0.30–0.40: они отвечают на «сколько отдано», а не на
+                # «жив ли тренд», и структура ТЗ по-прежнему приоритетна. Сюда
+                # доходим только если ни один уровень не сработал.
                 return ExitDecision(
                     exit=False,
                     note=f"tz_trend_intact triggers={','.join(verdict.triggers) or 'none'}",

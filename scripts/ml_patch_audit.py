@@ -64,6 +64,8 @@ CHECKS = [
     (S + "tz_entry_shadow.py",     r"TZ_DI_SPREAD_MIN",                      "DI-пол: порог ★", False),
     (S + "trend_trigger.py",       r"TREND_MIN_EXTENSION_ENABLED",           "нижняя граница ext ★", False),
     (S + "momentum_gate.py",       r"_OPPOSED",                              "opposed-гейт ★", False),
+    (S + "exit_policy.py",         r"tz_ride",                               "лестница внутри TZ: ride ★", False),
+    (S + "exit_policy.py",         r"tz_band",                               "лестница внутри TZ: band ★", False),
 
     (C + "config.py",              r"TZ_DI_SPREAD_MIN",                      "ключ DI", False),
     (C + "config.py",              r"TREND_MIN_EXTENSION_ENABLED",           "ключ min-ext", False),
@@ -94,6 +96,7 @@ SYNTAX = [S + f for f in (
     "ml_features.py", "ml_meta_labeler.py", "ml_controller.py",
     "ml_intelligence_hub.py", "ml_shadow_report.py",
     "tz_entry_shadow.py", "trend_trigger.py", "momentum_gate.py",
+    "exit_policy.py",
 )] + [C + "config.py"]
 for path in SYNTAX:
     p = ROOT / path
